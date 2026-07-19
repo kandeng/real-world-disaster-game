@@ -151,7 +151,7 @@ sudo systemctl status caddy
 ```
 
 
-
+&nbsp;
 ## 2.2 Squid Proxy
 
 ### 1. Squid Installation
