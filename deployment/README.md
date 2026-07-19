@@ -11,10 +11,13 @@ The domain `drone-navigation.com` is registered through [Porkbun](https://porkbu
 
 Use Porkbun to manage DNS records (A/AAAA/CNAME) that point the domain to the Alibaba Cloud ECS instance. Screenshots of the Porkbun DNS configuration are attached below for reference.
 
+![Porkbun login](assets/porkbun_01.png)
+
+![Porkbun Domain management](assets/porkbun_02.png)
+
 ![Porkbun DNS records](assets/porkbun_03.png)
 
 ![Porkbun DNS edit record](assets/porkbun_04.png)
-
 
 &nbsp;
 ## 1.2 Alibaba Cloud
@@ -39,6 +42,8 @@ Ensure the ECS security group allows inbound traffic on the ports used by the se
 | 3128 | TCP      | Squid HTTPS proxy      |
 
 A screenshot of the security group rules is attached below.
+
+![Alibaba Login](assets/alibaba_01.png)
 
 ![Alibaba Cloud security group rules](assets/alibaba_02.png)
 
