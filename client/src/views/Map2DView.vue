@@ -182,7 +182,6 @@ onMounted(() => {
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
   registerPage({ id: 'settings', nameKey: 'aerialview.page_settings', route: '/settings' });
-  registerPage({ id: 'customer_service', nameKey: 'aerialview.page_customer_service' });
 
   registerLeft({
     id: 'router',
@@ -226,7 +225,6 @@ onUnmounted(() => {
   unregisterPage('chat');
   unregisterPage('extensions');
   unregisterPage('settings');
-  unregisterPage('customer_service');
 });
 </script>
 

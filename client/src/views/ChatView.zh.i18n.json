@@ -1,4 +1,13 @@
 {
+  "nav_pages": "页面",
+  "nav_chat": "对话",
+  "nav_contacts": "通讯录",
+  "nav_gallery": "展厅",
+  "nav_customer_service": "客服",
+  "tool_photo": "拍照",
+  "tool_file": "文件",
+  "tool_note": "长文",
+  "tool_tool": "工具",
   "flight_plan_1": "飞行计划 #1",
   "mission_control": "任务控制",
   "support": "技术支持",

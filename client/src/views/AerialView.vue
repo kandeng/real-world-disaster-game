@@ -119,10 +119,6 @@ const takeoffLandingLabel = computed(() => {
   return altitudeGate.isOnGround.value ? t('aerialview.takeoff') : t('aerialview.landing');
 });
 
-function goToChat() {
-  router.push('/chat');
-}
-
 function hideAllDisks() {
   showFlight.value = false;
   showCamera.value = false;
@@ -355,14 +351,7 @@ onMounted(() => {
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
   registerPage({ id: 'settings', nameKey: 'aerialview.page_settings', route: '/settings' });
-  registerPage({ id: 'customer_service', nameKey: 'aerialview.page_customer_service' });
 
-  registerLeft({
-    id: 'chat',
-    icon: 'MENU_CHAT',
-    titleKey: 'aerialview.chat',
-    onClick: goToChat,
-  });
   registerLeft({
     id: 'router',
     render: () => h(DockMenuButton, {
@@ -462,7 +451,6 @@ onUnmounted(() => {
   unregisterPage('chat');
   unregisterPage('extensions');
   unregisterPage('settings');
-  unregisterPage('customer_service');
 });
 </script>
 

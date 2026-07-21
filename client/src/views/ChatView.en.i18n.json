@@ -1,4 +1,13 @@
 {
+  "nav_pages": "Pages",
+  "nav_chat": "Chat",
+  "nav_contacts": "Contacts",
+  "nav_gallery": "Gallery",
+  "nav_customer_service": "Customer Service",
+  "tool_photo": "Photo",
+  "tool_file": "File",
+  "tool_note": "Note",
+  "tool_tool": "Tool",
   "flight_plan_1": "Flight Plan #1",
   "mission_control": "Mission Control",
   "support": "Support",

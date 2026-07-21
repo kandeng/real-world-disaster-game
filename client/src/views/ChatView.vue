@@ -1,20 +1,50 @@
 <script setup>
-import { ref, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, computed, h, nextTick, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useRouter } from 'vue-router';
+import ViewComposer from '@shared/_ViewComposer.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
+import DockMenuButton from '@shared/DockMenuButton.vue';
+import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 
 const { t } = useI18n();
-const { registerPage, unregisterPage } = usePageRegistry();
+const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
+const { pages, registerPage, unregisterPage } = usePageRegistry();
 
-const router = useRouter();
+/* ─── Left-column width drag ─── */
+const LEFT_MIN = 280;
+const LEFT_MAX = 600;
+const LEFT_DEFAULT = 40; // percentage
+const leftWidthPct = ref(LEFT_DEFAULT);
+const isDragging = ref(false);
 
-const sessions = ref([
-  { id: 1, title: t('chatview.flight_plan_1'), preview: 'Adjust altitude to 120m', active: true },
-  { id: 2, title: t('chatview.mission_control'), preview: 'Route confirmed', active: false },
-  { id: 3, title: t('chatview.support'), preview: 'Camera gimbal calibration', active: false },
-]);
+function onDividerPointerDown(e) {
+  e.preventDefault();
+  isDragging.value = true;
+  document.addEventListener('pointermove', onDividerPointerMove);
+  document.addEventListener('pointerup', onDividerPointerUp);
+}
+
+function onDividerPointerMove(e) {
+  if (!isDragging.value) return;
+  const panel = document.querySelector('.community-page');
+  if (!panel) return;
+  const rect = panel.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const pct = (x / rect.width) * 100;
+  const minPct = (LEFT_MIN / rect.width) * 100;
+  const maxPct = (LEFT_MAX / rect.width) * 100;
+  leftWidthPct.value = Math.min(maxPct, Math.max(minPct, pct));
+}
+
+function onDividerPointerUp() {
+  isDragging.value = false;
+  document.removeEventListener('pointermove', onDividerPointerMove);
+  document.removeEventListener('pointerup', onDividerPointerUp);
+}
+
+/* ─── Sidebar navigation ─── */
+const selectedNav = ref('chat');
 
 const messages = ref([
   {
@@ -46,14 +76,6 @@ const messages = ref([
 
 const input = ref('');
 const messagesRef = ref(null);
-
-function goBack() {
-  router.push('/');
-}
-
-function selectSession(id) {
-  sessions.value = sessions.value.map((s) => ({ ...s, active: s.id === id }));
-}
 
 async function sendMessage() {
   const text = input.value.trim();
@@ -105,10 +127,74 @@ onMounted(() => {
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
   registerPage({ id: 'settings', nameKey: 'aerialview.page_settings', route: '/settings' });
-  registerPage({ id: 'customer_service', nameKey: 'aerialview.page_customer_service' });
+
+  // Register dock sidebar buttons
+  registerLeft({
+    id: 'pages',
+    render: () => h(DockMenuButton, {
+      icon: 'MENU_ROUTER',
+      titleKey: 'chatview.nav_pages',
+      pages,
+    }),
+  });
+  registerLeft({
+    id: 'chat',
+    icon: 'MENU_CHAT',
+    titleKey: 'chatview.nav_chat',
+    active: computed(() => selectedNav.value === 'chat'),
+    onClick: () => { selectedNav.value = 'chat'; },
+  });
+  registerLeft({
+    id: 'contacts',
+    icon: 'MENU_CONTACTS',
+    titleKey: 'chatview.nav_contacts',
+    active: computed(() => selectedNav.value === 'contacts'),
+    onClick: () => { selectedNav.value = 'contacts'; },
+  });
+  registerLeft({
+    id: 'gallery',
+    icon: 'MENU_GALLARY',
+    titleKey: 'chatview.nav_gallery',
+    active: computed(() => selectedNav.value === 'gallery'),
+    onClick: () => { selectedNav.value = 'gallery'; },
+  });
+  registerLeft({
+    id: 'customer_service',
+    icon: 'MENU_CUSTOMER_SERVICE',
+    titleKey: 'chatview.nav_customer_service',
+    active: computed(() => selectedNav.value === 'customer_service'),
+    onClick: () => { selectedNav.value = 'customer_service'; },
+  });
+
+  // Register right dock buttons
+  registerRight({
+    id: 'photo',
+    icon: 'MENU_PHOTO',
+    titleKey: 'chatview.tool_photo',
+    onClick: () => {},
+  });
+  registerRight({
+    id: 'file',
+    icon: 'MENU_ARCHIVE',
+    titleKey: 'chatview.tool_file',
+    onClick: () => {},
+  });
+  registerRight({
+    id: 'note',
+    icon: 'MENU_NOTE',
+    titleKey: 'chatview.tool_note',
+    onClick: () => {},
+  });
+  registerRight({
+    id: 'tool',
+    icon: 'MENU_TOOL',
+    titleKey: 'chatview.tool_tool',
+    onClick: () => {},
+  });
 });
 
 onUnmounted(() => {
+  clear();
   unregisterPage('aerial');
   unregisterPage('mesh');
   unregisterPage('3dgs');
@@ -118,165 +204,148 @@ onUnmounted(() => {
   unregisterPage('chat');
   unregisterPage('extensions');
   unregisterPage('settings');
-  unregisterPage('customer_service');
 });
 </script>
 
 <template>
-  <div class="chat">
-    <!-- Left navigation / history panel -->
-    <aside class="chat-sidebar">
-      <div class="chat-sidebar-header">
-        <button class="icon-btn" :title="t('chatview.back_to_dashboard')" @click="goBack">
-          <ConfigurableIcon name="CHAT_BACK" :size="22" />
-        </button>
-        <h2 class="chat-sidebar-title">{{ t('chatview.conversations') }}</h2>
-      </div>
-
-      <div class="sessions">
-        <button
-          v-for="session in sessions"
-          :key="session.id"
-          class="session-item"
-          :class="{ 'session-item--active': session.active }"
-          @click="selectSession(session.id)"
+  <ViewComposer
+    :left-items="leftItems"
+    :right-items="rightItems"
+    :show-flight="false"
+    :show-camera="false"
+    :show-hud="false"
+    :flight="{ mode: '-', vx: 0, vy: 0, yaw: 0, vz: 0 }"
+    :camera="{ mode: '-', yaw: 0, pitch: 0, roll: 0 }"
+  >
+    <template #background>
+      <div class="community-page">
+        <!-- Left panel -->
+        <aside
+          class="community-sidebar"
+          :style="{ flexBasis: leftWidthPct + '%' }"
         >
-          <span class="session-title">{{ session.title }}</span>
-          <span class="session-preview">{{ session.preview }}</span>
-        </button>
-      </div>
-    </aside>
+          <!-- Content area based on selectedNav -->
+        </aside>
 
-    <!-- Main chat area -->
-    <main class="chat-main">
-      <header class="chat-header">
-        <h1 class="chat-header-title">{{ t('chatview.mission_control') }}</h1>
-        <span class="chat-status">{{ t('chatview.online') }}</span>
-      </header>
-
-      <div ref="messagesRef" class="messages">
+        <!-- Divider (draggable) -->
         <div
-          v-for="msg in messages"
-          :key="msg.id"
-          class="message-wrapper"
-          :class="`message-wrapper--${msg.sender}`"
-        >
-          <div class="message-bubble" :class="`message-bubble--${msg.sender}`">
-            <p v-if="msg.text" class="message-text">{{ msg.text }}</p>
-            <img
-              v-if="msg.image"
-              :src="msg.image"
-              alt="Shared image"
-              class="message-image"
-            />
-            <span class="message-time">{{ msg.time }}</span>
-          </div>
-        </div>
-      </div>
-
-      <footer class="chat-inputbar">
-        <button class="icon-btn" :title="t('chatview.attach_file')">
-          <ConfigurableIcon name="CHAT_ATTACHMENT" :size="22" />
-        </button>
-        <textarea
-          v-model="input"
-          class="chat-input"
-          :placeholder="t('chatview.type_a_message')"
-          rows="1"
-          @keydown="handleKeydown"
+          class="community-divider"
+          @pointerdown="onDividerPointerDown"
         />
-        <button class="send-btn" :title="t('chatview.send')" @click="sendMessage">
-          <ConfigurableIcon name="CHAT_SEND" :size="18" />
-        </button>
-      </footer>
-    </main>
-  </div>
+
+        <!-- Right content area -->
+        <main class="community-content">
+          <!-- Chat header -->
+          <header class="chat-header">
+            <h1 class="chat-header-title">{{ t('chatview.mission_control') }}</h1>
+            <span class="chat-status">{{ t('chatview.online') }}</span>
+          </header>
+
+          <!-- Messages -->
+          <div ref="messagesRef" class="messages">
+            <div
+              v-for="msg in messages"
+              :key="msg.id"
+              class="message-wrapper"
+              :class="`message-wrapper--${msg.sender}`"
+            >
+              <div class="message-bubble" :class="`message-bubble--${msg.sender}`">
+                <p v-if="msg.text" class="message-text">{{ msg.text }}</p>
+                <img
+                  v-if="msg.image"
+                  :src="msg.image"
+                  alt="Shared image"
+                  class="message-image"
+                />
+                <span class="message-time">{{ msg.time }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Input bar -->
+          <footer class="chat-inputbar">
+            <button class="icon-btn" :title="t('chatview.attach_file')">
+              <ConfigurableIcon name="CHAT_ATTACHMENT" :size="22" />
+            </button>
+            <textarea
+              v-model="input"
+              class="chat-input"
+              :placeholder="t('chatview.type_a_message')"
+              rows="1"
+              @keydown="handleKeydown"
+            />
+            <button class="send-btn" :title="t('chatview.send')" @click="sendMessage">
+              <ConfigurableIcon name="CHAT_SEND" :size="18" />
+            </button>
+          </footer>
+        </main>
+      </div>
+    </template>
+  </ViewComposer>
 </template>
 
 <style scoped>
-.chat {
+.community-page {
+  position: absolute;
+  inset: 0;
   display: flex;
-  width: 100%;
-  height: 100%;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(12px);
-  color: #1f2937;
-  overflow: hidden;
   pointer-events: auto;
+  background: #ffffff;
+  user-select: none;
+  z-index: 6;
 }
 
-.chat-sidebar {
-  width: 320px;
+/* ─── Left sidebar ─── */
+.community-sidebar {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid rgba(229, 231, 235, 0.8);
-  background: rgba(249, 250, 251, 0.85);
-}
-
-.chat-sidebar-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 20px 16px;
-  border-bottom: 1px solid rgba(229, 231, 235, 0.8);
-}
-
-.chat-sidebar-title {
-  font-size: 1.125rem;
-  font-weight: 700;
-  margin: 0;
-}
-
-.sessions {
-  flex: 1;
+  background: #f5f5f7;
   overflow-y: auto;
-  padding: 8px;
 }
 
-.session-item {
-  width: 100%;
-  text-align: left;
-  padding: 14px 16px;
-  border-radius: 10px;
-  border: none;
+.community-sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.community-sidebar::-webkit-scrollbar-track {
   background: transparent;
-  cursor: pointer;
+}
+
+.community-sidebar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+
+.community-sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* ─── Divider ─── */
+.community-divider {
+  width: 4px;
+  flex-shrink: 0;
+  background: #e5e5ea;
+  cursor: col-resize;
   transition: background 0.15s ease;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
 }
 
-.session-item:hover {
-  background: rgba(229, 231, 235, 0.6);
+.community-divider:hover,
+.community-divider:active {
+  background: #007aff;
 }
 
-.session-item--active {
-  background: rgba(59, 130, 246, 0.1);
-}
-
-.session-title {
-  font-weight: 600;
-  font-size: 0.95rem;
-  color: #111827;
-}
-
-.session-preview {
-  font-size: 0.8rem;
-  color: #6b7280;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chat-main {
+/* ─── Right content area ─── */
+.community-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  background: #ffffff;
+  overflow: hidden;
 }
 
+/* ─── Chat header ─── */
 .chat-header {
   display: flex;
   align-items: center;
@@ -290,6 +359,7 @@ onUnmounted(() => {
   font-size: 1.125rem;
   font-weight: 700;
   margin: 0;
+  color: #1d1d1f;
 }
 
 .chat-status {
@@ -309,6 +379,7 @@ onUnmounted(() => {
   background: #22c55e;
 }
 
+/* ─── Messages ─── */
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -381,6 +452,7 @@ onUnmounted(() => {
   align-self: flex-end;
 }
 
+/* ─── Input bar ─── */
 .chat-inputbar {
   display: flex;
   align-items: center;
@@ -445,15 +517,5 @@ onUnmounted(() => {
 
 .send-btn:hover {
   background: #2563eb;
-}
-
-@media (max-width: 768px) {
-  .chat-sidebar {
-    width: 240px;
-  }
-
-  .message-bubble {
-    max-width: 80%;
-  }
 }
 </style>

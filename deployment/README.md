@@ -1,4 +1,4 @@
-# Drone\-navigation Website
+# Drone\-Navigation Website
 
 This document describes how the `drone-navigation` project is deployed and operated in production.
 
@@ -9,7 +9,7 @@ This document describes how the `drone-navigation` project is deployed and opera
 
 The domain `drone-navigation.com` is registered through [Porkbun](https://porkbun.com/).
 
-Use Porkbun to manage DNS records (A/AAAA/CNAME) that point the domain to the Alibaba Cloud ECS instance. Screenshots of the Porkbun DNS configuration are attached below for reference.
+Use Porkbun to manage DNS records (A / AAAA / CNAME) that point the domain to the Alibaba Cloud ECS instance. Screenshots of the Porkbun DNS configuration are attached below for reference.
 
 ![Porkbun login](assets/porkbun_01.png)
 
@@ -30,7 +30,7 @@ The production server runs on an Alibaba Cloud ECS instance (Ubuntu 24.04.4 LTS)
 URL:      https://signin.aliyun.com/
 ```
 
-### 1. Network security group
+### 1. Network Security Group
 
 Ensure the ECS security group allows inbound traffic on the ports used by the services:
 
@@ -51,27 +51,23 @@ A screenshot of the security group rules is attached below.
 &nbsp;
 ### 2. CDN
 
-To configure an Alibaba Cloud CDN distribution in front of Caddy and point its origin to the ECS public IP or `drone-navigation.com`, 
-we need to cooperation with Alibaba cloud's IT staff.
+To configure an Alibaba Cloud CDN distribution in front of Caddy, pointing its origin to the ECS public IP or `drone-navigation.com`, coordinate with Alibaba Cloud's support team.
 
-First all of all, go to the detailed information of our domain `drone-navigation.com` in `porkbun.com`.
+First, navigate to the detail page of our domain `drone-navigation.com` on `porkbun.com`.
 
 ![Click the detail button of our domain](assets/cdn_entry.png)
 
-Then, download `the SSL bundle` of our domain `drone-navigation.com`, 
-including the certificate of our domain, its public key and private key. 
+Next, download the **SSL bundle** for `drone-navigation.com`, which includes the domain certificate, public key, and private key.
 
-![the SSL bundle of our domain](assets/cdn_ssl.png)
+![The SSL bundle of our domain](assets/cdn_ssl.png)
 
-The most challenging task is to create the direct domain name `drone-navigation.com` 
-that directly points to our ECS server that runs the Caddy web engine. 
+The most critical step is creating the **direct domain record** for `drone-navigation.com` that points directly to our ECS server running the Caddy web engine.
 
-In addition, create the CDN edge domain names, `www.drone-navigation.com` and `cdn.drone-navigation.com`, 
-that point to the domain name `drone-navigation.com`.
+In addition, create the **CDN edge domain names** — `www.drone-navigation.com` and `cdn.drone-navigation.com` — as CNAMEs pointing to `drone-navigation.com`.
 
-Make sure to contact Alibaba cloud IT staff for collaboration. 
+Contact Alibaba Cloud support for assistance with this configuration.
 
-![the CDN domain name (CNAMEs)](assets/cdn_cname.png)
+![The CDN domain names (CNAMEs)](assets/cdn_cname.png)
 
 
 &nbsp;
@@ -111,7 +107,7 @@ If the GPG key download fails due to DNS or network issues, check `/etc/resolv.c
 
 
 &nbsp;
-### 2. drone\-navigation deployment
+### 2. drone\-navigation Deployment
 
 Build the Vue frontend and deploy it behind Caddy.
 
@@ -158,7 +154,7 @@ sudo journalctl -u caddy -f
 
 
 &nbsp;
-### 3. Caddy configuration
+### 3. Caddy Configuration
 
 Create or edit `/etc/caddy/Caddyfile` to serve the built frontend. Caddy will automatically provision and renew HTTPS certificates for the listed domains.
 
@@ -279,7 +275,7 @@ HTTP/2 200
 &nbsp;
 # 3. Backend Servers
 
-## 3.1. Fastapi Backend
+## 3.1. FastAPI Backend
 
 The FastAPI backend is a planned component for server-side logic (e.g., mission persistence, telemetry ingestion, user accounts). It is not yet implemented.
 
@@ -300,17 +296,16 @@ Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/Caddy/C
 
 
 &nbsp;
-## 3.2. Openclaw Assistant
+## 3.2. OpenClaw Assistant
 
-We use Openclaw as the customer service assistant. 
-We follow [Alibaba's guideline to install the openclaw](https://help.aliyun.com/zh/model-studio/openclaw) 
-on an Alibaba ECS server located in Virginia USA. 
+We use OpenClaw as the customer service assistant.
+Follow [Alibaba's OpenClaw installation guide](https://help.aliyun.com/zh/model-studio/openclaw)
+to deploy it on an Alibaba ECS server located in Virginia, USA.
 
 ### 1. Prerequisites
 
-Before installing, you should ask the AI model provider for the information of `baseUrl`, `apiKey`, `api`, 
-as well as the names of the available AI models. 
-These information are used for the configuration of openclaw, `~/.openclaw/openclaw.json`.  
+Before installing, request the following from your AI model provider: `baseUrl`, `apiKey`, `api`, and the list of available AI models.
+These values are used in the OpenClaw configuration file at `~/.openclaw/openclaw.json`.
 
 ~~~
   "models": {
@@ -341,10 +336,10 @@ These information are used for the configuration of openclaw, `~/.openclaw/openc
 &nbsp;
 ### 2. openclaw.json
 
-A full example of `openclaw.json` configuration refers to [`openclaw/openclaw.json`](./openclaw/openclaw.json)
+For a full example of the `openclaw.json` configuration, see [`openclaw/openclaw.json`](./openclaw/openclaw.json).
 
 &nbsp;
-### 3. Restart openclaw from scratch
+### 3. Restart OpenClaw from Scratch
 
 ~~~
 # Stop the systemd service first
@@ -366,19 +361,19 @@ tcp   LISTEN 0      511                  [::1]:18789         [::]:*    users:(("
 sudo kill -9 2714644
 ```
 
-# performs a complete re-registration and setup of the OpenClaw gateway 
-# as a system background service (daemon), 
+# Perform a complete re-registration and setup of the OpenClaw gateway
+# as a system background service (daemon),
 # overwriting any existing service configurations.
 openclaw gateway install --force 
 
-# Verify the grammar of the `openclaw.json`
+# Verify the syntax of openclaw.json
 jq . openclaw.json
 
 openclaw gateway restart
 
 openclaw gateway status
 
-The log on 2026-07-21: `tail -n 100 /tmp/openclaw-0/openclaw-2026-07-21.log`
+View recent logs, e.g.: `tail -n 100 /tmp/openclaw-0/openclaw-2026-07-21.log`
 ~~~
 
 
@@ -391,7 +386,7 @@ Synapse Matrix integration is planned but not yet implemented. This section will
 &nbsp;
 # 4. Data Sources
 
-## 4.1. Google Map APIs
+## 4.1. Google Maps APIs
 
 &nbsp;
 ## 4.2. Cesium Ion
