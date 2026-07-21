@@ -147,8 +147,10 @@ See [`deployment/caddy/Caddyfile`](file:///home/robot/drone-navigation/deploymen
 After editing:
 
 ```bash
-# Format the Caddyfile (optional but recommended)
+# Format the Caddyfile including indention
 caddy fmt --overwrite /etc/caddy/Caddyfile
+# Validate cleanly without any ACME errors or syntax issues
+caddy validate --config /etc/caddy/Caddyfile
 
 # Reload Caddy to apply the new configuration
 sudo systemctl reload caddy
