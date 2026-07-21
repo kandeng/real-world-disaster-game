@@ -51,7 +51,27 @@ A screenshot of the security group rules is attached below.
 &nbsp;
 ### 2. CDN
 
-CDN configuration is not currently used. If needed in the future, configure an Alibaba Cloud CDN distribution in front of Caddy and point its origin to the ECS public IP or `www.drone-navigation.com`.
+To configure an Alibaba Cloud CDN distribution in front of Caddy and point its origin to the ECS public IP or `drone-navigation.com`, 
+we need to cooperation with Alibaba cloud's IT staff.
+
+First all of all, go to the detailed information of our domain `drone-navigation.com` in `porkbun.com`.
+
+![Click the detail button of our domain](assets/cdn_entry.png)
+
+Then, download `the SSL bundle` of our domain `drone-navigation.com`, 
+including the certificate of our domain, its public key and private key. 
+
+![the SSL bundle of our domain](assets/cdn_ssl.png)
+
+The most challenging task is to create the direct domain name `drone-navigation.com` 
+that directly points to our ECS server that runs the Caddy web engine. 
+
+In addition, create the CDN edge domain names, `www.drone-navigation.com` and `cdn.drone-navigation.com`, 
+that point to the domain name `drone-navigation.com`.
+
+Make sure to contact Alibaba cloud IT staff for collaboration. 
+
+![the CDN domain name (CNAMEs)](assets/cdn_cname.png)
 
 
 &nbsp;
