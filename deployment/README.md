@@ -280,7 +280,84 @@ Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/Caddy/C
 &nbsp;
 ## 3.2. Openclaw Assistant
 
-Openclaw Assistant integration is planned but not yet implemented. This section will document how to deploy and configure the assistant service once the integration is ready.
+We use Openclaw as the customer service assistant. 
+We follow [Alibaba's guideline to install the openclaw](https://help.aliyun.com/zh/model-studio/openclaw) 
+on an Alibaba ECS server located in Virginia USA. 
+
+### 1. Prerequisites
+
+Before installing, you should ask the AI model provider for the information of `baseUrl`, `apiKey`, `api`, 
+as well as the names of the available AI models. 
+These information are used for the configuration of openclaw, `~/.openclaw/openclaw.json`.  
+
+~~~
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "bailian-token-plan": {
+        "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+        "apiKey": "YOUR_API_KEY",
+        "api": "anthropic-messages",
+        "models": [
+          {
+            "id": "qwen3.8-max-preview",
+            "name": "qwen3.8-max-preview",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 983616,
+            "maxTokens": 131072,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "compat": { "thinkingFormat": "openai" }
+          },
+          ...
+        ]
+      }
+    }
+  }
+~~~
+
+&nbsp;
+### 2. openclaw.json
+
+A full example of `openclaw.json` configuration refers to [`openclaw/openclaw.json`](./openclaw/openclaw.json)
+
+&nbsp;
+### 3. Restart openclaw from scratch
+
+~~~
+# Stop the systemd service first
+openclaw gateway stop
+
+# Force kill any remaining processes using port 18789
+sudo fuser -k 18789/tcp
+
+# Alternatively, kill all running openclaw processes
+pkill -9 -f openclaw
+
+# Run this to make sure nothing is listening on 18789
+ss -tulpn | grep 18789
+```
+root@iZ0xi7m4xb72am9kjxn9mrZ:~/.openclaw# ss -tulpn | grep 18789
+tcp   LISTEN 0      511              127.0.0.1:18789      0.0.0.0:*    users:(("openclaw-gatewa",pid=2714644,fd=22))             
+tcp   LISTEN 0      511                  [::1]:18789         [::]:*    users:(("openclaw-gatewa",pid=2714644,fd=23)) 
+
+sudo kill -9 2714644
+```
+
+# performs a complete re-registration and setup of the OpenClaw gateway 
+# as a system background service (daemon), 
+# overwriting any existing service configurations.
+openclaw gateway install --force 
+
+# Verify the grammar of the `openclaw.json`
+jq . openclaw.json
+
+openclaw gateway restart
+
+openclaw gateway status
+
+The log on 2026-07-21: `tail -n 100 /tmp/openclaw-0/openclaw-2026-07-21.log`
+~~~
 
 
 &nbsp;
