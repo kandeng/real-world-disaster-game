@@ -1,17 +1,21 @@
 <script setup>
-import { ref, computed, h, nextTick, onMounted, onUnmounted } from 'vue';
+import { ref, computed, h, nextTick, watch, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
-import { useRouter } from 'vue-router';
+import { useOpenClaw } from '@shared-composables/useOpenClaw.js';
 
 const { t } = useI18n();
 const router = useRouter();
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { status, error, messages, isConnected, sendMessage } = useOpenClaw();
+
+const selectedNav = ref('customer_service');
 
 /* ─── Left-column width drag ─── */
 const LEFT_MIN = 280;
@@ -45,71 +49,21 @@ function onDividerPointerUp() {
   document.removeEventListener('pointerup', onDividerPointerUp);
 }
 
-/* ─── Sidebar navigation ─── */
-const selectedNav = ref('chat');
-
-const messages = ref([
-  {
-    id: 1,
-    sender: 'system',
-    text: t('chatview.connected'),
-    time: '10:00 AM',
-  },
-  {
-    id: 2,
-    sender: 'user',
-    text: t('chatview.patrol_request'),
-    time: '10:02 AM',
-  },
-  {
-    id: 3,
-    sender: 'bot',
-    text: t('chatview.patrol_response'),
-    time: '10:02 AM',
-  },
-  {
-    id: 4,
-    sender: 'bot',
-    image: 'https://placehold.co/400x200/3b82f6/ffffff?text=Route+Preview',
-    text: '',
-    time: '10:03 AM',
-  },
-]);
-
+/* ─── Chat input ─── */
 const input = ref('');
 const messagesRef = ref(null);
 
-async function sendMessage() {
+async function handleSend() {
   const text = input.value.trim();
   if (!text) return;
-
-  messages.value.push({
-    id: Date.now(),
-    sender: 'user',
-    text,
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-  });
+  sendMessage(text);
   input.value = '';
-
-  await nextTick();
-  scrollToBottom();
-
-  // Simulated assistant reply
-  setTimeout(() => {
-    messages.value.push({
-      id: Date.now() + 1,
-      sender: 'bot',
-      text: t('chatview.acknowledged'),
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    });
-    nextTick().then(scrollToBottom);
-  }, 800);
 }
 
 function handleKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    sendMessage();
+    handleSend();
   }
 }
 
@@ -119,6 +73,11 @@ function scrollToBottom() {
   }
 }
 
+watch(messages, () => {
+  nextTick().then(scrollToBottom);
+}, { deep: true });
+
+/* ─── Dock registration ─── */
 onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
   registerPage({ id: 'mesh', nameKey: 'aerialview.page_mesh', route: '/mesh' });
@@ -130,7 +89,6 @@ onMounted(() => {
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
   registerPage({ id: 'settings', nameKey: 'aerialview.page_settings', route: '/settings' });
 
-  // Register dock sidebar buttons
   registerLeft({
     id: 'pages',
     render: () => h(DockMenuButton, {
@@ -144,7 +102,7 @@ onMounted(() => {
     icon: 'MENU_CHAT',
     titleKey: 'chatview.nav_chat',
     active: computed(() => selectedNav.value === 'chat'),
-    onClick: () => { selectedNav.value = 'chat'; },
+    onClick: () => { router.push('/chat'); },
   });
   registerLeft({
     id: 'contacts',
@@ -165,10 +123,9 @@ onMounted(() => {
     icon: 'MENU_CUSTOMER_SERVICE',
     titleKey: 'chatview.nav_customer_service',
     active: computed(() => selectedNav.value === 'customer_service'),
-    onClick: () => { router.push('/customer-service'); },
+    onClick: () => {},
   });
 
-  // Register right dock buttons
   registerRight({
     id: 'photo',
     icon: 'MENU_PHOTO',
@@ -225,9 +182,7 @@ onUnmounted(() => {
         <aside
           class="community-sidebar"
           :style="{ flexBasis: leftWidthPct + '%' }"
-        >
-          <!-- Content area based on selectedNav -->
-        </aside>
+        />
 
         <!-- Divider (draggable) -->
         <div
@@ -239,8 +194,10 @@ onUnmounted(() => {
         <main class="community-content">
           <!-- Chat header -->
           <header class="chat-header">
-            <h1 class="chat-header-title">{{ t('chatview.mission_control') }}</h1>
-            <span class="chat-status">{{ t('chatview.online') }}</span>
+            <h1 class="chat-header-title">{{ t('customerserviceview.page_title') }}</h1>
+            <span class="chat-status" :class="`chat-status--${status}`">
+              {{ isConnected ? t('chatview.online') : t(`customerserviceview.status_${status}`) }}
+            </span>
           </header>
 
           <!-- Messages -->
@@ -251,6 +208,13 @@ onUnmounted(() => {
               class="message-wrapper"
               :class="`message-wrapper--${msg.sender}`"
             >
+              <!-- OpenClaw agent avatar, always on the left of assistant messages -->
+              <span
+                v-if="msg.sender === 'bot'"
+                class="chat-avatar chat-avatar--agent"
+              >
+                <ConfigurableIcon name="AGENT_OPENCLAW" :size="32" />
+              </span>
               <div class="message-bubble" :class="`message-bubble--${msg.sender}`">
                 <p v-if="msg.text" class="message-text">{{ msg.text }}</p>
                 <img
@@ -260,6 +224,18 @@ onUnmounted(() => {
                   class="message-image"
                 />
                 <span class="message-time">{{ msg.time }}</span>
+              </div>
+              <!-- User portrait avatar inside a dock-style rectangular border -->
+              <span
+                v-if="msg.sender === 'user'"
+                class="chat-avatar chat-avatar--user"
+              >
+                <ConfigurableIcon name="USER_PORTRAIT" :size="40" />
+              </span>
+            </div>
+            <div v-if="error" class="message-wrapper message-wrapper--system">
+              <div class="message-bubble message-bubble--system">
+                <p class="message-text">{{ error }}</p>
               </div>
             </div>
           </div>
@@ -274,9 +250,15 @@ onUnmounted(() => {
               class="chat-input"
               :placeholder="t('chatview.type_a_message')"
               rows="1"
+              :disabled="!isConnected"
               @keydown="handleKeydown"
             />
-            <button class="send-btn" :title="t('chatview.send')" @click="sendMessage">
+            <button
+              class="send-btn"
+              :title="t('chatview.send')"
+              :disabled="!isConnected || !input.trim()"
+              @click="handleSend"
+            >
               <ConfigurableIcon name="CHAT_SEND" :size="18" />
             </button>
           </footer>
@@ -381,6 +363,26 @@ onUnmounted(() => {
   background: #22c55e;
 }
 
+.chat-status--connecting {
+  color: #d97706;
+}
+
+.chat-status--connecting::before {
+  background: #f59e0b;
+}
+
+.chat-status--error,
+.chat-status--closed,
+.chat-status--idle {
+  color: #dc2626;
+}
+
+.chat-status--error::before,
+.chat-status--closed::before,
+.chat-status--idle::before {
+  background: #ef4444;
+}
+
 /* ─── Messages ─── */
 .messages {
   flex: 1;
@@ -394,6 +396,8 @@ onUnmounted(() => {
 .message-wrapper {
   display: flex;
   width: 100%;
+  align-items: flex-end;
+  gap: 10px;
 }
 
 .message-wrapper--user {
@@ -403,6 +407,33 @@ onUnmounted(() => {
 .message-wrapper--bot,
 .message-wrapper--system {
   justify-content: flex-start;
+}
+
+/* ─── Chat avatars ─── */
+.chat-avatar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-avatar--agent {
+  width: 36px;
+  height: 36px;
+}
+
+.chat-avatar--user {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(156, 163, 175, 0.4);
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.chat-avatar--user :deep(.configurable-icon__img) {
+  object-fit: cover;
 }
 
 .message-bubble {
@@ -439,6 +470,8 @@ onUnmounted(() => {
   margin: 0;
   line-height: 1.5;
   font-size: 0.95rem;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message-image {
@@ -483,6 +516,11 @@ onUnmounted(() => {
   background: white;
 }
 
+.chat-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .icon-btn {
   width: 40px;
   height: 40px;
@@ -517,7 +555,12 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.send-btn:hover {
+.send-btn:hover:not(:disabled) {
   background: #2563eb;
+}
+
+.send-btn:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
 }
 </style>

@@ -50,6 +50,10 @@ export const IconMap = {
   CHAT_BACK: '../../icons/back.svg',
   CHAT_SEND: '../../icons/send.svg',
   CHAT_ATTACHMENT: '../../icons/attachment.svg',
+
+  // Chat avatars
+  AGENT_OPENCLAW: '../../icons/openclaw.svg',
+  USER_PORTRAIT: '../../icons/portrait_photo.png',
 };
 
 /**

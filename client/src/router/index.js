@@ -35,6 +35,11 @@ const routes = [
     component: ChatView,
   },
   {
+    path: '/customer-service',
+    name: 'CustomerService',
+    component: () => import('@/views/CustomerServiceView.vue'),
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: SettingsView,
