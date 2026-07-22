@@ -8,6 +8,7 @@ const props = defineProps({
   title: { type: String, default: '' },
   titleKey: { type: String, default: '' },
   active: { type: Boolean, default: false },
+  danger: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   size: { type: Number, default: 32 },
 });
@@ -29,7 +30,7 @@ function handleClick() {
 <template>
   <button
     class="dock-btn"
-    :class="{ 'dock-btn--active': active }"
+    :class="{ 'dock-btn--active': active, 'dock-btn--danger': danger }"
     :title="resolvedTitle"
     :disabled="disabled"
     @click="handleClick"
@@ -64,6 +65,11 @@ function handleClick() {
   border-width: 2px;
   border-color: #4ade80;
   color: #4ade80;
+}
+
+.dock-btn--active.dock-btn--danger {
+  border-color: #ef4444;
+  color: #ef4444;
 }
 
 .dock-btn:disabled {

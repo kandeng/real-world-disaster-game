@@ -13,6 +13,7 @@ import { useFlightPhysics } from '@shared-composables/useFlightPhysics.js';
 import { useCameraPhysics } from '@shared-composables/useCameraPhysics.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
+import { useScreenCapture } from '@shared-composables/useScreenCapture.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
@@ -57,6 +58,7 @@ const { computeDesiredEnuMove, applyEnuMove, updateTelemetry: updateFlightTeleme
 const { step: stepCameraPhysics } = useCameraPhysics();
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { isRecording, captureScreenshot, toggleRecording, stopRecording } = useScreenCapture();
 
 const isCollisionFrozen = ref(false);
 const collisionSurfaceNormal = ref(null);
@@ -369,10 +371,18 @@ onMounted(() => {
     onClick: toggleCamera,
   });
   registerLeft({
+    id: 'screenshot',
+    icon: 'MENU_PHOTO',
+    titleKey: 'aerialview.screenshot',
+    onClick: captureScreenshot,
+  });
+  registerLeft({
     id: 'recorder',
     icon: 'MENU_RECORDER',
     titleKey: 'aerialview.recorder',
-    onClick: () => {},
+    active: isRecording,
+    danger: true,
+    onClick: toggleRecording,
   });
 
   registerRight({
@@ -437,6 +447,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  stopRecording();
   stopFlightKeyboard();
   stopCameraKeyboard();
   if (rafId) cancelAnimationFrame(rafId);

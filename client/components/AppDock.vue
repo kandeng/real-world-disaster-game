@@ -46,6 +46,7 @@ function handleItemClick(item) {
           :title="item.title"
           :title-key="item.titleKey"
           :active="item.active"
+          :danger="item.danger"
           :disabled="item.disabled"
           @click="handleItemClick(item)"
         />

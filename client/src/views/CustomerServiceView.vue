@@ -133,6 +133,12 @@ onMounted(() => {
     onClick: () => {},
   });
   registerRight({
+    id: 'video',
+    icon: 'MENU_RECORDER',
+    titleKey: 'chatview.tool_video',
+    onClick: () => {},
+  });
+  registerRight({
     id: 'file',
     icon: 'MENU_ARCHIVE',
     titleKey: 'chatview.tool_file',
