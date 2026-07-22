@@ -361,13 +361,13 @@ tcp   LISTEN 0      511                  [::1]:18789         [::]:*    users:(("
 sudo kill -9 2714644
 ```
 
+# Verify the syntax of openclaw.json
+jq . openclaw.json
+
 # Perform a complete re-registration and setup of the OpenClaw gateway
 # as a system background service (daemon),
 # overwriting any existing service configurations.
 openclaw gateway install --force 
-
-# Verify the syntax of openclaw.json
-jq . openclaw.json
 
 openclaw gateway restart
 
