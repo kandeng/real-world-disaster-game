@@ -361,9 +361,6 @@ tcp   LISTEN 0      511                  [::1]:18789         [::]:*    users:(("
 sudo kill -9 2714644
 ```
 
-# Verify the grammar of JSON
-jq . openclaw.json
-
 # Perform a complete re-registration and setup of the OpenClaw gateway
 # as a system background service (daemon),
 # overwriting any existing service configurations.
