@@ -22,6 +22,7 @@
   const OTHER_CLIPS = [
     '/splash/vantor_world3d.mp4',
     '/splash/kevtoe_worldview.mp4',
+    '/splash/palantier_maven.mp4',
   ];
   const MUSIC_URL = '/splash/background_music_00.mp3';
   const SETTINGS_KEY = 'app-settings';
@@ -70,6 +71,40 @@
 
   let playlist = buildPlaylist();
   let currentClip = 0;
+
+  /** Extract the bare file name from a clip URL, for logging. */
+  function clipName(url) {
+    return String(url).split('/').pop();
+  }
+
+  /**
+   * Start a fresh playback cycle after the last clip of the current playlist
+   * has finished. Rebuilds the shuffled playlist and guarantees the first
+   * clip of the new cycle is NOT the same as the clip that just ended —
+   * otherwise that clip would play twice in a row across the cycle boundary
+   * (the "repeated video" bug).
+   */
+  function startNewCycle() {
+    const justEnded = playlist[currentClip];
+    playlist = buildPlaylist();
+    // playlist[0] is FIRST_CLIP (skipped — it already played at startup), so
+    // the first clip of the new cycle is playlist[1]. If the shuffle happened
+    // to put the just-ended clip there again, swap it with a later clip that
+    // differs so the same video never plays back-to-back.
+    if (playlist.length > 2 && playlist[1] === justEnded) {
+      for (let i = 2; i < playlist.length; i++) {
+        if (playlist[i] !== justEnded) {
+          const tmp = playlist[1];
+          playlist[1] = playlist[i];
+          playlist[i] = tmp;
+          break;
+        }
+      }
+    }
+    currentClip = 1; // Skip FIRST_CLIP; it already played
+    preloadNext(currentClip);
+    crossFadeToNext();
+  }
 
   // ── i18n translations (customizable, not standard translations) ──
   // Each language has its own custom slogan text.
@@ -174,10 +209,7 @@
         currentClip++;
         crossFadeToNext();
       } else {
-        playlist = buildPlaylist();
-        currentClip = 1;
-        preloadNext(currentClip);
-        crossFadeToNext();
+        startNewCycle();
       }
     }, MAX_CLIP_DURATION_MS);
   }
@@ -245,12 +277,13 @@
    */
   function preloadNext(clipIndex) {
     if (clipIndex < playlist.length) {
+      const clipUrl = playlist[clipIndex];
       // Fully reset the standby element before loading the next clip,
       // so any stale ended/seek state from the previous clip is cleared.
       standbyVideo.pause();
       standbyVideo.removeAttribute('src');
       standbyVideo.load();
-      standbyVideo.src = playlist[clipIndex];
+      standbyVideo.src = clipUrl;
       standbyVideo.load();
       standbyVideo.addEventListener(
         'loadedmetadata',
@@ -260,10 +293,23 @@
         },
         { once: true }
       );
+      // Permanent log: report when this clip has buffered enough to be shown
+      // without stalling ("downloaded & cached, ready to display"). The src
+      // guard ignores stale events from a preload that has been superseded.
+      standbyVideo.addEventListener(
+        'canplay',
+        function onCanPlay() {
+          standbyVideo.removeEventListener('canplay', onCanPlay);
+          if (standbyVideo.src.indexOf(clipUrl) !== -1) {
+            console.log('[splash] Cached & ready to display: ' + clipName(clipUrl));
+          }
+        },
+        { once: true }
+      );
       standbyVideo.addEventListener(
         'error',
         function onErr(e) {
-          console.error('[splash] preload error for', playlist[clipIndex], e);
+          console.error('[splash] preload error for', clipUrl, e);
           standbyVideo.removeEventListener('error', onErr);
         },
         { once: true }
@@ -274,6 +320,7 @@
   // ── Start the first clip and preload the second ──
   videoA.src = playlist[0];
   videoA.play().catch(() => {});
+  console.log('[splash] Now playing: ' + clipName(playlist[0]));
   preloadNext(1); // Start buffering clip 2
 
   /**
@@ -335,6 +382,9 @@
       }
       // Ensure the next clip always starts from the very beginning.
       standbyVideo.currentTime = 0;
+
+      // Permanent log: report the clip that is starting to be displayed.
+      console.log('[splash] Now playing: ' + clipName(standbyVideo.currentSrc || standbyVideo.src));
 
       // Swap visibility
       activeVideo.style.transition = 'opacity 0.4s ease';
@@ -411,11 +461,8 @@
       currentClip++;
       crossFadeToNext();
     } else {
-      // End of playlist — build a new shuffle (always starting with FIRST_CLIP)
-      playlist = buildPlaylist();
-      currentClip = 1; // Skip FIRST_CLIP; it already played
-      preloadNext(currentClip);
-      crossFadeToNext();
+      // End of playlist — start a fresh shuffled cycle (no back-to-back repeat).
+      startNewCycle();
     }
   }
 

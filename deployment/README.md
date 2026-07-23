@@ -275,7 +275,10 @@ HTTP/2 200
 &nbsp;
 # 3. Backend Servers
 
-## 3.1. FastAPI Backend
+## 3.1. PostgreSQL Database
+
+&nbsp;
+## 3.2. FastAPI Backend
 
 The FastAPI backend is a planned component for server-side logic (e.g., mission persistence, telemetry ingestion, user accounts). It is not yet implemented.
 
@@ -296,7 +299,7 @@ Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/Caddy/C
 
 
 &nbsp;
-## 3.2. OpenClaw Assistant
+## 3.3. OpenClaw Assistant
 
 We use OpenClaw as the customer service assistant.
 Follow [Alibaba's OpenClaw installation guide](https://help.aliyun.com/zh/model-studio/openclaw)
@@ -378,6 +381,15 @@ View recent logs, e.g.: `tail -n 100 /tmp/openclaw-0/openclaw-2026-07-21.log`
 
 
 &nbsp;
-## 3.3. Synapse Matrix
+## 3.4. Synapse Matrix
 
 Synapse Matrix integration is planned but not yet implemented. This section will document how to deploy and configure the Matrix homeserver once the integration is ready.
+
+
+
+&nbsp;
+# 4. Server Cluster
+
+## 4.1. Tailscale VPN
+
+

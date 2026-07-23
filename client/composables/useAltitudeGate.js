@@ -31,7 +31,7 @@ export const PHASES = {
  * automatic takeoff/landing sequences with pre-cache delay phases.
  */
 export function useAltitudeGate(drone) {
-  const { getActiveTileset } = useTilesetSource();
+  const { getActiveTileset, activeSource } = useTilesetSource();
   const surfaceAlt = ref(0);
   const isOnGround = ref(true);
   const flightPhase = ref(PHASES.IDLE);
@@ -134,7 +134,13 @@ export function useAltitudeGate(drone) {
     update(viewer); // refresh surfaceAlt first
     flightPhase.value = PHASES.PRE_LANDING;
     lastSequence.value = 'landing';
-    prewarmStreetView(drone.lat, drone.lon);
+    // Only pre-warm Street View on the Google-tiles (aerial) source. On OSM
+    // Buildings the drone stays on the 3D tiles all the way to the ground, and
+    // loading Street View would spin up a second WebGL context that fights
+    // Cesium's (the uniform3fv warnings).
+    if (activeSource.value !== 'osm') {
+      prewarmStreetView(drone.lat, drone.lon);
+    }
     clearTimeout(phaseTimer);
     phaseTimer = setTimeout(() => {
       flightPhase.value = PHASES.DESCENDING;

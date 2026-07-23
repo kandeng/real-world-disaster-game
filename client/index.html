@@ -6,10 +6,12 @@
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Cesium.js"></script>
     <link href="https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <!-- Preload splash video clips to avoid black screen between transitions -->
+    <!-- Preload ONLY the first splash clip so it starts instantly. The
+         subsequent clips are downloaded lazily by splash.js (preloadNext)
+         once the current clip begins playing, so they are cached and ready
+         when needed without competing with the 3D tile download for
+         bandwidth at page load. -->
     <link rel="preload" href="/splash/video_00.mp4" as="video" type="video/mp4">
-    <link rel="preload" href="/splash/vantor_world3d.mp4" as="video" type="video/mp4">
-    <link rel="preload" href="/splash/kevtoe_worldview.mp4" as="video" type="video/mp4">
 </head>
 <body>
     <div id="cesiumContainer"></div>

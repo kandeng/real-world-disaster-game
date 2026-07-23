@@ -28,6 +28,35 @@ const viewer = new Cesium.Viewer('cesiumContainer', {
 // If the photorealistic tileset fails to load, we re-enable the globe as a fallback.
 viewer.scene.globe.show = false;
 
+// Disable atmospheric fog globally (both aerial and mesh sources). At the
+// altitudes this drone operates at, fog density is negligible, and fog is
+// purely cosmetic — turning it off yields a clearer view for navigation.
+viewer.scene.fog.enabled = false;
+
+// Fix the "WebGL: INVALID_VALUE: uniform3fv: no array" warnings on the 3D Mesh
+// subpage. They come from the OSM Buildings tileset's image-based lighting
+// (IBL): its PBR shader expects a vec3[9] uniform (model_sphericalHarmonic-
+// Coefficients) for diffuse IBL. We never supply spherical-harmonic coefficients,
+// so Cesium falls back to computing them from the atmosphere — which works in
+// the normal render but yields an EMPTY array in the pick pass used by
+// scene.pickFromRay (the per-frame ground-altitude raycast), triggering the
+// warning once per frame. Supplying an explicit coefficient set takes precedence
+// over the atmosphere fallback (see ImageBasedLightingPipelineStage), so the
+// uniform is always a valid 27-float array in every pass. The values below give
+// a soft, neutral daylight ambient (slightly brighter overhead) that closely
+// matches the default atmosphere look on the buildings.
+viewer.scene.imageBasedLighting.sphericalHarmonicCoefficients = [
+    new Cesium.Cartesian3(0.50, 0.50, 0.50), // L0,0 — base ambient irradiance
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,-1
+    new Cesium.Cartesian3(0.20, 0.20, 0.20), // L1,0 — sky is brighter overhead
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,1
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-2
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-1
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,0
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,1
+    new Cesium.Cartesian3(0.0, 0.0, 0.0)     // L2,2
+];
+
 // ── WebGL context-loss detection ──
 // If the GPU kills the WebGL context (memory pressure, driver reset), the
 // canvas keeps showing its last frame while the rest of the app (physics,

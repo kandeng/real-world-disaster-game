@@ -22,6 +22,7 @@ const isSwitching = ref(false);
 
 let osmTileset = null; // lazily created Cesium3DTileset (OSM Buildings)
 let worldTerrain = null; // cached CesiumTerrainProvider used for OSM context
+let worldImageryProvider = null; // cached Bing Maps aerial imagery for the OSM globe
 
 function getViewer() {
   return window.cesiumViewer || null;
@@ -40,6 +41,35 @@ function getActiveTileset() {
   return getGoogleTilesetRef();
 }
 
+/**
+ * Give the OSM Buildings tileset an explicit image-based-lighting spherical
+ * harmonic coefficient set (the same neutral values applied to the scene in
+ * cesium-main.js). The OSM tileset's PBR shader expects a vec3[9] uniform
+ * (model_sphericalHarmonicCoefficients) for diffuse IBL; without an explicit
+ * set Cesium computes it from the atmosphere, which yields an EMPTY array in
+ * the pick pass used by scene.pickFromRay (the per-frame ground-altitude
+ * raycast) → "WebGL: INVALID_VALUE: uniform3fv: no array" once per frame.
+ * Supplying explicit coefficients makes the uniform valid in every pass.
+ */
+function applyOsmSphericalHarmonics(tileset) {
+  const sh = [
+    new Cesium.Cartesian3(0.50, 0.50, 0.50), // L0,0 — base ambient irradiance
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,-1
+    new Cesium.Cartesian3(0.20, 0.20, 0.20), // L1,0 — sky is brighter overhead
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,1
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-2
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-1
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,0
+    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,1
+    new Cesium.Cartesian3(0.0, 0.0, 0.0)     // L2,2
+  ];
+  if (tileset.imageBasedLighting) {
+    tileset.imageBasedLighting.sphericalHarmonicCoefficients = sh;
+  } else {
+    tileset.imageBasedLighting = new Cesium.ImageBasedLighting({ sphericalHarmonicCoefficients: sh });
+  }
+}
+
 /** Show OSM Buildings: hide Google tiles, enable globe + World Terrain. */
 async function activateOsm(viewer) {
   const google = getGoogleTilesetRef();
@@ -47,6 +77,23 @@ async function activateOsm(viewer) {
 
   // OSM Buildings need a visible globe + terrain for ground context.
   viewer.scene.globe.show = true;
+
+  // Drape real satellite/aerial imagery (Bing Maps via Cesium Ion) over the
+  // globe so the 3D Mesh view reads as "satellite imagery + mesh buildings"
+  // rather than the stylized NaturalEarthII map set at viewer creation. The
+  // globe is hidden in Google/aerial mode, so this only affects 3D Mesh.
+  if (!worldImageryProvider) {
+    try {
+      worldImageryProvider = await Cesium.createWorldImageryAsync();
+    } catch (e) {
+      console.warn('[TilesetSource] World Imagery failed to load:', e);
+    }
+  }
+  if (worldImageryProvider) {
+    viewer.imageryLayers.removeAll();
+    viewer.imageryLayers.addImageryProvider(worldImageryProvider);
+  }
+
   if (!worldTerrain) {
     try {
       worldTerrain = await Cesium.createWorldTerrainAsync();
@@ -58,6 +105,7 @@ async function activateOsm(viewer) {
 
   if (!osmTileset) {
     osmTileset = await Cesium.createOsmBuildingsAsync();
+    applyOsmSphericalHarmonics(osmTileset);
   }
   if (!viewer.scene.primitives.contains(osmTileset)) {
     viewer.scene.primitives.add(osmTileset);

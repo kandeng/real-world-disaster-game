@@ -51,7 +51,6 @@ let lastZoomChangeTime = 0;  // timestamp (ms) of last user-initiated zoom
 let listeners = [];
 let wheelHandler = null;     // stored so we can removeEventListener on unmount
 let clickListener = null;    // Google Maps click listener for picking mode
-let directionsService = null; // Google Maps DirectionsService for route lookup
 let mapsApi = null;          // loaded Google Maps API namespace
 
 function altToZoom(alt) {
@@ -200,10 +199,6 @@ onMounted(async () => {
       rotateControl: false,
     });
 
-    if (mapsApi.DirectionsService) {
-      directionsService = new mapsApi.DirectionsService();
-    }
-
     listeners.push(mapsApi.event.addListener(map.value, 'center_changed', handleCenterChanged));
     listeners.push(mapsApi.event.addListener(map.value, 'zoom_changed', handleZoomChanged));
     attachMapClickListener();
@@ -295,34 +290,146 @@ function parseWaypointInput(name) {
   return trimmed;
 }
 
-function searchRoutes(waypoints) {
-  if (!directionsService || !mapsApi || waypoints.length < 2) return;
-  const origin = parseWaypointInput(waypoints[0].name);
-  const destination = parseWaypointInput(waypoints[waypoints.length - 1].name);
-  const middleWaypoints = waypoints.slice(1, -1).map((wp) => ({
-    location: parseWaypointInput(wp.name),
-    stopover: true,
-  }));
-  const request = {
-    origin,
-    destination,
-    waypoints: middleWaypoints,
-    travelMode: mapsApi.TravelMode.DRIVING,
-    provideRouteAlternatives: true,
+// ── Routes API (google.maps.routes.Route.computeRoutes) ──────────────────
+// The legacy google.maps.DirectionsService is deprecated (Feb 2026). We use
+// the Routes API instead and adapt its response back into the
+// DirectionsResult shape that WaypointPanel.vue consumes, so the panel needs
+// no changes.
+
+// Routes API durations are protobuf strings such as "300s" (or "3.5s").
+function durationStringToSeconds(d) {
+  if (typeof d === 'number') return d;
+  if (typeof d === 'string') {
+    const n = parseFloat(d);
+    return isNaN(n) ? 0 : n;
+  }
+  return 0;
+}
+
+function formatDistanceText(meters) {
+  if (meters == null) return '';
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  return `${(meters / 1000).toFixed(1)} km`;
+}
+
+function formatDurationText(seconds) {
+  if (seconds == null) return '';
+  const mins = Math.round(seconds / 60);
+  if (mins < 1) return `${Math.round(seconds)} secs`;
+  if (mins < 60) return `${mins} mins`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `${hours} hours ${rem} mins` : `${hours} hours`;
+}
+
+// Build a Routes API Waypoint from a waypoint input ("lat, lon, alt" coords
+// or a free-form place/address string).
+function buildRouteWaypoint(name) {
+  const parsed = parseWaypointInput(name);
+  if (parsed == null) return null;
+  if (typeof parsed === 'string') return { address: parsed };
+  // google.maps.LatLng
+  return { location: { latLng: { latitude: parsed.lat(), longitude: parsed.lng() } } };
+}
+
+function convertRouteStep(step) {
+  const distanceMeters = step.distanceMeters ?? step.localizedValues?.distance?.value ?? 0;
+  return {
+    distance: {
+      value: distanceMeters,
+      text: step.localizedValues?.distance?.text || formatDistanceText(distanceMeters),
+    },
+    instructions:
+      step.navigationInstruction?.instructions ||
+      step.navigationInstruction?.maneuver ||
+      '',
   };
-  directionsService.route(request, (result, status) => {
-    if (status === mapsApi.DirectionsStatus.OK && result?.routes?.length) {
-      // Select the fastest route by total duration
-      const fastest = result.routes.reduce((best, route) => {
-        const duration = route.legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
-        const bestDuration = best.legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
-        return duration < bestDuration ? route : best;
-      });
-      emit('routeFound', { ...result, routes: [fastest] });
-    } else {
-      emit('routeError', status);
+}
+
+function convertRouteLeg(leg, startIndex, waypoints) {
+  const distanceMeters = leg.distanceMeters ?? leg.localizedValues?.distance?.value ?? 0;
+  const durationSeconds =
+    leg.localizedValues?.staticDuration?.value ??
+    durationStringToSeconds(leg.staticDuration ?? leg.duration);
+  // Fall back to the user-entered waypoint names when the API does not return
+  // human-readable addresses for the leg endpoints.
+  const startName = waypoints[startIndex]?.name || '';
+  const endName = waypoints[startIndex + 1]?.name || '';
+  return {
+    distance: {
+      value: distanceMeters,
+      text: leg.localizedValues?.distance?.text || formatDistanceText(distanceMeters),
+    },
+    duration: {
+      value: durationSeconds,
+      text: leg.localizedValues?.staticDuration?.text || formatDurationText(durationSeconds),
+    },
+    start_address: leg.startLocation?.address || startName,
+    end_address: leg.endLocation?.address || endName,
+    steps: (leg.steps || []).map(convertRouteStep),
+  };
+}
+
+function convertRoute(route, waypoints) {
+  return {
+    legs: (route.legs || []).map((leg, i) => convertRouteLeg(leg, i, waypoints)),
+  };
+}
+
+async function searchRoutes(waypoints) {
+  if (!mapsApi || waypoints.length < 2) return;
+  if (typeof mapsApi.importLibrary !== 'function') {
+    emit('routeError', 'Routes API is not available for this Google Maps API key.');
+    return;
+  }
+  try {
+    const { Route } = await mapsApi.importLibrary('routes');
+    const origin = buildRouteWaypoint(waypoints[0].name);
+    const destination = buildRouteWaypoint(waypoints[waypoints.length - 1].name);
+    if (!origin || !destination) {
+      emit('routeError', 'ZERO_RESULTS');
+      return;
     }
-  });
+    const intermediates = waypoints
+      .slice(1, -1)
+      .map((wp) => buildRouteWaypoint(wp.name))
+      .filter(Boolean);
+
+    const response = await Route.computeRoutes({
+      origin,
+      destination,
+      intermediates,
+      travelMode: 'DRIVE',
+      computeAlternativeRoutes: true,
+      languageCode: 'en-US',
+      units: 'METRIC',
+    });
+
+    const routes = (response?.routes || []).map((r) => convertRoute(r, waypoints));
+    if (!routes.length) {
+      emit('routeError', 'ZERO_RESULTS');
+      return;
+    }
+
+    // Select the fastest route by total duration.
+    const fastest = routes.reduce((best, route) => {
+      const duration = route.legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
+      const bestDuration = best.legs.reduce((sum, leg) => sum + (leg.duration?.value || 0), 0);
+      return duration < bestDuration ? route : best;
+    });
+    emit('routeFound', { routes: [fastest] });
+  } catch (err) {
+    console.error('[MapView] computeRoutes error:', err);
+    const msg = err?.message || String(err);
+    const code = err?.code || '';
+    if (code === 'PERMISSION_DENIED' || /denied|not authorized|forbidden/i.test(msg)) {
+      emit('routeError', 'REQUEST_DENIED');
+    } else if (code === 'RESOURCE_EXHAUSTED' || /quota/i.test(msg)) {
+      emit('routeError', 'OVER_QUERY_LIMIT');
+    } else {
+      emit('routeError', msg);
+    }
+  }
 }
 
 function attachMapClickListener() {

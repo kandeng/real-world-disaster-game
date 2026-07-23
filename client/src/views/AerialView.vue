@@ -107,8 +107,15 @@ const isPreCaching = computed(() => {
   const p = altitudeGate.flightPhase.value;
   return p === PHASES.PRE_TAKEOFF || p === PHASES.PRE_LANDING;
 });
-const showStreetView = computed(() => (drone.alt - altitudeGate.surfaceAlt.value) < ASCEND_THRESHOLD);
+// Street View is only used on the 3D Aerial (Google tiles) subpage. On the
+// 3D Mesh (OSM Buildings) subpage the drone renders OSM buildings all the way
+// from airborne to ground, so no Street View switch-over happens. Loading
+// Google Street View there would also spin up a second WebGL context that
+// fights the Cesium context (the source of the uniform3fv warnings).
+const streetViewEnabled = computed(() => activeSource.value !== 'osm');
+const showStreetView = computed(() => streetViewEnabled.value && (drone.alt - altitudeGate.surfaceAlt.value) < ASCEND_THRESHOLD);
 const shouldPrewarmSV = computed(() => {
+  if (!streetViewEnabled.value) return false;
   const phase = altitudeGate.flightPhase.value;
   if (phase === PHASES.PRE_LANDING || phase === PHASES.DESCENDING) return true;
   return (drone.alt - altitudeGate.surfaceAlt.value) < 20;
@@ -118,6 +125,7 @@ const isTransitioning = computed(() => {
   return rel >= DESCEND_THRESHOLD && rel < ASCEND_THRESHOLD;
 });
 const streetViewOpacity = computed(() => {
+  if (!streetViewEnabled.value) return 0;
   const rel = drone.alt - altitudeGate.surfaceAlt.value;
   if (rel <= DESCEND_THRESHOLD) return 1;
   if (rel >= ASCEND_THRESHOLD) return 0;

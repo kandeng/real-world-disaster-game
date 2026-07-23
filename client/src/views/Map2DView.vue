@@ -82,13 +82,13 @@ function onRouteError(status) {
   setRouteResult(null);
   let message;
   if (status === 'REQUEST_DENIED') {
-    message = 'Directions API access was denied. Please enable the Directions API for your Google Maps API key in the Google Cloud Console.';
+    message = 'Routes API access was denied. Please enable the Routes API for your Google Maps API key in the Google Cloud Console.';
   } else if (status === 'OVER_QUERY_LIMIT') {
-    message = 'Directions API quota exceeded. Please check your Google Cloud billing and quota limits.';
+    message = 'Routes API quota exceeded. Please check your Google Cloud billing and quota limits.';
   } else if (status === 'ZERO_RESULTS') {
     message = 'No route found between the given waypoints.';
   } else {
-    message = status ? `Directions request failed: ${status}` : 'Could not find a route. Please check the waypoints.';
+    message = status ? `Route request failed: ${status}` : 'Could not find a route. Please check the waypoints.';
   }
   setRouteError(message);
 }
