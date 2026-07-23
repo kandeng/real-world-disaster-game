@@ -381,12 +381,3 @@ View recent logs, e.g.: `tail -n 100 /tmp/openclaw-0/openclaw-2026-07-21.log`
 ## 3.3. Synapse Matrix
 
 Synapse Matrix integration is planned but not yet implemented. This section will document how to deploy and configure the Matrix homeserver once the integration is ready.
-
-
-&nbsp;
-# 4. Data Sources
-
-## 4.1. Google Maps APIs
-
-&nbsp;
-## 4.2. Cesium Ion
