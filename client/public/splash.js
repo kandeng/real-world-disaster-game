@@ -166,9 +166,6 @@
     clearClipTimer();
     clipTimer = setTimeout(() => {
       if (dismissed) return;
-      console.log('[splash] max clip duration reached, forcing transition from', activeVideo.src?.split('/').pop());
-      logVideoState('timer active', activeVideo);
-      logVideoState('timer standby', standbyVideo);
       // Simulate a natural clip end: remove listeners, advance, and cross-fade.
       detachActiveListeners(activeVideo);
       if (tilesReady) {
@@ -246,15 +243,8 @@
    * Preload the next clip into the standby video element.
    * This starts buffering so the switch is instant.
    */
-  function logVideoState(label, video) {
-    console.log(
-      `[splash] ${label}: src=${video.src?.split('/').pop()}, readyState=${video.readyState}, currentTime=${video.currentTime.toFixed(2)}, paused=${video.paused}, ended=${video.ended}, opacity=${video.style.opacity}`
-    );
-  }
-
   function preloadNext(clipIndex) {
     if (clipIndex < playlist.length) {
-      console.log('[splash] preloading clip', clipIndex, playlist[clipIndex]);
       // Fully reset the standby element before loading the next clip,
       // so any stale ended/seek state from the previous clip is cleared.
       standbyVideo.pause();
@@ -266,16 +256,7 @@
         'loadedmetadata',
         function onMeta() {
           standbyVideo.currentTime = 0;
-          logVideoState('preload metadata', standbyVideo);
           standbyVideo.removeEventListener('loadedmetadata', onMeta);
-        },
-        { once: true }
-      );
-      standbyVideo.addEventListener(
-        'canplaythrough',
-        function onCanPlayThrough() {
-          logVideoState('preload canplaythrough', standbyVideo);
-          standbyVideo.removeEventListener('canplaythrough', onCanPlayThrough);
         },
         { once: true }
       );
@@ -296,6 +277,18 @@
   preloadNext(1); // Start buffering clip 2
 
   /**
+   * Fully stop a video element: pause it, detach its source, and abort any
+   * in-flight download. A detached-but-still-loading <video> keeps streaming
+   * and decoding in the background, competing with the 3D tile stream.
+   */
+  function stopVideo(video) {
+    if (!video) return;
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+
+  /**
    * Dismiss the splash overlay with a fade-out transition.
    * Safe to call multiple times; only the first call takes effect.
    */
@@ -304,75 +297,37 @@
     dismissed = true;
     clearClipTimer();
     activeVideo.pause();
+    // The standby clip is invisible; hard-stop it now so its download/decode
+    // cannot continue after the overlay is gone.
+    stopVideo(standbyVideo);
     fadeOutMusic(2000); // Gradually mute music over 2 seconds
     overlay.classList.add('splash-fade-out');
-    overlay.addEventListener('transitionend', () => {
+    let finalized = false;
+    const finalize = () => {
+      if (finalized) return;
+      finalized = true;
+      stopVideo(activeVideo); // release buffers held by the paused frame
       overlay.remove();
-    });
+    };
+    overlay.addEventListener('transitionend', finalize, { once: true });
+    // Fallback in case transitionend never fires (interrupted transition),
+    // so the overlay cannot linger invisibly.
+    setTimeout(finalize, 2500);
   }
-
-  function logEvent(name, video, detail) {
-    console.log(
-      `[splash] event ${name} on ${video.src?.split('/').pop()}`,
-      `readyState=${video.readyState}`,
-      `currentTime=${video.currentTime.toFixed(2)}`,
-      detail || ''
-    );
-  }
-
-  function onTimeUpdate(e) {
-    const video = e.target;
-    const remaining = video.duration - video.currentTime;
-    // Log near-end and once per 2 seconds to show progress.
-    if (!isNaN(remaining) && remaining < 0.5) {
-      console.log(
-        `[splash] near end: ${video.src?.split('/').pop()} currentTime=${video.currentTime.toFixed(2)} duration=${video.duration?.toFixed(2)} remaining=${remaining.toFixed(2)}`
-      );
-    } else if (Math.floor(video.currentTime) % 2 === 0) {
-      if (video.lastLoggedSecond !== Math.floor(video.currentTime)) {
-        video.lastLoggedSecond = Math.floor(video.currentTime);
-        console.log(
-          `[splash] progress: ${video.src?.split('/').pop()} currentTime=${video.currentTime.toFixed(2)} duration=${video.duration?.toFixed(2)}`
-        );
-      }
-    }
-  }
-
-  function onWaiting(e) { logEvent('waiting', e.target); }
-  function onStalled(e) { logEvent('stalled', e.target); }
-  function onSuspend(e) { logEvent('suspend', e.target); }
-  function onError(e) { logEvent('error', e.target, e); }
 
   function attachActiveListeners(video) {
     video.addEventListener('ended', onClipEnded);
-    video.addEventListener('timeupdate', onTimeUpdate);
-    video.addEventListener('waiting', onWaiting);
-    video.addEventListener('stalled', onStalled);
-    video.addEventListener('suspend', onSuspend);
-    video.addEventListener('error', onError);
-    video.addEventListener('playing', () => logEvent('playing', video));
-    video.addEventListener('loadeddata', () => logEvent('loadeddata', video));
   }
 
   function detachActiveListeners(video) {
     video.removeEventListener('ended', onClipEnded);
-    video.removeEventListener('timeupdate', onTimeUpdate);
-    video.removeEventListener('waiting', onWaiting);
-    video.removeEventListener('stalled', onStalled);
-    video.removeEventListener('suspend', onSuspend);
-    video.removeEventListener('error', onError);
-    video.removeEventListener('playing', () => logEvent('playing', video));
-    video.removeEventListener('loadeddata', () => logEvent('loadeddata', video));
   }
-
 
 
   /**
    * Cross-fade from active video to standby video (which has next clip ready).
    */
   function crossFadeToNext() {
-    logVideoState('crossfade standby', standbyVideo);
-
     function doFade() {
       if (!standbyVideo.src) {
         console.error('[splash] crossfade aborted: standby video has no src');
@@ -381,16 +336,13 @@
       // Ensure the next clip always starts from the very beginning.
       standbyVideo.currentTime = 0;
 
-      console.log('[splash] crossfade opacity before:', activeVideo.style.opacity, standbyVideo.style.opacity);
       // Swap visibility
       activeVideo.style.transition = 'opacity 0.4s ease';
       standbyVideo.style.transition = 'opacity 0.4s ease';
       activeVideo.style.opacity = '0';
       standbyVideo.style.opacity = '1';
-      console.log('[splash] crossfade opacity after:', activeVideo.style.opacity, standbyVideo.style.opacity);
 
       // Play the standby video
-      console.log('[splash] playing standby clip', standbyVideo.src?.split('/').pop());
       const playPromise = standbyVideo.play();
       if (playPromise) {
         playPromise.catch((err) => {
@@ -411,19 +363,12 @@
 
       // Preload the clip after next into the new standby
       preloadNext(currentClip + 1);
-
-      if (playPromise) {
-        playPromise.then(() => {
-          console.log('[splash] standby play started');
-        });
-      }
     }
 
     // Wait until the standby clip is ready to play without stalling.
     if (standbyVideo.readyState >= 3) {
       doFade();
     } else {
-      console.log('[splash] waiting for standby canplay...');
       standbyVideo.addEventListener(
         'canplay',
         function onCanPlay() {
@@ -446,8 +391,6 @@
   function onClipEnded(e) {
     if (dismissed) return;
     const video = e.target;
-    console.log('[splash] clip ended. currentClip=', currentClip, 'playlist length=', playlist.length);
-    logVideoState('active ended', activeVideo);
 
     // Remove listeners and the per-clip timeout from the video that just ended.
     detachActiveListeners(video);
@@ -478,13 +421,6 @@
 
   // Attach initial active-video listeners
   attachActiveListeners(videoA);
-
-  // Heartbeat log so we can see the active video state even if events stall.
-  setInterval(() => {
-    if (!dismissed) {
-      logVideoState('heartbeat', activeVideo);
-    }
-  }, 2000);
 
   // ── Cesium readiness signal ──
   // cesium-main.js dispatches this when tile loading has settled.

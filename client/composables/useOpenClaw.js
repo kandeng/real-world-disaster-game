@@ -275,10 +275,6 @@ export function useOpenClaw() {
       return;
     }
 
-    ws.value.addEventListener('open', () => {
-      console.log('[OpenClaw] WebSocket opened');
-    });
-
     ws.value.addEventListener('message', (event) => {
       handleFrame(event.data);
     });

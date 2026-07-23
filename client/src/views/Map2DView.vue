@@ -61,7 +61,6 @@ function onMapClick({ lat, lng }) {
 }
 
 function onPoisFound(pois) {
-  console.log('[Map2DView] poisFound:', pois.length, 'POIs');
   setNearbyPois(pois);
 }
 
@@ -134,9 +133,7 @@ function onSearchWaypoints() {
   clearRouteResult();
   clearRouteError();
   const loc = resolveSearchLocation();
-  console.log('[Search waypoints] resolved loc:', loc, 'activeWaypointId:', activeWaypointId.value, 'originDraft:', originDraft.value, 'waypoints:', waypoints.value);
   if (loc && mapViewRef.value) {
-    console.log('[Search waypoints] calling searchNearbyPoisAt with', loc.lat, loc.lon);
     mapViewRef.value.searchNearbyPoisAt(loc.lat, loc.lon);
   } else {
     console.warn('[Search waypoints] no usable location');

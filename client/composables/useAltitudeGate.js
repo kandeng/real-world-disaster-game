@@ -55,7 +55,12 @@ export function useAltitudeGate(drone) {
       new Cesium.Cartesian3()
     );
     const ray = new Cesium.Ray(position, down);
-    const hit = viewer.scene.pickFromRay(ray);
+    let hit = null;
+    try {
+      hit = viewer.scene.pickFromRay(ray);
+    } catch {
+      return null; // transient raycast failure while tiles stream — keep last estimate
+    }
     if (hit && hit.position) {
       const cartographic = Cesium.Cartographic.fromCartesian(hit.position);
       return cartographic.height;
@@ -150,7 +155,12 @@ export function useAltitudeGate(drone) {
       : Cesium.Cartesian3.negate(surfaceNormal, new Cesium.Cartesian3());
 
     const ray = new Cesium.Ray(position, direction);
-    const result = viewer.scene.pickFromRay(ray);
+    let result = null;
+    try {
+      result = viewer.scene.pickFromRay(ray);
+    } catch {
+      return false; // transient raycast failure — assume no obstacle this frame
+    }
     if (!result || !result.position) return false;
 
     const hitObject = result.object;

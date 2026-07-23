@@ -58,7 +58,9 @@ const { computeDesiredEnuMove, applyEnuMove, updateTelemetry: updateFlightTeleme
 const { step: stepCameraPhysics } = useCameraPhysics();
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
-const { isRecording, captureScreenshot, toggleRecording, stopRecording } = useScreenCapture();
+const { recorderState, replayProgress, captureScreenshot, sampleFrame, toggleRecorder, resetRecorder } = useScreenCapture();
+const isRecorderActive = computed(() => recorderState.value !== 'idle');
+let savedDiskVisibility = null;
 
 const isCollisionFrozen = ref(false);
 const collisionSurfaceNormal = ref(null);
@@ -202,7 +204,12 @@ function checkCollisionAhead() {
 
   const position = Cesium.Cartesian3.fromDegrees(drone.lon, drone.lat, drone.alt);
   const ray = new Cesium.Ray(position, direction);
-  const result = viewer.scene.pickFromRay(ray);
+  let result = null;
+  try {
+    result = viewer.scene.pickFromRay(ray);
+  } catch {
+    return null; // transient raycast failure while tiles stream — skip this frame
+  }
 
   if (!result || !result.position) return null;
 
@@ -323,9 +330,29 @@ function updateDroneState() {
   }
 }
 
+let loopErrorLogTs = 0;
+
 function loop() {
-  updateDroneState();
-  syncCesiumCamera();
+  // A single bad frame (e.g., a Cesium raycast failing while tiles stream)
+  // must never kill the loop: if it stops, the scene freezes and the disks
+  // appear dead. Log throttled and keep animating.
+  try {
+    if (recorderState.value === 'recording') {
+      sampleFrame(drone, gimbal);
+    }
+    // During replay the replay engine owns the Cesium camera; skip the flight
+    // physics, collision checks and camera sync so they cannot fight it.
+    if (recorderState.value !== 'replaying') {
+      updateDroneState();
+      syncCesiumCamera();
+    }
+  } catch (err) {
+    const now = performance.now();
+    if (now - loopErrorLogTs > 2000) {
+      loopErrorLogTs = now;
+      console.error('[AerialView] Frame error (loop continues):', err);
+    }
+  }
   rafId = requestAnimationFrame(loop);
 }
 
@@ -380,9 +407,9 @@ onMounted(() => {
     id: 'recorder',
     icon: 'MENU_RECORDER',
     titleKey: 'aerialview.recorder',
-    active: isRecording,
+    active: isRecorderActive,
     danger: true,
-    onClick: toggleRecording,
+    onClick: toggleRecorder,
   });
 
   registerRight({
@@ -407,6 +434,27 @@ onMounted(() => {
   watch(showCamera, (val) => {
     const item = leftItems.find((i) => i.id === 'camera');
     if (item) item.active = val;
+  });
+
+  // React to recorder state transitions: update the dock button title, and
+  // close the Flight/Gimbal disks during replay (restored when it ends).
+  watch(recorderState, (state, prev) => {
+    const item = leftItems.find((i) => i.id === 'recorder');
+    if (item) {
+      item.titleKey =
+        state === 'recording' ? 'aerialview.recorder_stop'
+        : state === 'replaying' ? 'aerialview.recorder_cancel'
+        : 'aerialview.recorder';
+    }
+    if (state === 'replaying' && prev === 'recording') {
+      savedDiskVisibility = { flight: showFlight.value, camera: showCamera.value };
+      showFlight.value = false;
+      showCamera.value = false;
+    } else if (state === 'idle' && prev === 'replaying' && savedDiskVisibility) {
+      showFlight.value = savedDiskVisibility.flight;
+      showCamera.value = savedDiskVisibility.camera;
+      savedDiskVisibility = null;
+    }
   });
 
   // Sync takeoff/landing button icon and label.
@@ -447,7 +495,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
-  stopRecording();
+  resetRecorder();
   stopFlightKeyboard();
   stopCameraKeyboard();
   if (rafId) cancelAnimationFrame(rafId);
@@ -471,6 +519,7 @@ onUnmounted(() => {
     :right-items="rightItems"
     :show-flight="showFlight"
     :show-camera="showCamera"
+    :show-hud="recorderState !== 'replaying'"
     :flight="flight"
     :camera="camera"
         :disabled="isAutoActive"
@@ -510,6 +559,12 @@ onUnmounted(() => {
         class="pre-cache-overlay"
       >
         <span class="pre-cache-overlay__text">{{ takeoffLandingLabel }}</span>
+      </div>
+      <div
+        v-if="recorderState === 'replaying'"
+        class="top-center-message replay-pill"
+      >
+        {{ t('aerialview.replaying', { pct: Math.round(replayProgress * 100) }) }}
       </div>
     </template>
   </ViewComposer>
@@ -595,5 +650,10 @@ onUnmounted(() => {
   background: rgba(180, 100, 0, 0.9);
   box-shadow: 0 0 18px rgba(180, 100, 0, 0.6);
   animation: scan-pulse 1.2s ease-in-out infinite;
+}
+
+.replay-pill {
+  background: rgba(37, 99, 235, 0.9);
+  box-shadow: 0 0 18px rgba(37, 99, 235, 0.55);
 }
 </style>

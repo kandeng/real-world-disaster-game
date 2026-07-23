@@ -28,6 +28,81 @@ const viewer = new Cesium.Viewer('cesiumContainer', {
 // If the photorealistic tileset fails to load, we re-enable the globe as a fallback.
 viewer.scene.globe.show = false;
 
+// ── WebGL context-loss detection ──
+// If the GPU kills the WebGL context (memory pressure, driver reset), the
+// canvas keeps showing its last frame while the rest of the app (physics,
+// HUD, street view) keeps running — the 3D scene looks "frozen" even though
+// nothing in the JS logic is broken. Surface it loudly instead of failing
+// silently, and reload once the browser restores the context.
+function showContextLostBanner() {
+    if (document.getElementById('webgl-context-lost-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'webgl-context-lost-banner';
+    banner.style.cssText =
+        'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:100000;' +
+        'background:rgba(185,28,28,0.95);color:#fff;padding:12px 18px;border-radius:10px;' +
+        'font:14px/1.5 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,0.45);' +
+        'display:flex;gap:14px;align-items:center;';
+    const text = document.createElement('span');
+    text.textContent = 'The 3D graphics context was lost (GPU overloaded), so the scene is frozen.';
+    const button = document.createElement('button');
+    button.textContent = 'Reload';
+    button.style.cssText =
+        'background:#fff;color:#b91c1c;border:none;border-radius:6px;' +
+        'padding:6px 14px;font-weight:600;cursor:pointer;';
+    button.onclick = () => location.reload();
+    banner.appendChild(text);
+    banner.appendChild(button);
+    document.body.appendChild(banner);
+}
+
+viewer.canvas.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault(); // allow the browser to attempt restoration
+    console.error('[Cesium] WebGL context lost — the 3D canvas is frozen.');
+    showContextLostBanner();
+});
+viewer.canvas.addEventListener('webglcontextrestored', () => {
+    console.warn('[Cesium] WebGL context restored — reloading for a clean state.');
+    location.reload();
+});
+
+// Cesium swallows render errors when rethrowRenderErrors is false (default),
+// which can also leave the canvas showing a stale frame. Log them so a
+// dying render pipeline is visible in the console.
+viewer.scene.renderError.addEventListener((scene, error) => {
+    console.error('[Cesium] Render error:', error);
+});
+
+/**
+ * Resolve once the tileset reports tilesLoaded (all tiles needed for the
+ * current view are loaded and drawn), or after a safety timeout.
+ * Without a tileset (fallback path), proceed after a short fixed delay.
+ */
+function waitForTilesRendered(tileset, timeoutMs = 45000) {
+    return new Promise((resolve) => {
+        if (!tileset) {
+            setTimeout(resolve, 3000);
+            return;
+        }
+        const start = performance.now();
+        function check() {
+            if (tileset.tilesLoaded) {
+                console.log('[Cesium] Initial view fully rendered (tilesLoaded).');
+                resolve();
+                return;
+            }
+            if (performance.now() - start > timeoutMs) {
+                console.warn(`[Cesium] Tile render wait timeout (${timeoutMs / 1000}s), proceeding.`);
+                resolve();
+                return;
+            }
+            requestAnimationFrame(check);
+        }
+        // Give the traversal a moment to start loading before the first check.
+        setTimeout(() => requestAnimationFrame(check), 1000);
+    });
+}
+
 async function loadArena() {
     const { settings } = useAppSettings();
     const targetLatitude = settings.defaultLat;
@@ -84,60 +159,17 @@ async function loadArena() {
         }
     }
 
-    if (typeof initDroneControl === 'function') {
-        try {
-            initDroneControl(initialPosition);
-        } catch (e) {
-            console.warn('[Cesium] initDroneControl failed:', e);
-        }
-    }
+    // ── Wait until the tiles for the initial view are actually rendered ──
+    // tileLoadProgressEvent is unavailable in newer Cesium releases, and even
+    // when present an empty download queue is misleading: the tileset refines
+    // in waves, so the queue can momentarily hit 0 between waves while finer
+    // tiles are still streaming. Cesium3DTileset.tilesLoaded is the reliable
+    // signal — it becomes true only when every tile needed for the current
+    // view is loaded AND drawn. The splash keeps playing until then (with a
+    // safety cap) so the user never lands on an empty sky.
+    await waitForTilesRendered(googleTileset);
 
-    // ── Wait for actual tile downloads to settle ──
-    // tileLoadProgressEvent fires with the number of tiles currently loading.
-    // We wait until the queue reaches 0 (all visible tiles downloaded).
-    // If tileLoadProgressEvent is unavailable (e.g. partial Cesium init),
-    // we proceed immediately after a short delay.
-    const tileLoadProgress = viewer.scene?.tileLoadProgressEvent;
-
-    await new Promise((resolve) => {
-        let settled = false;
-
-        if (!tileLoadProgress) {
-            console.warn('[Cesium] tileLoadProgressEvent unavailable, waiting 3s.');
-            setTimeout(() => resolve(), 3000);
-            return;
-        }
-
-        function onProgress(queueLength) {
-            if (queueLength === 0 && !settled) {
-                settled = true;
-                tileLoadProgress.removeEventListener(onProgress);
-                console.log('[Cesium] All visible tiles downloaded.');
-                resolve();
-            }
-        }
-
-        tileLoadProgress.addEventListener(onProgress);
-
-        // If the queue is already 0 (e.g., cached), resolve immediately
-        // after one frame to give Cesium a chance to start loading.
-        setTimeout(() => {
-            if (!settled) {
-                // Check once more after a brief delay
-                setTimeout(() => {
-                    if (!settled) {
-                        // Force resolve after 15s even if tiles never finish
-                        settled = true;
-                        tileLoadProgress.removeEventListener(onProgress);
-                        console.warn('[Cesium] Tile load timeout (15s), proceeding.');
-                        resolve();
-                    }
-                }, 15000);
-            }
-        }, 500);
-    });
-
-    // Signal splash screen that Cesium 3D scene is ready with tiles loaded
+    // Signal splash screen that Cesium 3D scene is ready with tiles rendered
     window.dispatchEvent(new CustomEvent('cesiumReady'));
 }
 

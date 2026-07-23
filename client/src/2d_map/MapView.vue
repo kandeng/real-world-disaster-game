@@ -257,7 +257,6 @@ async function searchNearbyPois(latLng) {
       locationRestriction: circle,
       fields: ['id', 'displayName', 'location'],
     };
-    console.log('[MapView] calling Place.searchNearby', request);
     const response = await mapsApi.places.Place.searchNearby(request);
     const places = (response?.places || []).slice(0, 10).map((place) => ({
       place_id: place.id,
@@ -266,7 +265,6 @@ async function searchNearbyPois(latLng) {
         location: place.location,
       },
     }));
-    console.log('[MapView] Place.searchNearby returned', places.length, 'POIs');
     emit('poisFound', places);
   } catch (err) {
     console.error('[MapView] Place.searchNearby error:', err);
@@ -275,7 +273,6 @@ async function searchNearbyPois(latLng) {
 }
 
 function searchNearbyPoisAt(lat, lng) {
-  console.log('[MapView] searchNearbyPoisAt called:', lat, lng, 'mapsApi:', !!mapsApi);
   if (!mapsApi) return;
   searchNearbyPois(new mapsApi.LatLng(lat, lng));
 }

@@ -8,6 +8,9 @@ deployment/assets/cesium.png
 # Runtime/generated files
 deployment/acert
 
+# Temporary bug-reproduction screen recordings (kept locally, not source)
+/*.webm
+
 # Dependencies
 node_modules/
 .pnp
