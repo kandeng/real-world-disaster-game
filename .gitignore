@@ -18,11 +18,13 @@ dist/
 build/
 
 # Splash media files (large files, served from CDN in production)
+# Track only the two essential splash clips; the rest are streamed.
 client/public/splash/*.mp4
 !client/public/splash/video_00.mp4
 client/public/splash/*.mp3
 !client/public/splash/background_music_00.mp3
-client/assets/media/*.mp4
+
+# Note: client/assets/media/ holds the master source copies and is fully tracked.
 
 # Environment files
 .env
