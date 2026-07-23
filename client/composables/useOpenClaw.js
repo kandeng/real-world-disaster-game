@@ -28,6 +28,24 @@ function extractText(message) {
   return '';
 }
 
+// The OpenClaw gateway periodically emits a keep-alive assistant message whose
+// text is "HEARTBEAT_OK". It is protocol plumbing, not conversation, so it must
+// never be rendered as a chat bubble (live events or loaded history).
+const HEARTBEAT_TEXT = 'HEARTBEAT_OK';
+
+function isHeartbeatMessage(text) {
+  return typeof text === 'string' && text.trim().toUpperCase() === HEARTBEAT_TEXT;
+}
+
+// True when a (possibly still-streaming) chunk can only be the keep-alive token,
+// e.g. "HEART", "HEARTBEAT", "HEARTBEAT_OK". Used to suppress the partial bubble
+// before the full token has arrived.
+function isHeartbeatPrefix(text) {
+  if (typeof text !== 'string') return false;
+  const t = text.trim().toUpperCase();
+  return t.length > 0 && HEARTBEAT_TEXT.startsWith(t);
+}
+
 export function useOpenClaw() {
   const ws = ref(null);
   const status = ref('idle'); // idle | connecting | connected | error | closed
@@ -41,6 +59,7 @@ export function useOpenClaw() {
   let challengeResolved = false;
   let intentionallyClosed = false;
   let partialRunIds = new Map();
+  let heartbeatRunIds = new Set();
 
   const isConnected = computed(() => status.value === 'connected');
 
@@ -178,7 +197,9 @@ export function useOpenClaw() {
         messages.value = history.messages
           .filter((entry) => {
             const role = typeof entry.role === 'string' ? entry.role.toLowerCase() : '';
-            return role === 'user' || role === 'assistant';
+            if (role !== 'user' && role !== 'assistant') return false;
+            // Drop gateway keep-alive messages from the rendered history.
+            return !isHeartbeatMessage(extractText(entry));
           })
           .map((entry) => ({
             id: entry.messageId || entry.id || generateId(),
@@ -203,6 +224,13 @@ export function useOpenClaw() {
     if (role !== 'assistant' || !text) return;
 
     if (state === 'partial' && runId) {
+      // A run that only ever streams the keep-alive token must not produce a
+      // bubble. Track it and suppress every subsequent chunk for this run.
+      if (heartbeatRunIds.has(runId)) return;
+      if (isHeartbeatPrefix(text)) {
+        heartbeatRunIds.add(runId);
+        return;
+      }
       const existing = partialRunIds.get(runId);
       if (existing) {
         existing.text = text;
@@ -221,6 +249,12 @@ export function useOpenClaw() {
     }
 
     if (state === 'final') {
+      if (runId && heartbeatRunIds.has(runId)) {
+        heartbeatRunIds.delete(runId);
+        return;
+      }
+      // Ignore the gateway keep-alive message; it is not part of the conversation.
+      if (isHeartbeatMessage(text)) return;
       if (runId && partialRunIds.has(runId)) {
         partialRunIds.delete(runId);
         return;
