@@ -238,6 +238,12 @@ watch(() => props.alt, (alt) => {
   updateMapZoom(alt);
 });
 
+// React to map-type changes (e.g. switching between the 2D Address and
+// 2D Satellite subpages) after the map has been created.
+watch(() => props.mapTypeId, (mapTypeId) => {
+  if (map.value) map.value.setMapTypeId(mapTypeId);
+});
+
 function displayNameOf(place) {
   if (!place || !place.displayName) return '';
   return typeof place.displayName === 'string' ? place.displayName : place.displayName.text || '';

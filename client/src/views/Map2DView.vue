@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, h, ref, computed } from 'vue';
+import { onMounted, onUnmounted, h, ref, computed, watch } from 'vue';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { MapView } from '@/2d_map/index.js';
 import { useDrone } from '@shared-composables/useDrone.js';
@@ -44,6 +44,10 @@ function onMapZoomChange(alt) {
 }
 
 const mapViewRef = ref(null);
+
+// Active subpage of the 2D Map page: 'address' (default) or 'satellite'.
+const activeSubpage = ref('address');
+const mapTypeId = computed(() => (activeSubpage.value === 'address' ? 'roadmap' : 'satellite'));
 
 function onMapClick({ lat, lng }) {
   if (isPicking.value || isPanelOpen.value) {
@@ -171,10 +175,7 @@ onMounted(() => {
 
   // Register pages for the router menu
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'mesh', nameKey: 'aerialview.page_mesh', route: '/mesh' });
-  registerPage({ id: '3dgs', nameKey: 'aerialview.page_3dgs' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
-  registerPage({ id: 'satellite', nameKey: 'aerialview.page_satellite', route: '/satellite' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
@@ -190,12 +191,22 @@ onMounted(() => {
     }),
   });
   registerLeft({
-    id: 'waypoint',
-    render: () => h(WaypointButton, {
-      onBeforeOpen: () => { showFlight.value = false; },
-      onSearchWaypoints,
-      onSearchRoutes,
-    }),
+    id: 'subpage_address',
+    icon: 'MENU_MAP',
+    titleKey: 'aerialview.subpage_address',
+    active: activeSubpage.value === 'address',
+    onClick: () => {
+      activeSubpage.value = 'address';
+    },
+  });
+  registerLeft({
+    id: 'subpage_satellite',
+    icon: 'MENU_SATELLITE',
+    titleKey: 'aerialview.subpage_satellite',
+    active: activeSubpage.value === 'satellite',
+    onClick: () => {
+      activeSubpage.value = 'satellite';
+    },
   });
   registerRight({
     id: 'steer',
@@ -203,6 +214,22 @@ onMounted(() => {
     titleKey: 'aerialview.steer',
     active: false,
     onClick: toggleFlight,
+  });
+  registerRight({
+    id: 'waypoint',
+    render: () => h(WaypointButton, {
+      onBeforeOpen: () => { showFlight.value = false; },
+      onSearchWaypoints,
+      onSearchRoutes,
+    }),
+  });
+
+  // Keep the subpage selector buttons in sync with the active subpage.
+  watch(activeSubpage, (val) => {
+    const addressBtn = leftItems.find((i) => i.id === 'subpage_address');
+    if (addressBtn) addressBtn.active = val === 'address';
+    const satelliteBtn = leftItems.find((i) => i.id === 'subpage_satellite');
+    if (satelliteBtn) satelliteBtn.active = val === 'satellite';
   });
 
   rafId = requestAnimationFrame(loop);
@@ -214,10 +241,7 @@ onUnmounted(() => {
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
   clear();
   unregisterPage('aerial');
-  unregisterPage('mesh');
-  unregisterPage('3dgs');
   unregisterPage('map');
-  unregisterPage('satellite');
   unregisterPage('myspace');
   unregisterPage('chat');
   unregisterPage('extensions');
@@ -245,7 +269,7 @@ onUnmounted(() => {
       <MapView
         ref="mapViewRef"
         class="view-composer__background"
-        map-type-id="roadmap"
+        :map-type-id="mapTypeId"
         :lat="drone.lat"
         :lon="drone.lon"
         :alt="drone.alt"

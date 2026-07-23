@@ -14,6 +14,49 @@ const loadingMessage = ref('Loading OSM Buildings…');
 
 let osmBuildingsTileset = null;
 let savedGoogleTileset = null;
+let flightRafId = null;
+let flightStartTimer = null;
+
+// Initial camera target — matches the OSM Buildings reference view:
+// https://osmbuildings.org/?lat=52.52110&lon=13.41078&zoom=16.0&tilt=30
+const START_LON = 13.41078;
+const START_LAT = 52.52110;
+const START_HEIGHT = 1500; // ~zoom 16 (neighborhood scale)
+const START_HEADING = 0; // north-up, like the reference
+const START_PITCH = -60; // OSM tilt 30° from nadir → Cesium pitch −60°
+
+function stopFlight() {
+  if (flightRafId !== null) {
+    cancelAnimationFrame(flightRafId);
+    flightRafId = null;
+  }
+}
+
+// Simulated fly-around: the camera orbits the start point while gently
+// bobbing up and down, demonstrating smooth flight over the OSM buildings.
+function startScenicFlight(viewer) {
+  stopFlight();
+  const startTime = performance.now();
+  const orbitRadiusDeg = 0.0045; // ~300 m
+  const step = (now) => {
+    const t = (now - startTime) / 1000;
+    const ang = t * 0.12; // slow orbit
+    const lon = START_LON + orbitRadiusDeg * Math.cos(ang);
+    const lat = START_LAT + orbitRadiusDeg * 0.65 * Math.sin(ang);
+    const height = START_HEIGHT - 300 + 220 * Math.sin(t * 0.4);
+    const heading = ((-ang * 180) / Math.PI + 90) % 360; // face travel direction
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
+      orientation: {
+        heading: Cesium.Math.toRadians(heading),
+        pitch: Cesium.Math.toRadians(-35),
+        roll: 0,
+      },
+    });
+    flightRafId = requestAnimationFrame(step);
+  };
+  flightRafId = requestAnimationFrame(step);
+}
 
 async function initMeshView() {
   const viewer = window.cesiumViewer;
@@ -58,23 +101,28 @@ async function initMeshView() {
     return;
   }
 
-  // Fly camera to Manhattan, NYC
+  // Position the camera over Berlin (Alexanderplatz / Fernsehturm area) using
+  // the same parameters as the OSM Buildings reference URL.
   // Use a delay to ensure AerialView's animation loop has fully stopped
-  // (it cancels on unmount, but there may be a race during view transition)
+  // (it cancels on unmount, but there may be a race during view transition).
   setTimeout(() => {
     // Cancel any in-progress camera flight first
     viewer.camera.cancelFlight();
 
-    // Set camera instantly to Manhattan
+    // Set camera instantly to the Berlin start view
     viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(-73.9857, 40.7484, 1500),
+      destination: Cesium.Cartesian3.fromDegrees(START_LON, START_LAT, START_HEIGHT),
       orientation: {
-        heading: Cesium.Math.toRadians(0),
-        pitch: Cesium.Math.toRadians(-45),
+        heading: Cesium.Math.toRadians(START_HEADING),
+        pitch: Cesium.Math.toRadians(START_PITCH),
         roll: 0,
       },
     });
-    console.log('[MeshView] Camera set to Manhattan.');
+    console.log('[MeshView] Camera set to Berlin (lat 52.52110, lon 13.41078, zoom 16, tilt 30).');
+
+    // Hold the exact start view briefly (for comparison), then begin the
+    // simulated fly-around animation.
+    flightStartTimer = setTimeout(() => startScenicFlight(viewer), 4000);
   }, 500);
 
   loadingMessage.value = '';
@@ -82,10 +130,7 @@ async function initMeshView() {
 
 onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'mesh', nameKey: 'aerialview.page_mesh', route: '/mesh' });
-  registerPage({ id: '3dgs', nameKey: 'aerialview.page_3dgs' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
-  registerPage({ id: 'satellite', nameKey: 'aerialview.page_satellite', route: '/satellite' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
@@ -104,6 +149,13 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  // Stop the fly-around animation so it cannot keep mutating the camera.
+  if (flightStartTimer !== null) {
+    clearTimeout(flightStartTimer);
+    flightStartTimer = null;
+  }
+  stopFlight();
+
   // Restore Google Photorealistic tileset
   const viewer = window.cesiumViewer;
   if (viewer) {
@@ -122,10 +174,7 @@ onUnmounted(() => {
 
   clear();
   unregisterPage('aerial');
-  unregisterPage('mesh');
-  unregisterPage('3dgs');
   unregisterPage('map');
-  unregisterPage('satellite');
   unregisterPage('myspace');
   unregisterPage('chat');
   unregisterPage('extensions');

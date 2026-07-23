@@ -13,6 +13,7 @@ import { useFlightPhysics } from '@shared-composables/useFlightPhysics.js';
 import { useCameraPhysics } from '@shared-composables/useCameraPhysics.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
+import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
 import { useScreenCapture } from '@shared-composables/useScreenCapture.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
@@ -23,6 +24,11 @@ const { t } = useI18n();
 const router = useRouter();
 
 const { drone, gimbal } = useDrone();
+
+// 3D data source of the shared Cesium viewer. The 3D Aerial / 3D Mesh
+// subpages differ ONLY in this source (Google tiles vs OSM Buildings); every
+// control (disks, sidebars, physics) is identical between them.
+const { activeSource, setSource, getActiveTileset } = useTilesetSource();
 const altitudeGate = useAltitudeGate(drone);
 
 const isLowAltitude = computed(() => (drone.alt - altitudeGate.surfaceAlt.value) < 10);
@@ -61,6 +67,9 @@ const { pages, registerPage, unregisterPage } = usePageRegistry();
 const { recorderState, replayProgress, captureScreenshot, sampleFrame, toggleRecorder, resetRecorder } = useScreenCapture();
 const isRecorderActive = computed(() => recorderState.value !== 'idle');
 let savedDiskVisibility = null;
+
+// Active subpage of the 3D Exploration page: 'aerial' (default) or 'mesh'.
+const activeSubpage = ref('aerial');
 
 const isCollisionFrozen = ref(false);
 const collisionSurfaceNormal = ref(null);
@@ -142,7 +151,10 @@ watch(
   ([show, transitioning, svReady]) => {
     const viewer = window.cesiumViewer;
     if (viewer) {
-      viewer.scene.globe.show = show && transitioning;
+      // In mesh (OSM) mode the globe must stay visible as ground context; in
+      // aerial (Google) mode it is only shown during the street-view
+      // transition crossfade.
+      viewer.scene.globe.show = activeSource.value === 'osm' || (show && transitioning);
     }
     if (cesiumContainer.value) {
       // Only hide Cesium when Street View is fully loaded to prevent black flash
@@ -193,7 +205,7 @@ function getFlightCommandDirection() {
 
 function checkCollisionAhead() {
   const viewer = window.cesiumViewer;
-  const tileset = window.getGoogleTileset ? window.getGoogleTileset() : null;
+  const tileset = getActiveTileset();
   if (!viewer || !tileset || !showFlight.value) return null;
 
   const speed = getFlightCommandSpeed();
@@ -372,10 +384,7 @@ onMounted(() => {
 
   // Register pages for the router menu
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'mesh', nameKey: 'aerialview.page_mesh', route: '/mesh' });
-  registerPage({ id: '3dgs', nameKey: 'aerialview.page_3dgs' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
-  registerPage({ id: 'satellite', nameKey: 'aerialview.page_satellite', route: '/satellite' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
@@ -398,18 +407,22 @@ onMounted(() => {
     onClick: toggleCamera,
   });
   registerLeft({
-    id: 'screenshot',
-    icon: 'MENU_PHOTO',
-    titleKey: 'aerialview.screenshot',
-    onClick: captureScreenshot,
+    id: 'subpage_aerial',
+    icon: 'MENU_HELICOPTER',
+    titleKey: 'aerialview.subpage_aerial',
+    active: activeSubpage.value === 'aerial',
+    onClick: () => {
+      activeSubpage.value = 'aerial';
+    },
   });
   registerLeft({
-    id: 'recorder',
-    icon: 'MENU_RECORDER',
-    titleKey: 'aerialview.recorder',
-    active: isRecorderActive,
-    danger: true,
-    onClick: toggleRecorder,
+    id: 'subpage_mesh',
+    icon: 'MENU_MESH',
+    titleKey: 'aerialview.subpage_mesh',
+    active: activeSubpage.value === 'mesh',
+    onClick: () => {
+      activeSubpage.value = 'mesh';
+    },
   });
 
   registerRight({
@@ -425,6 +438,20 @@ onMounted(() => {
     titleKey: isLowAltitude.value ? 'aerialview.takeoff' : 'aerialview.landing',
     onClick: toggleTakeoffLanding,
   });
+  registerRight({
+    id: 'screenshot',
+    icon: 'MENU_PHOTO',
+    titleKey: 'aerialview.screenshot',
+    onClick: captureScreenshot,
+  });
+  registerRight({
+    id: 'recorder',
+    icon: 'MENU_RECORDER',
+    titleKey: 'aerialview.recorder',
+    active: isRecorderActive,
+    danger: true,
+    onClick: toggleRecorder,
+  });
 
   // Sync dock button active states with toggle state
   watch(showFlight, (val) => {
@@ -436,10 +463,21 @@ onMounted(() => {
     if (item) item.active = val;
   });
 
+  // Keep the subpage selector buttons in sync with the active subpage.
+  watch(activeSubpage, (val) => {
+    const aerialBtn = leftItems.find((i) => i.id === 'subpage_aerial');
+    if (aerialBtn) aerialBtn.active = val === 'aerial';
+    const meshBtn = leftItems.find((i) => i.id === 'subpage_mesh');
+    if (meshBtn) meshBtn.active = val === 'mesh';
+  
+    // Swap the 3D data source to match the active subpage.
+    setSource(val === 'mesh' ? 'osm' : 'google');
+  });
+
   // React to recorder state transitions: update the dock button title, and
   // close the Flight/Gimbal disks during replay (restored when it ends).
   watch(recorderState, (state, prev) => {
-    const item = leftItems.find((i) => i.id === 'recorder');
+    const item = rightItems.find((i) => i.id === 'recorder');
     if (item) {
       item.titleKey =
         state === 'recording' ? 'aerialview.recorder_stop'
@@ -502,10 +540,7 @@ onUnmounted(() => {
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
   clear();
   unregisterPage('aerial');
-  unregisterPage('mesh');
-  unregisterPage('3dgs');
   unregisterPage('map');
-  unregisterPage('satellite');
   unregisterPage('myspace');
   unregisterPage('chat');
   unregisterPage('extensions');

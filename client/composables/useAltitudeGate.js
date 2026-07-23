@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
+import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
 import { prewarmStreetView } from '@/3d_street/streetView.js';
 
 /* global Cesium */
@@ -30,6 +31,7 @@ export const PHASES = {
  * automatic takeoff/landing sequences with pre-cache delay phases.
  */
 export function useAltitudeGate(drone) {
+  const { getActiveTileset } = useTilesetSource();
   const surfaceAlt = ref(0);
   const isOnGround = ref(true);
   const flightPhase = ref(PHASES.IDLE);
@@ -145,7 +147,7 @@ export function useAltitudeGate(drone) {
    */
   function checkVerticalCollision(viewer, ascending) {
     if (!viewer) return false;
-    const tileset = window.getGoogleTileset ? window.getGoogleTileset() : null;
+    const tileset = getActiveTileset();
     if (!tileset) return false;
 
     const position = Cesium.Cartesian3.fromDegrees(drone.lon, drone.lat, drone.alt);

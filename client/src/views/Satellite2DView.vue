@@ -169,10 +169,7 @@ onMounted(() => {
 
   // Register pages for the router menu
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'mesh', nameKey: 'aerialview.page_mesh', route: '/mesh' });
-  registerPage({ id: '3dgs', nameKey: 'aerialview.page_3dgs' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
-  registerPage({ id: 'satellite', nameKey: 'aerialview.page_satellite', route: '/satellite' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
@@ -212,10 +209,7 @@ onUnmounted(() => {
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
   clear();
   unregisterPage('aerial');
-  unregisterPage('mesh');
-  unregisterPage('3dgs');
   unregisterPage('map');
-  unregisterPage('satellite');
   unregisterPage('myspace');
   unregisterPage('chat');
   unregisterPage('extensions');
