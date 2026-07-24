@@ -81,6 +81,7 @@ watch(messages, () => {
 onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
+  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
@@ -158,6 +159,7 @@ onMounted(() => {
 onUnmounted(() => {
   clear();
   unregisterPage('aerial');
+  unregisterPage('realdrone');
   unregisterPage('map');
   unregisterPage('myspace');
   unregisterPage('chat');

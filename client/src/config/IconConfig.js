@@ -38,6 +38,8 @@ export const IconMap = {
   MENU_NOTE: '../../icons/note.svg',
   MENU_TOOL: '../../icons/tool.svg',
   MENU_FINGER_TAP: '../../icons/finger-tap.svg',
+  MENU_REMOTE_CONTROLLER: '../../icons/remote_controller.svg',
+  MENU_DRONE_PLUS: '../../icons/drone_plus.svg',
   // Legacy alias, kept for backward compatibility
   MENU_GAMEPAD: '../../icons/control-stick.svg',
 

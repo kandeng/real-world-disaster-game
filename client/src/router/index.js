@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import AerialView from '@/views/AerialView.vue';
+import RealDroneView from '@/views/RealDroneView.vue';
 import MeshView from '@/views/MeshView.vue';
 import Map2DView from '@/views/Map2DView.vue';
 import Satellite2DView from '@/views/Satellite2DView.vue';
@@ -13,6 +14,11 @@ const routes = [
     path: '/',
     name: 'Aerial',
     component: AerialView,
+  },
+  {
+    path: '/real-drone',
+    name: 'RealDrone',
+    component: RealDroneView,
   },
   {
     path: '/mesh',
