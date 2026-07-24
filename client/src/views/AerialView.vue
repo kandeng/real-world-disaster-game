@@ -64,7 +64,7 @@ const { computeDesiredEnuMove, applyEnuMove, updateTelemetry: updateFlightTeleme
 const { step: stepCameraPhysics } = useCameraPhysics();
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
-const { recorderState, replayProgress, captureScreenshot, sampleFrame, toggleRecorder, resetRecorder } = useScreenCapture();
+const { recorderState, replayProgress, replayPov, captureScreenshot, sampleFrame, toggleRecorder, resetRecorder } = useScreenCapture();
 const isRecorderActive = computed(() => recorderState.value !== 'idle');
 let savedDiskVisibility = null;
 
@@ -131,6 +131,36 @@ const streetViewOpacity = computed(() => {
   if (rel >= ASCEND_THRESHOLD) return 0;
   return 1 - (rel - DESCEND_THRESHOLD) / (ASCEND_THRESHOLD - DESCEND_THRESHOLD);
 });
+// Effective state bound to StreetViewPane: live flight values normally, the
+// replayed trajectory while the recorder replays it. Without this the replay
+// (and the recorded clip) would stick to the 3D tiles and never reproduce
+// the aerial -> street view asset switch.
+const svPaneState = computed(() => {
+  if (recorderState.value === 'replaying' && replayPov.value) {
+    const pov = replayPov.value;
+    return {
+      lat: pov.lat,
+      lon: pov.lon,
+      headingRad: pov.headingRad,
+      pitchRad: pov.pitchRad,
+      relativeAlt: pov.relativeAlt,
+      visible: pov.showStreetView,
+      opacity: pov.streetViewOpacity,
+      transitioning: pov.relativeAlt >= DESCEND_THRESHOLD && pov.relativeAlt < ASCEND_THRESHOLD,
+    };
+  }
+  const pov = getStreetViewPov();
+  return {
+    lat: drone.lat,
+    lon: drone.lon,
+    headingRad: pov.headingRad,
+    pitchRad: pov.pitchRad,
+    relativeAlt: pov.relativeAlt,
+    visible: showStreetView.value,
+    opacity: streetViewOpacity.value,
+    transitioning: isTransitioning.value,
+  };
+});
 const takeoffLandingLabel = computed(() => {
   const p = altitudeGate.flightPhase.value;
   if (p === PHASES.PRE_TAKEOFF) return t('aerialview.preparing_takeoff');
@@ -145,6 +175,16 @@ function hideAllDisks() {
   showCamera.value = false;
 }
 
+// Opening the Pages menu leaves the recording context: abort any active
+// screen recording (discard without saving) so it cannot be orphaned by a
+// navigation away from this page.
+function onPagesOpen() {
+  hideAllDisks();
+  if (recorderState.value !== 'idle') {
+    resetRecorder();
+  }
+}
+
 function toggleTakeoffLanding() {
   const viewer = window.cesiumViewer;
   if (altitudeGate.isOnGround.value) {
@@ -155,7 +195,7 @@ function toggleTakeoffLanding() {
 }
 
 watch(
-  [showStreetView, isTransitioning, streetViewReady],
+  [() => svPaneState.value.visible, () => svPaneState.value.transitioning, streetViewReady],
   ([show, transitioning, svReady]) => {
     const viewer = window.cesiumViewer;
     if (viewer) {
@@ -358,7 +398,7 @@ function loop() {
   // appear dead. Log throttled and keep animating.
   try {
     if (recorderState.value === 'recording') {
-      sampleFrame(drone, gimbal);
+      sampleFrame(drone, gimbal, altitudeGate.surfaceAlt.value);
     }
     // During replay the replay engine owns the Cesium camera; skip the flight
     // physics, collision checks and camera sync so they cannot fight it.
@@ -405,7 +445,7 @@ onMounted(() => {
       icon: 'MENU_ROUTER',
       titleKey: 'aerialview.pages',
       pages,
-      onBeforeOpen: hideAllDisks,
+      onBeforeOpen: onPagesOpen,
     }),
   });
   registerLeft({
@@ -493,6 +533,18 @@ onMounted(() => {
         : state === 'replaying' ? 'aerialview.recorder_cancel'
         : 'aerialview.recorder';
     }
+    // Lock the 3D Aerial / 3D Mesh source switch and the Screenshot button
+    // while the recorder is active: swapping the 3D data source mid-recording
+    // would corrupt the aerial/street-view asset tracking of the clip, and a
+    // screenshot during capture is redundant.
+    const assetLocked = state !== 'idle';
+    for (const list of [leftItems, rightItems]) {
+      for (const dockItem of list) {
+        if (dockItem.id === 'subpage_aerial' || dockItem.id === 'subpage_mesh' || dockItem.id === 'screenshot') {
+          dockItem.disabled = assetLocked;
+        }
+      }
+    }
     if (state === 'replaying' && prev === 'recording') {
       savedDiskVisibility = { flight: showFlight.value, camera: showCamera.value };
       showFlight.value = false;
@@ -578,14 +630,14 @@ onUnmounted(() => {
     <template #background>
       <StreetViewPane
         class="view-composer__background"
-        :lat="drone.lat"
-        :lon="drone.lon"
-        :heading="getStreetViewPov().headingRad"
-        :pitch="getStreetViewPov().pitchRad"
-        :altitude="getStreetViewPov().relativeAlt"
-        :visible="showStreetView"
+        :lat="svPaneState.lat"
+        :lon="svPaneState.lon"
+        :heading="svPaneState.headingRad"
+        :pitch="svPaneState.pitchRad"
+        :altitude="svPaneState.relativeAlt"
+        :visible="svPaneState.visible"
         :prewarm="shouldPrewarmSV"
-        :style="{ opacity: streetViewOpacity }"
+        :style="{ opacity: svPaneState.opacity }"
         @ready="streetViewReady = true"
       />
     </template>
@@ -698,7 +750,7 @@ onUnmounted(() => {
 }
 
 .replay-pill {
-  background: rgba(37, 99, 235, 0.9);
-  box-shadow: 0 0 18px rgba(37, 99, 235, 0.55);
+  background: rgba(34, 197, 94, 0.88);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
 }
 </style>
