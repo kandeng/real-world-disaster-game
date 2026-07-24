@@ -5,6 +5,7 @@ import ViewComposer from '@shared/_ViewComposer.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
+import { applyNeutralSphericalHarmonics } from '@shared-composables/useTilesetSource.js';
 
 const { t } = useI18n();
 const { leftItems, registerLeft, clear } = useDockRegistry();
@@ -89,6 +90,10 @@ async function initMeshView() {
   // Load OSM Buildings 3D Tiles (requires valid Cesium Ion token)
   try {
     osmBuildingsTileset = await Cesium.createOsmBuildingsAsync();
+    // Explicit IBL spherical harmonics BEFORE the tileset enters the scene, so
+    // its model pipelines capture them at shader-build time — otherwise the
+    // pick pass logs "uniform3fv: no array" every frame. See useTilesetSource.js.
+    applyNeutralSphericalHarmonics(osmBuildingsTileset);
     viewer.scene.primitives.add(osmBuildingsTileset);
     console.log('[MeshView] OSM Buildings loaded.');
   } catch (e) {

@@ -4,6 +4,8 @@
   "description": "Vue 3 desktop drone control dashboard with dual joysticks and chat",
   "type": "module",
   "scripts": {
+    "prebuild": "node scripts/generate-splash-manifest.js",
+    "predev": "node scripts/generate-splash-manifest.js",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

@@ -12,18 +12,20 @@
  * before Vue or Cesium JS has finished loading.
  */
 
-(function () {
+(async function () {
   'use strict';
 
   // ── Splash media config ──
   // The first clip is always played. Remaining clips are shuffled and played
   // without repetition; once all have played, a new shuffle begins.
-  const FIRST_CLIP = '/splash/video_00.mp4';
-  const OTHER_CLIPS = [
+  const FALLBACK_FIRST_CLIP = '/splash/video_00.mp4';
+  const FALLBACK_OTHER_CLIPS = [
     '/splash/vantor_world3d.mp4',
     '/splash/kevtoe_worldview.mp4',
-    '/splash/palantier_maven.mp4',
+    '/splash/palantir_maven.mp4',
   ];
+  let FIRST_CLIP = FALLBACK_FIRST_CLIP;
+  let OTHER_CLIPS = FALLBACK_OTHER_CLIPS;
   const MUSIC_URL = '/splash/background_music_00.mp3';
   const SETTINGS_KEY = 'app-settings';
   // Maximum time (ms) a single splash clip is allowed to play before forcing
@@ -69,6 +71,28 @@
     return [FIRST_CLIP, ...shuffleArray(OTHER_CLIPS)];
   }
 
+  /**
+   * Fetch the auto-generated splash playlist manifest. Falls back to the
+   * hardcoded defaults if the fetch fails (e.g., dev mode without running
+   * the manifest script). This allows renaming or adding videos without
+   * touching the code.
+   */
+  async function loadPlaylistManifest() {
+    try {
+      const res = await fetch('/splash/playlist.json', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.firstClip && Array.isArray(data.otherClips)) {
+        FIRST_CLIP = data.firstClip;
+        OTHER_CLIPS = data.otherClips;
+        console.log(`[splash] loaded ${OTHER_CLIPS.length + 1} clips from playlist.json`);
+      }
+    } catch (e) {
+      console.warn('[splash] playlist.json fetch failed, using fallback defaults:', e.message);
+    }
+  }
+
+  await loadPlaylistManifest();
   let playlist = buildPlaylist();
   let currentClip = 0;
 

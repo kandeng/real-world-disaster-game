@@ -42,31 +42,109 @@ function getActiveTileset() {
 }
 
 /**
- * Give the OSM Buildings tileset an explicit image-based-lighting spherical
- * harmonic coefficient set (the same neutral values applied to the scene in
- * cesium-main.js). The OSM tileset's PBR shader expects a vec3[9] uniform
- * (model_sphericalHarmonicCoefficients) for diffuse IBL; without an explicit
- * set Cesium computes it from the atmosphere, which yields an EMPTY array in
- * the pick pass used by scene.pickFromRay (the per-frame ground-altitude
- * raycast) → "WebGL: INVALID_VALUE: uniform3fv: no array" once per frame.
- * Supplying explicit coefficients makes the uniform valid in every pass.
+ * Neutral image-based-lighting spherical harmonic coefficients (order:
+ * L0,0, L1,-1, L1,0, L1,1, L2,-2, L2,-1, L2,0, L2,1, L2,2). Built lazily
+ * because `Cesium` is only available after the CDN script loads, and shared
+ * across tilesets (Cesium only reads the array, never mutates it).
  */
-function applyOsmSphericalHarmonics(tileset) {
-  const sh = [
-    new Cesium.Cartesian3(0.50, 0.50, 0.50), // L0,0 — base ambient irradiance
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,-1
-    new Cesium.Cartesian3(0.20, 0.20, 0.20), // L1,0 — sky is brighter overhead
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,1
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-2
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-1
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,0
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,1
-    new Cesium.Cartesian3(0.0, 0.0, 0.0)     // L2,2
-  ];
-  if (tileset.imageBasedLighting) {
-    tileset.imageBasedLighting.sphericalHarmonicCoefficients = sh;
-  } else {
-    tileset.imageBasedLighting = new Cesium.ImageBasedLighting({ sphericalHarmonicCoefficients: sh });
+let neutralSH = null;
+function getNeutralSphericalHarmonics() {
+  if (!neutralSH) {
+    neutralSH = [
+      new Cesium.Cartesian3(0.50, 0.50, 0.50), // L0,0 — base ambient irradiance
+      new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,-1
+      new Cesium.Cartesian3(0.20, 0.20, 0.20), // L1,0 — sky is brighter overhead
+      new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,1
+      new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-2
+      new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-1
+      new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,0
+      new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,1
+      new Cesium.Cartesian3(0.0, 0.0, 0.0)     // L2,2
+    ];
+  }
+  return neutralSH;
+}
+
+/**
+ * Give a 3D tileset an explicit image-based-lighting spherical harmonic
+ * coefficient set. The tileset's PBR shaders expect a vec3[9] uniform
+ * (model_sphericalHarmonicCoefficients) for diffuse IBL. Every model's shader
+ * captures, ONCE at pipeline-build time:
+ *   model.imageBasedLighting.sphericalHarmonicCoefficients
+ *     ?? model.environmentMapManager.sphericalHarmonicCoefficients
+ * Without an explicit set, the shader captures whatever the tileset's
+ * DynamicEnvironmentMapManager returns — and the manager recomputes its
+ * coefficients ON THE GPU (irradiance-map readback), which leaves the array
+ * EMPTY on GPUs where that readback never completes. The captured empty array
+ * is then fed to uniform3fv in every pass (main AND pick), producing
+ * "WebGL: INVALID_VALUE: uniform3fv: no array" every frame.
+ *
+ * Two pins are therefore applied, both BEFORE the tileset enters the scene:
+ *  1. Mutate tileset.imageBasedLighting.sphericalHarmonicCoefficients (the
+ *     read-only getter returns the tileset's own ImageBasedLighting instance;
+ *     assigning a new ImageBasedLighting to the property would throw, exactly
+ *     like the Scene.imageBasedLighting mistake did at startup).
+ *  2. Pin the tileset's environmentMapManager sphericalHarmonicCoefficients
+ *     via an own-property getter that shadows the prototype getter. This does
+ *     NOT depend on the tileset→model IBL hand-off (the manager reference is
+ *     assigned to each model directly) and leaves the manager otherwise fully
+ *     functional (specular radiance maps keep updating).
+ *
+ * Exported because it must be applied to EVERY 3D tileset in the app — the
+ * Google Photorealistic tileset (cesium-main.js) AND the OSM Buildings
+ * tileset (here). Fixing only one leaves the other's models throwing in
+ * every view that raycasts them.
+ */
+export function applyNeutralSphericalHarmonics(tileset) {
+  try {
+    const sh = getNeutralSphericalHarmonics();
+    const ibl = tileset.imageBasedLighting;
+    if (ibl) {
+      ibl.sphericalHarmonicCoefficients = sh;
+    } else {
+      console.warn('[TilesetSource] Tileset has no imageBasedLighting instance; skipping SH override.');
+    }
+    const mgr = tileset.environmentMapManager;
+    if (mgr) {
+      Object.defineProperty(mgr, 'sphericalHarmonicCoefficients', {
+        get: () => sh,
+        configurable: true,
+      });
+    } else {
+      console.warn('[TilesetSource] Tileset has no environmentMapManager; skipping manager SH pin.');
+    }
+  } catch (e) {
+    console.warn('[TilesetSource] Failed to set spherical harmonics:', e);
+  }
+}
+
+/**
+ * Pin the SCENE-level spherical-harmonic feed. The tileset pins above only
+ * cover Model shaders; the globe surface shader (visible only in 3D Mesh
+ * mode, where globe.show = true) and other atmosphere-lit passes read the
+ * vec3[9] automatic uniform czm_sphericalHarmonicCoefficients via
+ * uniformState ← frameState, and Cesium's scene-level coefficients are
+ * computed on the GPU — they can come back EMPTY on GPUs where the readback
+ * never completes, producing the same "uniform3fv: no array" for every globe
+ * draw (main AND pick passes). Own-property getters (with no-op setters so
+ * Cesium's per-frame writes are harmlessly swallowed) pin every read to the
+ * explicit neutral set.
+ */
+export function pinSceneSphericalHarmonics(scene) {
+  try {
+    const sh = getNeutralSphericalHarmonics();
+    const pin = (obj) => {
+      if (!obj) return;
+      Object.defineProperty(obj, 'sphericalHarmonicCoefficients', {
+        get: () => sh,
+        set: () => {}, // swallow Cesium's per-frame writes
+        configurable: true,
+      });
+    };
+    pin(scene.context && scene.context.uniformState);
+    pin(scene._frameState);
+  } catch (e) {
+    console.warn('[TilesetSource] Failed to pin scene spherical harmonics:', e);
   }
 }
 
@@ -105,7 +183,9 @@ async function activateOsm(viewer) {
 
   if (!osmTileset) {
     osmTileset = await Cesium.createOsmBuildingsAsync();
-    applyOsmSphericalHarmonics(osmTileset);
+    // Set BEFORE primitives.add below, so every OSM model pipeline captures
+    // the explicit coefficients when its shader is built (see doc comment).
+    applyNeutralSphericalHarmonics(osmTileset);
   }
   if (!viewer.scene.primitives.contains(osmTileset)) {
     viewer.scene.primitives.add(osmTileset);

@@ -1,5 +1,65 @@
 import config from '../config.json';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
+import { applyNeutralSphericalHarmonics, pinSceneSphericalHarmonics } from '@shared-composables/useTilesetSource.js';
+
+// ── Spherical-harmonics uniform shim (the reliable uniform3fv fix) ──
+// Root cause (confirmed in Cesium 1.125 source): ImageBasedLightingPipelineStage
+// captures `imageBasedLighting.sphericalHarmonicCoefficients ??
+// environmentMapManager.sphericalHarmonicCoefficients` as a LIVE reference into
+// each Model's shader uniform closure, once at shader-build time. The
+// DynamicEnvironmentMapManager then recomputes those coefficients ON THE GPU and
+// its array is EMPTIED IN PLACE when the irradiance readback never completes —
+// which is exactly what happens on this machine's integrated GPU. Every frame the
+// built shader feeds that now-empty vec3[9] to uniform3fv →
+// "WebGL: INVALID_VALUE: uniform3fv: no array" (main AND pick passes), once per
+// drawn model. Object-level fixes (setting tileset IBL / pinning the manager
+// getter) cannot reach shader closures that were already built, so the reliable
+// fix is at the GL boundary: when an empty vec3 array is about to be uploaded to
+// a program that declares a sphericalHarmonicCoefficients uniform, substitute a
+// neutral 9-coefficient set (flat ambient) — visually equivalent to the explicit
+// coefficients we intended, and it makes the call valid. Patched on the WebGL
+// prototypes so it covers every current and future GL context in the page.
+(function installSphericalHarmonicsShim() {
+    // Neutral 3rd-order SH (L0,0 … L2,2) as 9 vec3 = 27 floats: base ambient
+    // irradiance with a slightly brighter sky overhead. Matches getNeutralSphericalHarmonics().
+    const NEUTRAL = new Float32Array([
+        0.5, 0.5, 0.5,  0.0, 0.0, 0.0,  0.2, 0.2, 0.2,
+        0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,
+    ]);
+    const patch = (proto) => {
+        if (!proto || !proto.uniform3fv) return;
+        const orig = proto.uniform3fv;
+        const progHasSH = new WeakMap(); // WebGLProgram → declares a sphericalHarmonicCoefficients vec3 uniform
+        proto.uniform3fv = function (location, value) {
+            // Fast path: non-empty uploads pass straight through. Only an empty
+            // vec3 array (always a GL error for uniform3fv) is intercepted.
+            if (value && value.length === 0) {
+                try {
+                    const gl = this;
+                    const prog = gl.getParameter(gl.CURRENT_PROGRAM);
+                    let has = prog ? progHasSH.get(prog) : false;
+                    if (has === undefined) {
+                        has = false;
+                        const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS);
+                        for (let i = 0; i < n; i++) {
+                            const info = gl.getActiveUniform(prog, i);
+                            if (info.type === gl.FLOAT_VEC3 && info.name.indexOf('sphericalHarmonicCoefficients') !== -1) {
+                                has = true;
+                                break;
+                            }
+                        }
+                        progHasSH.set(prog, has);
+                    }
+                    if (has) value = NEUTRAL;
+                } catch (e) { /* never break rendering */ }
+            }
+            return orig.call(this, location, value);
+        };
+    };
+    patch(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype);
+    patch(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype);
+})();
 
 Cesium.GoogleMaps.defaultApiKey = config.googleApiKey;
 Cesium.Ion.defaultAccessToken = config.cesiumIonToken;
@@ -33,29 +93,22 @@ viewer.scene.globe.show = false;
 // purely cosmetic — turning it off yields a clearer view for navigation.
 viewer.scene.fog.enabled = false;
 
-// Fix the "WebGL: INVALID_VALUE: uniform3fv: no array" warnings on the 3D Mesh
-// subpage. They come from the OSM Buildings tileset's image-based lighting
-// (IBL): its PBR shader expects a vec3[9] uniform (model_sphericalHarmonic-
-// Coefficients) for diffuse IBL. We never supply spherical-harmonic coefficients,
-// so Cesium falls back to computing them from the atmosphere — which works in
-// the normal render but yields an EMPTY array in the pick pass used by
-// scene.pickFromRay (the per-frame ground-altitude raycast), triggering the
-// warning once per frame. Supplying an explicit coefficient set takes precedence
-// over the atmosphere fallback (see ImageBasedLightingPipelineStage), so the
-// uniform is always a valid 27-float array in every pass. The values below give
-// a soft, neutral daylight ambient (slightly brighter overhead) that closely
-// matches the default atmosphere look on the buildings.
-viewer.scene.imageBasedLighting.sphericalHarmonicCoefficients = [
-    new Cesium.Cartesian3(0.50, 0.50, 0.50), // L0,0 — base ambient irradiance
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,-1
-    new Cesium.Cartesian3(0.20, 0.20, 0.20), // L1,0 — sky is brighter overhead
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L1,1
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-2
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,-1
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,0
-    new Cesium.Cartesian3(0.0, 0.0, 0.0),    // L2,1
-    new Cesium.Cartesian3(0.0, 0.0, 0.0)     // L2,2
-];
+// Pin the SCENE-level spherical-harmonic feed as well. The tileset pins only
+// cover Model shaders; the globe surface shader (visible only in 3D Mesh mode,
+// where globe.show = true) reads the vec3[9] automatic uniform
+// czm_sphericalHarmonicCoefficients via uniformState ← frameState, and Cesium's
+// scene-level coefficients can likewise come back EMPTY from the GPU on this
+// machine's integrated GPU — the same "uniform3fv: no array" for every globe
+// draw (main AND pick passes). See useTilesetSource.js for details.
+pinSceneSphericalHarmonics(viewer.scene);
+
+// NOTE: the "uniform3fv: no array" fix lives in useTilesetSource.js
+// (applyNeutralSphericalHarmonics) and must be applied to EVERY 3D tileset's
+// OWN imageBasedLighting — the Google tileset below AND the OSM tileset in
+// useTilesetSource.js. Cesium's Scene has NO `imageBasedLighting` property, so
+// it must NOT be assigned here — doing so throws a TypeError that halts this
+// module before `window.cesiumViewer` is set, which is exactly what produced the
+// splash's misleading "cannot connect to Cesium" error.
 
 // ── WebGL context-loss detection ──
 // If the GPU kills the WebGL context (memory pressure, driver reset), the
@@ -159,7 +212,18 @@ async function loadArena() {
         // Attempt to load Google Photorealistic 3D Tiles.
         // This requires a valid Google API key with the Map Tiles API enabled and
         // a Cesium ion access token that is not expired.
-        googleTileset = await Cesium.createGooglePhotorealistic3DTileset();
+        // onlyUsingWithGoogleGeocoder: the app disables the geocoder widget
+        // entirely (geocoder: false in the Viewer options), so Cesium's
+        // "only the Google geocoder can be used" compatibility warning does not
+        // apply — acknowledge it explicitly to keep the console clean.
+        googleTileset = await Cesium.createGooglePhotorealistic3DTileset({
+            onlyUsingWithGoogleGeocoder: true,
+        });
+        // Explicit IBL spherical harmonics BEFORE the tileset enters the scene, so
+        // every Google-tile model pipeline captures them when its shader is built —
+        // otherwise scene.pickFromRay renders them with an empty vec3[9] uniform and
+        // Chrome logs "WebGL: INVALID_VALUE: uniform3fv: no array" every frame.
+        applyNeutralSphericalHarmonics(googleTileset);
         viewer.scene.primitives.add(googleTileset);
         console.log('[Cesium] Google Photorealistic 3D Tileset created.');
     } catch (error) {
