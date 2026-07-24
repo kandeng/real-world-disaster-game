@@ -9,6 +9,7 @@
   "recorder_stop": "停止录制",
   "recorder_cancel": "取消回放",
   "replaying": "回放并录制中… {pct}%",
+  "loading_assets": "资源加载并渲染中 ...",
   "takeoff": "起飞",
   "landing": "降落",
   "taking_off": "起飞中...",

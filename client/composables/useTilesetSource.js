@@ -150,8 +150,13 @@ export function pinSceneSphericalHarmonics(scene) {
 
 /** Show OSM Buildings: hide Google tiles, enable globe + World Terrain. */
 async function activateOsm(viewer) {
+  // Hide (do NOT remove) the Google tileset: scene.primitives has
+  // destroyPrimitives = true by default, so primitives.remove() would
+  // DESTROY it and it could never render again when switching back.
+  // Toggling .show keeps it alive and tile-cached while Cesium skips all
+  // traversal, requests and rendering for it.
   const google = getGoogleTilesetRef();
-  if (google) viewer.scene.primitives.remove(google);
+  if (google) google.show = false;
 
   // OSM Buildings need a visible globe + terrain for ground context.
   viewer.scene.globe.show = true;
@@ -186,21 +191,23 @@ async function activateOsm(viewer) {
     // Set BEFORE primitives.add below, so every OSM model pipeline captures
     // the explicit coefficients when its shader is built (see doc comment).
     applyNeutralSphericalHarmonics(osmTileset);
-  }
-  if (!viewer.scene.primitives.contains(osmTileset)) {
+    // Add once and keep it in the scene; visibility is toggled via .show
+    // (see the Google-tileset note above about remove() destroying).
     viewer.scene.primitives.add(osmTileset);
   }
+  osmTileset.show = true;
   console.log('[TilesetSource] OSM Buildings active.');
 }
 
 /** Restore Google Photorealistic 3D Tiles and the default globe state. */
 function activateGoogle(viewer) {
-  if (osmTileset) viewer.scene.primitives.remove(osmTileset);
+  // Toggle .show instead of primitives.remove()/add() — remove() would
+  // DESTROY the tileset (scene.primitives.destroyPrimitives defaults to
+  // true), leaving the aerial view permanently blank after one mesh visit.
+  if (osmTileset) osmTileset.show = false;
 
   const google = getGoogleTilesetRef();
-  if (google && !viewer.scene.primitives.contains(google)) {
-    viewer.scene.primitives.add(google);
-  }
+  if (google) google.show = true;
 
   // Google photorealistic tiles cover the whole scene; hide the base globe
   // and restore a flat ellipsoid (matches the cesium-main.js default).

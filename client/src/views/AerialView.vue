@@ -28,7 +28,7 @@ const { drone, gimbal } = useDrone();
 // 3D data source of the shared Cesium viewer. The 3D Aerial / 3D Mesh
 // subpages differ ONLY in this source (Google tiles vs OSM Buildings); every
 // control (disks, sidebars, physics) is identical between them.
-const { activeSource, setSource, getActiveTileset } = useTilesetSource();
+const { activeSource, isSwitching, setSource, getActiveTileset } = useTilesetSource();
 const altitudeGate = useAltitudeGate(drone);
 
 const isLowAltitude = computed(() => (drone.alt - altitudeGate.surfaceAlt.value) < 10);
@@ -70,6 +70,111 @@ let savedDiskVisibility = null;
 
 // Active subpage of the 3D Exploration page: 'aerial' (default) or 'mesh'.
 const activeSubpage = ref('aerial');
+
+// Progress bar shown at the top center while a subpage switch streams and
+// renders the new 3D assets (Google tiles <-> OSM Buildings).
+const assetLoading = ref(false);
+const assetLoadProgress = ref(0); // 0..1
+let loadStartTs = 0;
+let loadToken = 0; // guards against overlapping switches: latest one wins
+
+// ── Splash-clip cover during subpage asset switches ──
+// While the 3D data source is being swapped (progress bar visible), a muted,
+// looping splash clip covers the scene so its half-loaded state is never
+// visible. Reuses the auto-generated /splash/playlist.json manifest with a
+// shuffled, no-back-to-back-repeat queue, mirroring the splash screen.
+const switchVideoUrl = ref('');
+let allSwitchClips = [];
+let switchQueue = [];
+let lastSwitchClip = '';
+let warmVideo = null; // off-DOM element used to pre-buffer the next clip
+
+function shuffleArray(arr) {
+  const copy = arr.slice();
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function refillSwitchQueue(avoidClip) {
+  switchQueue = shuffleArray(allSwitchClips);
+  if (switchQueue.length > 1 && switchQueue[0] === avoidClip) {
+    const i = switchQueue.findIndex((c) => c !== avoidClip);
+    [switchQueue[0], switchQueue[i]] = [switchQueue[i], switchQueue[0]];
+  }
+}
+
+function peekSwitchClip() {
+  if (!allSwitchClips.length) return '';
+  if (!switchQueue.length) refillSwitchQueue(lastSwitchClip);
+  return switchQueue[0];
+}
+
+function nextSwitchClip() {
+  const clip = peekSwitchClip();
+  if (!clip) return '';
+  switchQueue.shift();
+  lastSwitchClip = clip;
+  return clip;
+}
+
+/** Extract the bare file name from a clip URL, for logging (like splash.js). */
+function clipName(url) {
+  return String(url).split('/').pop();
+}
+
+// Fetch the splash clip manifest, then warm the first queued clip. The splash
+// screen's opening clip (firstClip, video_00.mp4) is EXCLUDED: the subpage
+// switch cover should never replay the exact video the user already watched
+// at startup. Falls back to firstClip only if it is the sole clip available.
+async function loadSwitchClips() {
+  try {
+    const res = await fetch('/splash/playlist.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    allSwitchClips = [...(data.otherClips || [])].filter(Boolean);
+    if (!allSwitchClips.length && data.firstClip) allSwitchClips = [data.firstClip];
+  } catch (e) {
+    console.warn('[switch-cover] splash playlist fetch failed; switch cover disabled:', e.message);
+    allSwitchClips = [];
+  }
+  warmSwitchClip();
+}
+
+// Buffer the next queued clip in the background so a later switch starts
+// instantly, without the download competing with an in-flight tile stream.
+function warmSwitchClip() {
+  const clip = peekSwitchClip();
+  if (!clip) return;
+  if (!warmVideo) {
+    warmVideo = document.createElement('video');
+    warmVideo.muted = true;
+    warmVideo.preload = 'auto';
+  }
+  if (warmVideo.src.indexOf(clip) !== -1) return; // already warming this clip
+  warmVideo.src = clip;
+  warmVideo.load();
+  // Permanent log, mirroring splash.js: report when this clip has buffered
+  // enough to be shown without stalling. The src guard ignores stale events
+  // from a warm-up that has been superseded.
+  warmVideo.addEventListener('canplay', function onCanPlay() {
+    warmVideo.removeEventListener('canplay', onCanPlay);
+    if (warmVideo.src.indexOf(clip) !== -1) {
+      console.log('[switch-cover] Cached & ready to display: ' + clipName(clip));
+    }
+  });
+}
+
+// Permanent log, mirroring splash.js: report the clip that is starting to be
+// displayed. Fires per cover mount (the keyed video element is remounted per
+// clip and unmounted when the cover hides).
+function onSwitchVideoPlaying() {
+  if (switchVideoUrl.value) {
+    console.log('[switch-cover] Now playing: ' + clipName(switchVideoUrl.value));
+  }
+}
 
 const isCollisionFrozen = ref(false);
 const collisionSurfaceNormal = ref(null);
@@ -183,6 +288,63 @@ function onPagesOpen() {
   if (recorderState.value !== 'idle') {
     resetRecorder();
   }
+}
+
+// Wait until the newly active tileset (and the globe in mesh mode) reports
+// its view-dependent tiles as loaded, with guards so a tile failure can
+// never trap the progress bar on screen. Like the splash dismissal, this
+// polls `tilesLoaded` rather than counting tileLoadProgressEvent requests.
+function waitForAssetsLoaded() {
+  return new Promise((resolve) => {
+    const viewer = window.cesiumViewer;
+    if (!viewer) return resolve();
+    const start = performance.now();
+    const MIN_WAIT = 400; // ms: let Cesium issue the first tile requests
+    const MAX_WAIT = 30000; // ms: never trap the UI on tile failures
+    const check = () => {
+      const elapsed = performance.now() - start;
+      const tileset = getActiveTileset();
+      const tilesetDone = !tileset || tileset.tilesLoaded;
+      const globeDone = activeSource.value !== 'osm' || viewer.scene.globe.tilesLoaded;
+      if ((elapsed >= MIN_WAIT && tilesetDone && globeDone) || elapsed >= MAX_WAIT) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(check);
+    };
+    requestAnimationFrame(check);
+  });
+}
+
+// Swap the 3D data source for the active subpage and show the top-center
+// progress bar until the new assets are loaded and rendered.
+async function swapSourceWithProgress(val) {
+  const token = ++loadToken;
+  assetLoading.value = true;
+  assetLoadProgress.value = 0;
+  loadStartTs = performance.now();
+  // Lazy manifest fallback: AWAIT it so even the very first switch (clicked
+  // before the mount-time warm-up has landed) still gets a cover clip.
+  if (!allSwitchClips.length) await loadSwitchClips();
+  switchVideoUrl.value = nextSwitchClip(); // '' only if the fetch failed
+  // Serialize with any in-flight swap so rapid back-and-forth clicks queue
+  // (last click wins) instead of being dropped by setSource's isSwitching
+  // guard, which would leave the scene on the subpage the user clicked AWAY
+  // from while this direction's cover hid early.
+  while (isSwitching.value) {
+    if (token !== loadToken) return; // superseded while queued
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  await setSource(val === 'mesh' ? 'osm' : 'google');
+  await waitForAssetsLoaded();
+  if (token !== loadToken) return; // a newer switch took over
+  assetLoadProgress.value = 1;
+  setTimeout(() => {
+    if (token !== loadToken) return;
+    assetLoading.value = false;
+    switchVideoUrl.value = ''; // Transition fade-out keeps the last frame
+    warmSwitchClip(); // pre-buffer the next queued clip for the next switch
+  }, 500);
 }
 
 function toggleTakeoffLanding() {
@@ -400,6 +562,12 @@ function loop() {
     if (recorderState.value === 'recording') {
       sampleFrame(drone, gimbal, altitudeGate.surfaceAlt.value);
     }
+    // Advance the asset-loading progress bar while a subpage switch streams
+    // in (asymptotic to 90%; the last 10% completes on tilesLoaded).
+    if (assetLoading.value && assetLoadProgress.value < 0.9) {
+      const elapsedMs = performance.now() - loadStartTs;
+      assetLoadProgress.value = Math.min(0.9, 0.9 * (1 - Math.exp(-elapsedMs / 1500)));
+    }
     // During replay the replay engine owns the Cesium camera; skip the flight
     // physics, collision checks and camera sync so they cannot fight it.
     if (recorderState.value !== 'replaying') {
@@ -519,9 +687,14 @@ onMounted(() => {
     const meshBtn = leftItems.find((i) => i.id === 'subpage_mesh');
     if (meshBtn) meshBtn.active = val === 'mesh';
   
-    // Swap the 3D data source to match the active subpage.
-    setSource(val === 'mesh' ? 'osm' : 'google');
+    // Swap the 3D data source to match the active subpage (with a top-center
+    // progress bar while the new assets load and render).
+    swapSourceWithProgress(val);
   });
+
+  // Warm the splash-clip manifest + first cover clip in the background, well
+  // after the initial tile load has settled so it cannot compete with it.
+  setTimeout(loadSwitchClips, 8000);
 
   // React to recorder state transitions: update the dock button title, and
   // close the Flight/Gimbal disks during replay (restored when it ends).
@@ -663,6 +836,30 @@ onUnmounted(() => {
       >
         {{ t('aerialview.replaying', { pct: Math.round(replayProgress * 100) }) }}
       </div>
+      <Transition name="switch-video">
+        <div v-if="assetLoading && switchVideoUrl" class="switch-video-cover">
+          <video
+            :key="switchVideoUrl"
+            class="switch-video-cover__video"
+            :src="switchVideoUrl"
+            autoplay
+            muted
+            loop
+            playsinline
+            preload="auto"
+            @playing="onSwitchVideoPlaying"
+          />
+        </div>
+      </Transition>
+      <div
+        v-if="assetLoading"
+        class="top-center-message asset-loading"
+      >
+        <span>{{ t('aerialview.loading_assets') }}</span>
+        <div class="asset-loading__track">
+          <div class="asset-loading__fill" :style="{ width: (assetLoadProgress * 100).toFixed(1) + '%' }" />
+        </div>
+      </div>
     </template>
   </ViewComposer>
 </template>
@@ -752,5 +949,56 @@ onUnmounted(() => {
 .replay-pill {
   background: rgba(34, 197, 94, 0.88);
   box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
+}
+
+.asset-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: rgba(34, 197, 94, 0.88);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
+}
+
+.asset-loading__track {
+  width: 240px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.3);
+  overflow: hidden;
+}
+
+.asset-loading__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: #ffffff;
+  transition: width 0.15s linear;
+}
+
+/* Splash-clip cover shown while a subpage switch loads and renders the new
+   3D assets. Sits above the 3D background (z 0) but below the docks (z 10),
+   HUD (z 50) and top-center messages (z 100). */
+.switch-video-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  background: #000000;
+  pointer-events: none;
+}
+
+.switch-video-cover__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.switch-video-enter-active,
+.switch-video-leave-active {
+  transition: opacity 0.35s ease;
+}
+
+.switch-video-enter-from,
+.switch-video-leave-to {
+  opacity: 0;
 }
 </style>

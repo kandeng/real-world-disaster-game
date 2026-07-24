@@ -9,6 +9,7 @@
   "recorder_stop": "Stop Recording",
   "recorder_cancel": "Cancel Replay",
   "replaying": "Replaying and recording… {pct}%",
+  "loading_assets": "Loading and rendering assets ...",
   "takeoff": "Takeoff",
   "landing": "Landing",
   "taking_off": "Taking Off...",
