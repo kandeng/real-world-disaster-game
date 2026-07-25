@@ -117,16 +117,17 @@ cd ~
 git clone https://github.com/kandeng/drone-navigation.git
 cd drone-navigation/client/
 
-# 2. (Optional) Upgrade npm if needed
-npm install -g npm@11.12.1
-
-# 3. Install dependencies and build the production bundle
+# 2. Install dependencies and build the production bundle
+npm install -g npm@11.12.1    # (Optional) Upgrade npm if needed
 npm install
-npm run build
 
-# 4. Configure API keys
+# 3. Configure API keys
 # Edit client/config.json with your Google Maps API key and Cesium Ion token.
 vim config.json
+
+# 4. Populate the video clips for splashing.
+cp ~/drone-navigation/client/assets/media/*.mp4 ~/drone-navigation/client/public/splash/.
+rm ~/drone-navigation/client/public/splash/drone_earth*.mp4
 
 # 5. Re-build after configuration changes
 npm run build
