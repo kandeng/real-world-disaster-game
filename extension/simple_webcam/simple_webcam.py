@@ -10,23 +10,25 @@ from av import VideoFrame
 import aiohttp
 
 # ── Configuration ──────────────────────────────────────────────────────────
-# EXTENSION_ECS_URL = "http://47.85.110.135:8889"
 EXTENSION_ECS_URL = "https://drone-navigation.com/live"
-STREAM_ID = "ubuntu-webcam"
 
-# MediaMTX control API (default port 9997). Used ONLY to list who is viewing
-# the broadcast. Set to None to disable viewer logging.
-MEDIAMTX_API_URL = "http://47.85.110.135:9997"
+# Specific livestream properties
+LIVESTREAM_HOSTNAME = "ubuntu-webcam"
+LIVESTREAM_DESCRIPTION = "A webcam stream from Kan's Ubuntu desktop"
 
-# Sidecar metadata service (our own — see server/stream_meta.py). While live we
-# periodically POST the rich stream info (title/description/...) that MediaMTX
-# itself cannot store, so the web client's stream list can display it.
-# Set to None to disable.
-STREAM_META_URL = "https://drone-navigation.com/streams-meta/"
-STREAM_META_API_KEY = ""  # must match server/config.json when the service sets one
+# MediaMTX control API (default port 9997). Proxied via Caddy /control-api or directly via ECS IP.
+MEDIAMTX_API_URL = "https://drone-navigation.com/control-api"
+
+# Sidecar metadata service (routed via Caddy to port 8099 on the web server).
+# DISABLED for the hard-coded testing phase: empty string => meta_heartbeat
+# and meta_deregister are no-ops. Re-enable with:
+# STREAM_META_URL = "https://drone-navigation.com/streams-meta/"
+STREAM_META_URL = ""
+STREAM_META_API_KEY = ""  # Matches server config if authorization key is enabled
+
 STREAM_META = {
     "title": "Ubuntu Webcam",
-    "description": "Kan's desk camera (video + microphone)",
+    "description": LIVESTREAM_DESCRIPTION,
     "device": "/dev/video0",
     "location": "Office",
 }
@@ -54,10 +56,11 @@ class WebcamStreamTrack(VideoStreamTrack):
         if not ret:
             raise Exception("Webcam read failed")
 
-        # Overlay identifying text
+        # Overlay identifying text on frame: the friendly hostname (not
+        # the raw stream_id) so the broadcast top line matches the UI.
         cv2.putText(
             frame,
-            f"{self.stream_id} - {time.strftime('%H:%M:%S')}",
+            f"{LIVESTREAM_HOSTNAME} - {time.strftime('%H:%M:%S')}",
             (20, 40),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
@@ -78,12 +81,11 @@ rtc_config = RTCConfiguration(
 
 
 def describe_sdp_candidates(sdp):
-    """Short 'ip:port (type)' list from the a=candidate lines of an SDP blob."""
+    """Extract a list of candidate IPs/ports from an SDP block."""
     found = []
     for line in sdp.splitlines():
         if not line.startswith("a=candidate:"):
             continue
-        # a=candidate:<foundation> <component> <transport> <priority> <ip> <port> typ <type> ...
         parts = line.split()
         try:
             ip, port = parts[4], parts[5]
@@ -95,13 +97,13 @@ def describe_sdp_candidates(sdp):
 
 
 def stream_path_name(server_url, stream_id):
-    """'https://host/live' + 'ubuntu-webcam' -> 'live/ubuntu-webcam' (the MediaMTX path)."""
+    """'https://drone-navigation.com/live' + 'ubuntu-webcam' -> 'live/ubuntu-webcam'."""
     prefix = urlparse(server_url).path.strip("/")
     return f"{prefix}/{stream_id}" if prefix else stream_id
 
 
 async def log_selected_ice_pair(pc):
-    """Once ICE is connected, report which local<->remote pair actually carries the video."""
+    """Report active ICE candidate pair once connected."""
     try:
         stats = await pc.getStats()
         for stat in stats.values():
@@ -120,14 +122,14 @@ async def log_selected_ice_pair(pc):
 
 
 async def monitor(pc, api_base, path_name, interval=MONITOR_INTERVAL):
-    """Every `interval` seconds: log upload progress and who is viewing the broadcast."""
+    """Log upload bitrate and viewer counts from MediaMTX Control API."""
     api_ok = True
     last_bytes = 0
     async with aiohttp.ClientSession() as session:
         while True:
             await asyncio.sleep(interval)
 
-            # ── Upload progress: proof the media is really flowing ──
+            # Upload progress
             try:
                 stats = await pc.getStats()
                 for stat in stats.values():
@@ -139,12 +141,12 @@ async def monitor(pc, api_base, path_name, interval=MONITOR_INTERVAL):
             except Exception as e:
                 log("STATS", f"Could not read WebRTC stats: {e}")
 
-            # ── Viewers, via the MediaMTX control API ──
+            # Viewer count via MediaMTX API
             if not api_base:
                 continue
             try:
                 async with session.get(
-                    f"{api_base}/v3/webrtcsessions/list",
+                    f"{api_base.rstrip('/')}/v3/webrtcsessions/list",
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status != 200:
@@ -169,7 +171,7 @@ async def monitor(pc, api_base, path_name, interval=MONITOR_INTERVAL):
 
 
 async def meta_heartbeat(payload, interval=META_INTERVAL):
-    """Best-effort periodic upsert of this stream's metadata to the sidecar service."""
+    """Periodic metadata upsert to sidecar service."""
     if not STREAM_META_URL:
         return
     meta_ok = True
@@ -195,11 +197,12 @@ async def meta_heartbeat(payload, interval=META_INTERVAL):
 
 
 async def meta_deregister(stream_id):
-    """Best-effort removal of this stream's metadata on shutdown."""
+    """Remove stream entry from metadata service upon shutdown."""
     if not STREAM_META_URL:
         return
     headers = {"X-API-Key": STREAM_META_API_KEY} if STREAM_META_API_KEY else {}
-    url = f"{STREAM_META_URL.rstrip('/')}/{stream_id}"
+    base_url = STREAM_META_URL.rsplit('/', 1)[0]
+    url = f"{base_url}/{stream_id}"
     try:
         async with aiohttp.ClientSession() as session:
             async with session.delete(url, headers=headers,
@@ -207,7 +210,7 @@ async def meta_deregister(stream_id):
                 if resp.status == 200:
                     log("META", "Stream metadata deregistered.")
     except Exception:
-        pass  # shutting down anyway; the entry simply goes stale
+        pass
 
 
 async def run_whip_publisher(server_url, stream_id):
@@ -215,20 +218,27 @@ async def run_whip_publisher(server_url, stream_id):
     path_name = stream_path_name(server_url, stream_id)
 
     log("INIT", f"Stream ID: '{stream_id}' (MediaMTX path: '{path_name}')")
-    log("INIT", f"WHIP endpoint we shake hands with: {whip_endpoint}")
+    log("INIT", f"WHIP endpoint: {whip_endpoint}")
 
-    # Metadata pushed to the sidecar service (enriched with webcam info below).
-    meta_payload = {"stream_id": stream_id, **STREAM_META}
+    # Build payload with hostname, description, and custom stream details
+    meta_payload = {
+        "stream_id": stream_id,
+        "hostname": LIVESTREAM_HOSTNAME,
+        "description": LIVESTREAM_DESCRIPTION,
+        "status": "online",
+        "updated_at": time.time(),
+        **STREAM_META
+    }
 
-    # Where is the MediaMTX server? Resolve the host we are about to call.
+    # Resolve target host
     host = urlparse(server_url).hostname
     try:
         addrs = sorted({ai[4][0] for ai in socket.getaddrinfo(host, None)})
-        log("INIT", f"MediaMTX host '{host}' resolves to: {', '.join(addrs)}")
+        log("INIT", f"MediaMTX target host '{host}' resolves to: {', '.join(addrs)}")
     except Exception as e:
-        log("INIT", f"Could not resolve MediaMTX host '{host}': {e}")
+        log("INIT", f"Could not resolve host '{host}': {e}")
 
-    log("INIT", f"Using STUN server for NAT traversal: {STUN_SERVER}")
+    log("INIT", f"Using STUN server: {STUN_SERVER}")
 
     pc = RTCPeerConnection(configuration=rtc_config)
 
@@ -238,10 +248,9 @@ async def run_whip_publisher(server_url, stream_id):
         if pc.iceConnectionState == "connected":
             await log_selected_ice_pair(pc)
         elif pc.iceConnectionState == "failed":
-            log("ICE", "Handshake FAILED: no working network path to MediaMTX "
-                       "(check STUN reachability / firewall / UDP ports).")
+            log("ICE", "Handshake FAILED: check STUN server, firewalls, or UDP ports.")
 
-    # 1. Add video track (from OpenCV webcam)
+    # 1. Initialize Video Track
     video_track = None
     try:
         video_track = WebcamStreamTrack(stream_id)
@@ -249,17 +258,17 @@ async def run_whip_publisher(server_url, stream_id):
             w = int(video_track.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(video_track.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             pc.addTrack(video_track)
-            log("INIT", f"Webcam opened successfully: {w}x{h}")
+            log("INIT", f"Webcam opened: {w}x{h}")
             meta_payload["resolution"] = f"{w}x{h}"
             fps = video_track.cap.get(cv2.CAP_PROP_FPS)
             if fps > 0:
                 meta_payload["fps"] = round(fps, 1)
         else:
-            log("INIT", "WARNING: Webcam (device 0) could not be opened. Skipping video.")
+            log("INIT", "WARNING: Webcam device 0 failed to open. Streaming without video.")
     except Exception as e:
-        log("INIT", f"WARNING: Failed to initialize webcam video track ({e}). Continuing without video.")
+        log("INIT", f"WARNING: Video initialization failed ({e}).")
 
-    # 2. Add audio track (capturing default microphone using PyAV/MediaPlayer)
+    # 2. Initialize Audio Track
     player = None
     try:
         player = MediaPlayer('default', format='pulse')
@@ -267,25 +276,23 @@ async def run_whip_publisher(server_url, stream_id):
             pc.addTrack(player.audio)
             log("INIT", "Microphone audio track added successfully.")
     except Exception as e:
-        log("INIT", f"WARNING: Could not open microphone audio track ({e}). Continuing without audio.")
+        log("INIT", f"WARNING: Audio track initialization failed ({e}).")
 
-    # 3. Ensure at least one media track is active
     if not pc.getSenders():
-        log("INIT", "ERROR: Neither video nor audio tracks could be initialized. Aborting stream.")
+        log("INIT", "ERROR: No audio or video tracks could be initialized. Terminating.")
         return
 
-    # 4. Create initial offer
+    # 3. WebRTC Offer & ICE Gathering
     offer = await pc.createOffer()
     await pc.setLocalDescription(offer)
 
-    # 5. Wait until STUN gathers public (srflx) candidates
     log("ICE", f"Gathering ICE candidates (state: {pc.iceGatheringState})...")
     while pc.iceGatheringState != "complete":
         await asyncio.sleep(0.05)
     ours = describe_sdp_candidates(pc.localDescription.sdp)
-    log("ICE", f"ICE gathering complete. Our candidates: {', '.join(ours) if ours else 'none'}")
+    log("ICE", f"ICE gathering complete. Candidates: {', '.join(ours) if ours else 'none'}")
 
-    # 6. The WHIP handshake itself
+    # 4. WHIP Handshake over HTTPS/Caddy
     async with aiohttp.ClientSession() as session:
         log("WHIP", f"POSTing SDP offer to {whip_endpoint} ...")
         try:
@@ -306,17 +313,16 @@ async def run_whip_publisher(server_url, stream_id):
             return
 
     theirs = describe_sdp_candidates(sdp_answer)
-    log("WHIP", f"MediaMTX ICE candidates (where the MediaMTX actually is): "
-                f"{', '.join(theirs) if theirs else 'none in SDP'}")
+    log("WHIP", f"MediaMTX ICE candidates: {', '.join(theirs) if theirs else 'none in SDP'}")
 
     answer = RTCSessionDescription(sdp=sdp_answer, type="answer")
     await pc.setRemoteDescription(answer)
 
-    log("LIVE", f"STREAM LIVE. Channel ID: '{stream_id}' — "
-                f"viewers watch via {server_url}/{stream_id}/")
+    log("LIVE", f"STREAM LIVE. Stream ID: '{stream_id}'")
 
     monitor_task = asyncio.create_task(monitor(pc, MEDIAMTX_API_URL, path_name))
     meta_task = asyncio.create_task(meta_heartbeat(meta_payload))
+
     try:
         while True:
             await asyncio.sleep(1)
@@ -327,20 +333,18 @@ async def run_whip_publisher(server_url, stream_id):
         meta_task.cancel()
         await pc.close()
 
-        # Release webcam hardware
         if video_track and hasattr(video_track, "cap") and video_track.cap.isOpened():
             video_track.cap.release()
-            log("CLEANUP", "Webcam device released.")
+            log("CLEANUP", "Webcam hardware released.")
 
-        # Stop audio player worker thread
         if player:
             player.stop()
             log("CLEANUP", "Audio player stopped.")
 
         await meta_deregister(stream_id)
-
-        log("LIVE", "Stream stopped.")
+        log("LIVE", "Stream shutdown complete.")
 
 
 if __name__ == "__main__":
-    asyncio.run(run_whip_publisher(EXTENSION_ECS_URL, STREAM_ID))
+    asyncio.run(run_whip_publisher(EXTENSION_ECS_URL, LIVESTREAM_HOSTNAME))
+    

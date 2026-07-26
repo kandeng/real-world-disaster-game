@@ -75,6 +75,8 @@ Contact Alibaba Cloud support for assistance with this configuration.
 
 ## 2.1 Caddy Web Engine
 
+`Caddy` is installed and run on `launch-advisor-20260213/i-0xi7m4xb72am9kjxn9mr 8.221.124.43`, an Alibaba ECS server in Virginia USA. 
+
 ### 1. Caddy Installation
 
 Install Caddy on Ubuntu using the official Cloudsmith repository.
@@ -178,6 +180,8 @@ sudo systemctl status caddy
 &nbsp;
 ## 2.2 Squid Proxy
 
+`Squid` is installed and run on `launch-advisor-20260213/i-0xi7m4xb72am9kjxn9mr 8.221.124.43`, an Alibaba ECS server in Virginia USA. 
+
 ### 1. Squid Installation
 
 Install Squid on the same Ubuntu server:
@@ -276,31 +280,9 @@ HTTP/2 200
 &nbsp;
 # 3. Backend Servers
 
-## 3.1. PostgreSQL Database
+## 3.1. OpenClaw Assistant
 
-&nbsp;
-## 3.2. FastAPI Backend
-
-The FastAPI backend is a planned component for server-side logic (e.g., mission persistence, telemetry ingestion, user accounts). It is not yet implemented.
-
-Planned deployment outline:
-
-```bash
-# 1. Install Python dependencies
-cd /home/robot/drone-navigation/server
-pip install -r requirements.txt
-
-# 2. Configure server/config.json from config.example.json
-
-# 3. Start the FastAPI server (adjust host/port as needed)
-# uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/Caddy/Caddyfile`](file:///home/robot/drone-navigation/deployment/Caddy/Caddyfile) so Caddy forwards API requests to the backend.
-
-
-&nbsp;
-## 3.3. OpenClaw Assistant
+`Openclaw` is installed and run on `launch-advisor-20260213/i-0xi7m4xb72am9kjxn9mr 8.221.124.43`, an Alibaba ECS server in Virginia USA. 
 
 We use OpenClaw as the customer service assistant.
 Follow [Alibaba's OpenClaw installation guide](https://help.aliyun.com/zh/model-studio/openclaw)
@@ -382,7 +364,101 @@ View recent logs, e.g.: `tail -n 100 /tmp/openclaw-0/openclaw-2026-07-21.log`
 
 
 &nbsp;
-## 3.4. Synapse Matrix
+## 3.2. MediaMTX for Livestream
+
+`MediaMTX` is installed and run on `launch-advisor-20260723/i-0xif3f3l5j6qwh8kapws 47.85.110.135`, an Alibaba ECS server in Virginia USA. 
+
+
+### 1. Installation
+
+~~~
+root@iZ0xif3f3l5j6qwh8kapwsZ:~# mkdir mediamtx_v1.9.0
+root@iZ0xif3f3l5j6qwh8kapwsZ:~# cd mediamtx_v1.9.0/
+
+root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# wget https://github.com/bluenviron/mediamtx/releases/download/v1.9.0/mediamtx_v1.9.0_linux_amd64.tar.gz
+root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# tar -xzf mediamtx_v1.9.0_linux_amd64.tar.gz
+root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# ls -l
+total 44156
+-rw-r--r-- 1 root root     1062 Aug 26  2024 LICENSE
+-rwxr-xr-x 1 root root 29860595 Aug 26  2024 mediamtx
+-rw-r--r-- 1 root root 15317195 Aug 27  2024 mediamtx_v1.9.0_linux_amd64.tar.gz
+-rw-r--r-- 1 root root    28112 Aug 26  2024 mediamtx.yml
+~~~
+
+Start up `MediaMTX` using the executable file `mediamtx` for testing purpose.
+
+~~~
+root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# ./mediamtx
+2026/07/25 16:13:11 INF MediaMTX v1.9.0
+2026/07/25 16:13:11 INF configuration loaded from /root/mediamtx_v1.9.0/mediamtx.yml
+2026/07/25 16:13:11 INF [RTSP] listener opened on :8554 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2026/07/25 16:13:11 INF [RTMP] listener opened on :1935
+2026/07/25 16:13:11 INF [HLS] listener opened on :8888
+2026/07/25 16:13:11 INF [WebRTC] listener opened on :8889 (HTTP), :8189 (ICE/UDP)
+2026/07/25 16:13:11 INF [SRT] listener opened on :8890 (UDP)
+~~~
+
+&nbsp;
+### 2. System daemon service
+
+Register the MediaMTX as a new systemd service.
+
+~~~
+# 1. Reload systemd to recognize the new service:
+sudo systemctl daemon-reload
+
+# 2. Enable MediaMTX to start automatically on system boot:
+sudo systemctl enable mediamtx
+~~~
+
+Start, stop, restart, reload, status, journal log.
+
+~~~
+# 1. Start the service immediately:
+sudo systemctl start mediamtx
+
+# 2. Verify service status and logs
+sudo systemctl status mediamtx
+# (You should see an active (running) state in green).
+
+# 3. View live logs:
+journalctl -u mediamtx -f
+
+# 4. Stop service: 
+sudo systemctl stop mediamtx
+
+# 5. Restart service: 
+#    Reload configuration: If you update mediamtx.yml, simply run sudo systemctl restart mediamtx.
+sudo systemctl restart mediamtx
+~~~
+
+
+&nbsp;
+## 3.3. PostgreSQL Database
+
+&nbsp;
+## 3.4. FastAPI Backend
+
+The FastAPI backend is a planned component for server-side logic (e.g., mission persistence, telemetry ingestion, user accounts). It is not yet implemented.
+
+Planned deployment outline:
+
+```bash
+# 1. Install Python dependencies
+cd /home/robot/drone-navigation/server
+pip install -r requirements.txt
+
+# 2. Configure server/config.json from config.example.json
+
+# 3. Start the FastAPI server (adjust host/port as needed)
+# uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/Caddy/Caddyfile`](file:///home/robot/drone-navigation/deployment/Caddy/Caddyfile) so Caddy forwards API requests to the backend.
+
+
+&nbsp;
+## 3.5. Synapse Matrix
 
 Synapse Matrix integration is planned but not yet implemented. This section will document how to deploy and configure the Matrix homeserver once the integration is ready.
 

@@ -119,6 +119,12 @@ function noop() {}
 // the Viewer watches it in the right panel. Switching subpages only
 // re-attaches the already-live MediaStream — no second WHEP handshake.
 const STREAM_WHEP_URL = 'https://drone-navigation.com/live/ubuntu-webcam/whep';
+
+// Hard-coded stream identity for the TESTING phase, mirroring the
+// publisher's LIVESTREAM_HOSTNAME / LIVESTREAM_DESCRIPTION. Once the
+// FastAPI-users backend lands, these come from the user database instead.
+const LIVESTREAM_HOSTNAME = 'ubuntu-webcam';
+const LIVESTREAM_DESCRIPTION = "A webcam stream from Kan's Ubuntu desktop";
 const hostVideoEl = ref(null);
 const viewerVideoEl = ref(null);
 
@@ -478,11 +484,21 @@ onUnmounted(() => {
       <!-- Split-layout subpage (Livestream Viewer): two panels
            split by a vertical draggable divider; panel content comes later -->
       <div v-if="isSplitStyle" class="split-page">
-        <!-- Left panel (livestream list) -->
+        <!-- Left panel: stream identity (hard-coded for the testing
+             phase; will come from the FastAPI-users backend later) -->
         <aside
           class="split-sidebar"
           :style="{ flexBasis: leftWidthPct + '%' }"
-        />
+        >
+          <div class="stream-list">
+            <div class="stream-card">
+              <div class="stream-card__head">
+                <span class="stream-card__title">{{ LIVESTREAM_HOSTNAME }}</span>
+              </div>
+              <p class="stream-card__desc">{{ LIVESTREAM_DESCRIPTION }}</p>
+            </div>
+          </div>
+        </aside>
 
         <!-- Divider (draggable) -->
         <div
@@ -537,6 +553,44 @@ onUnmounted(() => {
   flex-direction: column;
   background: #f5f5f7;
   overflow-y: auto;
+}
+
+/* ─── Stream list (left panel content) ─── */
+.stream-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stream-card {
+  background: #ffffff;
+  border: 1px solid #e5e5ea;
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.stream-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stream-card__title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: #1c1c1e;
+  word-break: break-all;
+}
+
+.stream-card__desc {
+  margin: 6px 0 0;
+  font-weight: 300;
+  font-size: 0.8rem;
+  color: #8e8e93;
+  line-height: 1.4;
 }
 
 /* ─── Divider ─── */

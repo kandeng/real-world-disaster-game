@@ -63,6 +63,11 @@ class StreamMeta(BaseModel):
     model_config = {"extra": "allow"}  # publishers may add custom fields
 
 
+class StreamStatus(BaseModel):
+    stream_id: str
+    status: str  # "active" | "offline" — pushed by MediaMTX path hooks
+
+
 # In-memory registry — fine for a handful of drones; lost on restart, but
 # publishers re-announce every META heartbeat, so it heals within seconds.
 REGISTRY: dict[str, dict] = {}
@@ -92,6 +97,27 @@ async def upsert_stream(meta: StreamMeta, x_api_key: str | None = Header(default
     entry = meta.model_dump()
     entry["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     REGISTRY[meta.stream_id] = entry
+    return entry
+
+
+@app.post("/streams-meta/stream-status")
+async def stream_status(update: StreamStatus):
+    """Receive liveness pushed by MediaMTX (mediamtx.yml runOnReady /
+    runOnNotReady hooks POST {"stream_id": $MTX_PATH, "status": ...}).
+
+    Deliberately NO API key: the hook curls in mediamtx.yml carry no
+    secrets, and the worst a forger can do is flip a display flag. The
+    publisher upsert/delete routes above still require the key when
+    configured.
+    """
+    entry = REGISTRY.get(update.stream_id)
+    if entry is None:
+        # Hook fired before any publisher heartbeat — create a stub entry;
+        # the next heartbeat (<=30s) fills in the rich fields.
+        entry = {"stream_id": update.stream_id}
+        REGISTRY[update.stream_id] = entry
+    entry["status"] = update.status
+    entry["status_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return entry
 
 

@@ -1,41 +1,62 @@
 {
-    # Leaving auto_https enabled lets Caddy automatically fetch Let's Encrypt certificates.
+	# We remove 'auto_https off' so Caddy can automatically fetch certificates!
 }
 
-drone-navigation.com, www.drone-navigation.com {
-    # Serve the production build copied from client/dist
-    root * /var/www/drone-navigation/client/dist
+# 1. Direct Origin Domain (Public Let's Encrypt Cert + WebSocket Gateway)
+drone-navigation.com {
+    # Reverse Proxy for OpenClaw WebSocket Gateway
+    handle /ws* {
+	reverse_proxy 127.0.0.1:18789
+    }
 
-    # Static file serving
-    file_server
+# Sidecar Metadata Service (runs locally on Caddy's ECS server on port 8099)
+    handle_path /streams-meta/* {
+        reverse_proxy 127.0.0.1:8099 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
 
-    # gzip/brotli compression
-    encode gzip zstd
+    # MediaMTX Control API (proxied across ECS servers to 47.85.110.135)
+    handle_path /control-api/* {
+        reverse_proxy 47.85.110.135:9997 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
 
-    # ── Reverse proxies (API backends; everything else falls through to the SPA) ──
-    # handle_path strips the matched prefix before proxying — the equivalent
-    # of nginx `location /x/ { proxy_pass http://.../; }`. Plain `handle`
-    # keeps the prefix (Caddy's reverse_proxy preserves the URI by default).
-
-    # MediaMTX WebRTC signaling (WHIP/WHEP) + its built-in player pages:
-    #   /live/ubuntu-webcam/whep -> http://127.0.0.1:8889/ubuntu-webcam/whep
+    # Strip the '/live' prefix before sending the request to MediaMTX
     handle_path /live/* {
-        reverse_proxy 127.0.0.1:8889
+        reverse_proxy 47.85.110.135:8889 {
+            header_up Host {host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+
+            # Ensure internal MediaMTX redirects maintain the /live/ subpath
+            header_down Location ^/ /live/
+        }
     }
 
-    # MediaMTX control API (paths/sessions lists for the Viewer stream list):
-    #   /live-api/v3/paths/list -> http://127.0.0.1:9997/v3/paths/list
-    handle_path /live-api/* {
-        reverse_proxy 127.0.0.1:9997
+    # Serve Static Web App
+    handle {
+	root * /var/www/drone-navigation/client/dist
+	file_server
+	encode gzip zstd
+	try_files {path} /index.html
     }
+}
 
-    # Sidecar stream-metadata service (server/stream_meta.py; its routes
-    # already carry the /streams-meta prefix, so nothing is stripped here):
-    #   /streams-meta/ -> http://127.0.0.1:8099/streams-meta/
-    handle /streams-meta/* {
-        reverse_proxy 127.0.0.1:8099
-    }
+# 2. CDN Edge Domains (Serves HTTPS origin fetches using Caddy's internal TLS certificate)
+www.drone-navigation.com, cdn.drone-navigation.com {
+    tls internal
 
-    # SPA fallback: serve index.html for any client-side route (e.g., /mesh, /map)
+    root * /var/www/drone-navigation/client/dist
+    file_server
+    encode gzip zstd
     try_files {path} /index.html
 }
