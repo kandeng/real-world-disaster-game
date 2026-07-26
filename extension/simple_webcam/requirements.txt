@@ -1,0 +1,13 @@
+# WHIP webcam publisher dependencies (Python 3.12, see simple_webcam.py).
+#
+# Create and activate a virtual environment:
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#
+# Install / upgrade dependencies:
+#   pip install -r requirements.txt
+
+opencv-python
+aiortc
+av          # PyAV: imported directly (VideoFrame); also an aiortc dependency
+aiohttp

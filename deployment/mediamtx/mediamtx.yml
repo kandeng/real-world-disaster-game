@@ -495,9 +495,9 @@ pathDefaults:
   runOnDemandCloseAfter: 10s
   runOnUnDemand:
 
-  runOnReady: "curl -X POST https://drone-navigation.com/streams-meta/stream-status -H \"Content-Type: application/json\" -d \"{\\\"stream_id\\\":\\\"$MTX_PATH\\\", \\\"status\\\":\\\"active\\\"}\""
+  runOnReady:
   runOnReadyRestart: no
-  runOnNotReady: "curl -X POST https://drone-navigation.com/streams-meta/stream-status -H \"Content-Type: application/json\" -d \"{\\\"stream_id\\\":\\\"$MTX_PATH\\\", \\\"status\\\":\\\"offline\\\"}\""
+  runOnNotReady:
 
   runOnRead:
   runOnReadRestart: no

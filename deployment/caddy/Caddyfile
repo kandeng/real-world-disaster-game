@@ -9,16 +9,6 @@ drone-navigation.com {
 	reverse_proxy 127.0.0.1:18789
     }
 
-# Sidecar Metadata Service (runs locally on Caddy's ECS server on port 8099)
-    handle_path /streams-meta/* {
-        reverse_proxy 127.0.0.1:8099 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-        }
-    }
-
     # MediaMTX Control API (proxied across ECS servers to 47.85.110.135)
     handle_path /control-api/* {
         reverse_proxy 47.85.110.135:9997 {

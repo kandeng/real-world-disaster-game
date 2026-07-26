@@ -19,21 +19,6 @@ LIVESTREAM_DESCRIPTION = "A webcam stream from Kan's Ubuntu desktop"
 # MediaMTX control API (default port 9997). Proxied via Caddy /control-api or directly via ECS IP.
 MEDIAMTX_API_URL = "https://drone-navigation.com/control-api"
 
-# Sidecar metadata service (routed via Caddy to port 8099 on the web server).
-# DISABLED for the hard-coded testing phase: empty string => meta_heartbeat
-# and meta_deregister are no-ops. Re-enable with:
-# STREAM_META_URL = "https://drone-navigation.com/streams-meta/"
-STREAM_META_URL = ""
-STREAM_META_API_KEY = ""  # Matches server config if authorization key is enabled
-
-STREAM_META = {
-    "title": "Ubuntu Webcam",
-    "description": LIVESTREAM_DESCRIPTION,
-    "device": "/dev/video0",
-    "location": "Office",
-}
-META_INTERVAL = 30  # seconds between metadata heartbeats
-
 STUN_SERVER = "stun:stun.l.google.com:19302"
 MONITOR_INTERVAL = 10  # seconds between stats / viewer log lines
 
@@ -170,65 +155,12 @@ async def monitor(pc, api_base, path_name, interval=MONITOR_INTERVAL):
                     api_ok = False
 
 
-async def meta_heartbeat(payload, interval=META_INTERVAL):
-    """Periodic metadata upsert to sidecar service."""
-    if not STREAM_META_URL:
-        return
-    meta_ok = True
-    headers = {"X-API-Key": STREAM_META_API_KEY} if STREAM_META_API_KEY else {}
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                async with session.post(
-                    STREAM_META_URL, json=payload, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    if resp.status not in (200, 201):
-                        raise Exception(f"HTTP {resp.status}")
-                    if not meta_ok:
-                        log("META", "Metadata service reachable again.")
-                        meta_ok = True
-            except Exception as e:
-                if meta_ok:
-                    log("META", f"Metadata service unreachable ({e}); "
-                                "metadata updates muted until it recovers.")
-                    meta_ok = False
-            await asyncio.sleep(interval)
-
-
-async def meta_deregister(stream_id):
-    """Remove stream entry from metadata service upon shutdown."""
-    if not STREAM_META_URL:
-        return
-    headers = {"X-API-Key": STREAM_META_API_KEY} if STREAM_META_API_KEY else {}
-    base_url = STREAM_META_URL.rsplit('/', 1)[0]
-    url = f"{base_url}/{stream_id}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.delete(url, headers=headers,
-                                      timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    log("META", "Stream metadata deregistered.")
-    except Exception:
-        pass
-
-
 async def run_whip_publisher(server_url, stream_id):
     whip_endpoint = f"{server_url}/{stream_id}/whip"
     path_name = stream_path_name(server_url, stream_id)
 
     log("INIT", f"Stream ID: '{stream_id}' (MediaMTX path: '{path_name}')")
     log("INIT", f"WHIP endpoint: {whip_endpoint}")
-
-    # Build payload with hostname, description, and custom stream details
-    meta_payload = {
-        "stream_id": stream_id,
-        "hostname": LIVESTREAM_HOSTNAME,
-        "description": LIVESTREAM_DESCRIPTION,
-        "status": "online",
-        "updated_at": time.time(),
-        **STREAM_META
-    }
 
     # Resolve target host
     host = urlparse(server_url).hostname
@@ -259,10 +191,6 @@ async def run_whip_publisher(server_url, stream_id):
             h = int(video_track.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             pc.addTrack(video_track)
             log("INIT", f"Webcam opened: {w}x{h}")
-            meta_payload["resolution"] = f"{w}x{h}"
-            fps = video_track.cap.get(cv2.CAP_PROP_FPS)
-            if fps > 0:
-                meta_payload["fps"] = round(fps, 1)
         else:
             log("INIT", "WARNING: Webcam device 0 failed to open. Streaming without video.")
     except Exception as e:
@@ -321,7 +249,6 @@ async def run_whip_publisher(server_url, stream_id):
     log("LIVE", f"STREAM LIVE. Stream ID: '{stream_id}'")
 
     monitor_task = asyncio.create_task(monitor(pc, MEDIAMTX_API_URL, path_name))
-    meta_task = asyncio.create_task(meta_heartbeat(meta_payload))
 
     try:
         while True:
@@ -330,7 +257,6 @@ async def run_whip_publisher(server_url, stream_id):
         pass
     finally:
         monitor_task.cancel()
-        meta_task.cancel()
         await pc.close()
 
         if video_track and hasattr(video_track, "cap") and video_track.cap.isOpened():
@@ -341,7 +267,6 @@ async def run_whip_publisher(server_url, stream_id):
             player.stop()
             log("CLEANUP", "Audio player stopped.")
 
-        await meta_deregister(stream_id)
         log("LIVE", "Stream shutdown complete.")
 
 
