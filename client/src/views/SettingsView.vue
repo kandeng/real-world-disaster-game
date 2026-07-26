@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, h, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
@@ -9,6 +10,7 @@ import DockMenuButton from '@shared/DockMenuButton.vue';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 
 const { t, locale } = useI18n();
+const router = useRouter();
 const { leftItems, registerLeft, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 const { httpProxy, httpsProxy, noProxy } = useProxyConfig();
@@ -86,10 +88,9 @@ onMounted(() => {
   registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
   registerPage({ id: 'map', nameKey: 'aerialview.page_map', route: '/map' });
   registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'settings', nameKey: 'aerialview.page_settings', route: '/settings' });
+  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
+  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
 
   registerLeft({
     id: 'router',
@@ -98,6 +99,30 @@ onMounted(() => {
       titleKey: 'aerialview.pages',
       pages,
     }),
+  });
+
+  // Same My Space dock group as MySpaceView (Pages -> Account -> Wallet ->
+  // Content -> Settings) so the sidebar stays consistent; Account/Wallet/
+  // Content deep-link into the matching My Space subpage, Settings is the
+  // current page (highlighted, no action).
+  const MYSPACE_SUBPAGES = [
+    { id: 'account', icon: 'MENU_ACCOUNT', labelKey: 'aerialview.subpage_account' },
+    { id: 'wallet', icon: 'MENU_WALLET', labelKey: 'aerialview.subpage_wallet' },
+    { id: 'content', icon: 'MENU_CONTENT', labelKey: 'aerialview.subpage_content' },
+  ];
+  for (const sub of MYSPACE_SUBPAGES) {
+    registerLeft({
+      id: `subpage_${sub.id}`,
+      icon: sub.icon,
+      titleKey: sub.labelKey,
+      onClick: () => { router.push(`/myspace?sub=${sub.id}`); },
+    });
+  }
+  registerLeft({
+    id: 'subpage_settings',
+    icon: 'MENU_TOOL',
+    titleKey: 'aerialview.subpage_settings',
+    active: true,
   });
 });
 
@@ -109,7 +134,6 @@ onUnmounted(() => {
   unregisterPage('myspace');
   unregisterPage('chat');
   unregisterPage('extensions');
-  unregisterPage('settings');
 });
 </script>
 
@@ -149,6 +173,9 @@ onUnmounted(() => {
 
         <!-- Right content area -->
         <div class="settings-content">
+          <!-- Breadcrumb (this page lives under My Space now) -->
+          <div class="settings-breadcrumb">{{ t('aerialview.page_myspace') }} &gt; {{ t('aerialview.subpage_settings') }}</div>
+
           <!-- Language -->
           <div v-if="selectedId === 'language'" class="settings-section">
             <h2 class="settings-section__title">{{ t('aerialview.settings_language') }}</h2>
@@ -444,6 +471,13 @@ onUnmounted(() => {
   padding: 24px 32px;
   overflow-y: auto;
   background: #ffffff;
+}
+
+.settings-breadcrumb {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #6e6e73;
+  margin-bottom: 16px;
 }
 
 .settings-section {

@@ -6,6 +6,23 @@ const DEFAULT_SESSION_KEY = 'agent:main:main';
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 
+// config.json is bundled at build time (static JSON import), so its URL is
+// only correct for the machine the build was made on. Resolve at runtime:
+//   1. An explicitly configured non-loopback URL always wins (custom gateway).
+//   2. Pages served over HTTPS must use wss:// (browsers block ws:// as mixed
+//      content), and 127.0.0.1 in a visitor's browser means THEIR machine —
+//      so go through Caddy's /ws reverse proxy on the same origin instead.
+//   3. Otherwise (local dev) keep the loopback gateway on this machine.
+function resolveGatewayUrl() {
+  const configured = config.openclaw?.url || '';
+  const isLoopback = /^wss?:\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(configured);
+  if (configured && !isLoopback) return configured;
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+    return `wss://${window.location.host}/ws`;
+  }
+  return configured || DEFAULT_URL;
+}
+
 function generateId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -63,7 +80,7 @@ export function useOpenClaw() {
 
   const isConnected = computed(() => status.value === 'connected');
 
-  const gatewayUrl = config.openclaw?.url || DEFAULT_URL;
+  const gatewayUrl = resolveGatewayUrl();
   const gatewayToken = config.openclaw?.token || '';
 
   function appendMessage(message) {

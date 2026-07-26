@@ -5,7 +5,10 @@
 # 1. Direct Origin Domain (Public Let's Encrypt Cert + WebSocket Gateway)
 drone-navigation.com {
     # Reverse Proxy for OpenClaw WebSocket Gateway
+    # (plain `handle` keeps the path; the gateway expects its WS endpoint at
+    # the root, so rewrite /ws -> / before proxying)
     handle /ws* {
+	rewrite * /
 	reverse_proxy 127.0.0.1:18789
     }
 
@@ -45,8 +48,20 @@ drone-navigation.com {
 www.drone-navigation.com, cdn.drone-navigation.com {
     tls internal
 
-    root * /var/www/drone-navigation/client/dist
-    file_server
-    encode gzip zstd
-    try_files {path} /index.html
+    # OpenClaw WebSocket gateway (identical to the apex block; the CDN in
+    # front must also forward WS upgrades for this to work end-to-end)
+    handle /ws* {
+	rewrite * /
+	reverse_proxy 127.0.0.1:18789
+    }
+
+    # Static Web App — MUST stay inside a catch-all handle{} block: a
+    # top-level try_files runs before `handle` matching and would rewrite
+    # /ws to /index.html, breaking the WebSocket proxy.
+    handle {
+	root * /var/www/drone-navigation/client/dist
+	file_server
+	encode gzip zstd
+	try_files {path} /index.html
+    }
 }

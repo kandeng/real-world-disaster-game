@@ -43,6 +43,9 @@ export const IconMap = {
   MENU_LIVESTREAM_VIEWER: '../../icons/livestream_viewer.svg',
   MENU_LIVESTREAM_HOST: '../../icons/livestream_host.svg',
   MENU_WINDOW_SIZE: '../../icons/window_size.svg',
+  MENU_ACCOUNT: '../../icons/account.svg',
+  MENU_WALLET: '../../icons/wallet.svg',
+  MENU_CONTENT: '../../icons/content.svg',
   // Legacy alias, kept for backward compatibility
   MENU_GAMEPAD: '../../icons/control-stick.svg',
 
