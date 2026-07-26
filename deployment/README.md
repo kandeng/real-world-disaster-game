@@ -114,31 +114,35 @@ If the GPG key download fails due to DNS or network issues, check `/etc/resolv.c
 Build the Vue frontend and deploy it behind Caddy.
 
 ```bash
-# 1. Clone the repository
+# 1. Download the entire repository
 cd ~
 git clone https://github.com/kandeng/drone-navigation.git
 cd drone-navigation/client/
 
-# 2. Install dependencies and build the production bundle
+# 2. Fetch latest code + merge into your local branch
+cd ~/drone-navigation
+git pull
+
+# 3. Install dependencies and build the production bundle
 npm install -g npm@11.12.1    # (Optional) Upgrade npm if needed
 npm install
 
-# 3. Configure API keys
+# 4. Configure API keys
 # Edit client/config.json with your Google Maps API key and Cesium Ion token.
 vim config.json
 
-# 4. Populate the video clips for splashing.
+# 5. Populate the video clips for splashing.
 cp ~/drone-navigation/client/assets/media/*.mp4 ~/drone-navigation/client/public/splash/.
 rm ~/drone-navigation/client/public/splash/drone_earth*.mp4
 
-# 5. Re-build after configuration changes
+# 6. Re-build after configuration changes
 npm run build
 
-# 6. Create the web root directory and copy the built assets
+# 7. Create the web root directory and copy the built assets
 sudo mkdir -p /var/www/drone-navigation/client/dist
 sudo cp -r ~/drone-navigation/client/dist/* /var/www/drone-navigation/client/dist/
 
-# 7. Deploy the runtime config.json (this file is gitignored and must be copied manually)
+# 8. Deploy the runtime config.json (this file is gitignored and must be copied manually)
 sudo cp ~/drone-navigation/client/config.json /var/www/drone-navigation/client/dist/config.json
 ```
 
