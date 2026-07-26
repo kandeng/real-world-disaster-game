@@ -8,64 +8,94 @@
 
 # 1. Direct Origin Domain (Public Let's Encrypt Cert + WebSocket Gateway)
 drone-navigation.com {
-    # Reverse Proxy for OpenClaw WebSocket Gateway
-    # (plain `handle` keeps the path; the gateway expects its WS endpoint at
-    # the root, so rewrite /ws -> / before proxying)
-    handle /ws* {
-	rewrite * /
-	reverse_proxy 127.0.0.1:18789
-    }
+	# Reverse Proxy for OpenClaw WebSocket Gateway
+	# (plain `handle` keeps the path; the gateway expects its WS endpoint at
+	# the root, so rewrite /ws -> / before proxying)
+	handle /ws* {
+		rewrite * /
+		reverse_proxy 127.0.0.1:18789 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto https
 
-    # MediaMTX Control API (proxied across ECS servers to 47.85.110.135)
-    handle_path /control-api/* {
-        reverse_proxy 47.85.110.135:9997 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
-        }
-    }
+			# Mandatory WebSocket upgrade headers
+			header_up Connection {>Connection}
+			header_up Upgrade {>Upgrade}
 
-    # Strip the '/live' prefix before sending the request to MediaMTX
-    handle_path /live/* {
-        reverse_proxy 47.85.110.135:8889 {
-            header_up Host {host}
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-For {remote_host}
-            header_up X-Forwarded-Proto {scheme}
+			# Infinite timeout for long-lived WS connections
+			transport http {
+				read_timeout 0
+				write_timeout 0
+			}
+		}
+	}
 
-            # Ensure internal MediaMTX redirects maintain the /live/ subpath
-            header_down Location ^/ /live/
-        }
-    }
+	# MediaMTX Control API (proxied across ECS servers to 47.85.110.135)
+	handle_path /control-api/* {
+		reverse_proxy 47.85.110.135:9997 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
 
-    # Serve Static Web App
-    handle {
-	root * /var/www/drone-navigation/client/dist
-	file_server
-	encode gzip zstd
-	try_files {path} /index.html
-    }
+	# Strip the '/live' prefix before sending the request to MediaMTX
+	handle_path /live/* {
+		reverse_proxy 47.85.110.135:8889 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+
+			# Ensure internal MediaMTX redirects maintain the /live/ subpath
+			header_down Location ^/ /live/
+		}
+	}
+
+	# Serve Static Web App
+	handle {
+		root * /var/www/drone-navigation/client/dist
+		file_server
+		encode gzip zstd
+		try_files {path} /index.html
+	}
 }
 
 # 2. CDN Edge Domains (Serves HTTPS origin fetches using Caddy's internal TLS certificate)
 www.drone-navigation.com, cdn.drone-navigation.com {
-    tls internal
+	tls internal
 
-    # OpenClaw WebSocket gateway (identical to the apex block; the CDN in
-    # front must also forward WS upgrades for this to work end-to-end)
-    handle /ws* {
-	rewrite * /
-	reverse_proxy 127.0.0.1:18789
-    }
+	# OpenClaw WebSocket gateway (identical to the apex block; the CDN in
+	# front must also forward WS upgrades for this to work end-to-end)
+	handle /ws* {
+		rewrite * /
+		reverse_proxy 127.0.0.1:18789 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-Proto https
 
-    # Static Web App — MUST stay inside a catch-all handle{} block: a
-    # top-level try_files runs before `handle` matching and would rewrite
-    # /ws to /index.html, breaking the WebSocket proxy.
-    handle {
-	root * /var/www/drone-navigation/client/dist
-	file_server
-	encode gzip zstd
-	try_files {path} /index.html
-    }
+			# Mandatory WebSocket upgrade headers
+			header_up Connection {>Connection}
+			header_up Upgrade {>Upgrade}
+
+			# Infinite timeout for long-lived WS connections
+			transport http {
+				read_timeout 0
+				write_timeout 0
+			}
+		}
+	}
+
+	# Static Web App — MUST stay inside a catch-all handle{} block: a
+	# top-level try_files runs before `handle` matching and would rewrite
+	# /ws to /index.html, breaking the WebSocket proxy.
+	handle {
+		root * /var/www/drone-navigation/client/dist
+		file_server
+		encode gzip zstd
+		try_files {path} /index.html
+	}
 }
