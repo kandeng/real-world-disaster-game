@@ -78,6 +78,13 @@ function handleItemClick(item) {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* Span the full dock height so that views can register invisible
+     flex-spacer items (render: () => h('div', { style: 'flex: 1 1 auto' }))
+     to pin trailing items (e.g. the volume pill) to the very bottom.
+     justify-content: center keeps the classic centered look for pages
+     that register no spacers — a no-op when spacers absorb the space. */
+  height: 100%;
+  justify-content: center;
 }
 
 @media (max-width: 768px) {

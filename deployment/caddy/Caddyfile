@@ -12,6 +12,30 @@ drone-navigation.com, www.drone-navigation.com {
     # gzip/brotli compression
     encode gzip zstd
 
+    # ── Reverse proxies (API backends; everything else falls through to the SPA) ──
+    # handle_path strips the matched prefix before proxying — the equivalent
+    # of nginx `location /x/ { proxy_pass http://.../; }`. Plain `handle`
+    # keeps the prefix (Caddy's reverse_proxy preserves the URI by default).
+
+    # MediaMTX WebRTC signaling (WHIP/WHEP) + its built-in player pages:
+    #   /live/ubuntu-webcam/whep -> http://127.0.0.1:8889/ubuntu-webcam/whep
+    handle_path /live/* {
+        reverse_proxy 127.0.0.1:8889
+    }
+
+    # MediaMTX control API (paths/sessions lists for the Viewer stream list):
+    #   /live-api/v3/paths/list -> http://127.0.0.1:9997/v3/paths/list
+    handle_path /live-api/* {
+        reverse_proxy 127.0.0.1:9997
+    }
+
+    # Sidecar stream-metadata service (server/stream_meta.py; its routes
+    # already carry the /streams-meta prefix, so nothing is stripped here):
+    #   /streams-meta/ -> http://127.0.0.1:8099/streams-meta/
+    handle /streams-meta/* {
+        reverse_proxy 127.0.0.1:8099
+    }
+
     # SPA fallback: serve index.html for any client-side route (e.g., /mesh, /map)
     try_files {path} /index.html
 }

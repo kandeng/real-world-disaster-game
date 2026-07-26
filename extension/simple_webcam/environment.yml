@@ -1,0 +1,23 @@
+# Simply check its grammar.
+# python -c "import yaml; yaml.safe_load(open('environment.yml')); print('✅ YAML Syntax is Valid!')"
+
+# Create and activate `drone-navigation`:
+# conda env create -f environment.yml --dry-run  
+# conda env create -f environment.yml
+# conda activate drone-navigation
+# conda deactivate
+
+# Install dependencies:
+# conda env update --file environment.yml --prune
+
+name: drone-navigation
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.12.13
+  - pip
+  - pip:
+      - opencv-python
+      - aiortc
+      - aiohttp
