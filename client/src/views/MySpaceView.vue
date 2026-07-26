@@ -177,6 +177,7 @@ onUnmounted(() => {
     :right-items="[]"
     :show-flight="false"
     :show-camera="false"
+    :show-hud="false"
     :flight="{ mode: '-', vx: 0, vy: 0, yaw: 0, vz: 0 }"
     :camera="{ mode: '-', yaw: 0, pitch: 0, roll: 0 }"
   >

@@ -1,5 +1,9 @@
 {
 	# We remove 'auto_https off' so Caddy can automatically fetch certificates!
+	# The CDN edge domains use `tls internal`; never try to install the local
+	# root CA into the OS trust store (the caddy service user has no sudo,
+	# and the CDN does its own origin verification anyway).
+	skip_install_trust
 }
 
 # 1. Direct Origin Domain (Public Let's Encrypt Cert + WebSocket Gateway)
