@@ -121,7 +121,7 @@ cd drone-navigation/client/
 
 # 2. Fetch latest code + merge into your local branch
 cd ~/drone-navigation
-git pull
+git pull origin main
 
 # 3. Install dependencies and build the production bundle
 npm install -g npm@11.12.1    # (Optional) Upgrade npm if needed
