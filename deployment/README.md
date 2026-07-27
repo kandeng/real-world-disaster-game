@@ -165,7 +165,7 @@ sudo journalctl -u caddy -f
 
 Create or edit `/etc/caddy/Caddyfile` to serve the built frontend. Caddy will automatically provision and renew HTTPS certificates for the listed domains.
 
-See [`deployment/caddy/Caddyfile`](file:///home/robot/drone-navigation/deployment/caddy/Caddyfile) for the full configuration.
+See [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) for the full configuration.
 
 After editing:
 
@@ -216,7 +216,7 @@ sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
 
 Edit `/etc/squid/squid.conf` to enable an authenticated HTTPS proxy on port `3128`.
 
-See [`deployment/squid/squid.conf`](file:///home/robot/drone-navigation/deployment/squid/squid.conf) for the full configuration.
+See [`deployment/squid/squid.conf`](./squid/squid.conf) for the full configuration.
 
 After editing, validate and restart Squid:
 
@@ -326,7 +326,7 @@ These values are used in the OpenClaw configuration file at `~/.openclaw/opencla
 &nbsp;
 ### 2. openclaw.json
 
-For a full example of the `openclaw.json` configuration, see [`openclaw/openclaw.json`](./openclaw/openclaw.json).
+See [`deployment/openclaw/openclaw.json`](./openclaw/openclaw.json) for the full configuration.
 
 &nbsp;
 ### 3. Restart OpenClaw from Scratch
@@ -403,7 +403,12 @@ root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# ./mediamtx
 ~~~
 
 &nbsp;
-### 2. System daemon service
+### 2. Configuration
+
+See [`deployment/mediamtx/mediamtx.yml`](./mediamtx/mediamtx.yml) for the full configuration.
+
+&nbsp;
+### 3. System daemon service
 
 Register the MediaMTX as a new systemd service.
 
@@ -458,7 +463,7 @@ pip install -r requirements.txt
 # uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/Caddy/Caddyfile`](file:///home/robot/drone-navigation/deployment/Caddy/Caddyfile) so Caddy forwards API requests to the backend.
+Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) so Caddy forwards API requests to the backend.
 
 
 &nbsp;
