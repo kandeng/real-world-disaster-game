@@ -56,6 +56,22 @@ const routes = [
     component: MySpaceView,
   },
   {
+    // Auth flow action pages (email links + Google OAuth landing)
+    path: '/verify-email',
+    name: 'VerifyEmail',
+    component: () => import('@/views/VerifyEmailView.vue'),
+  },
+  {
+    path: '/reset-password',
+    name: 'ResetPassword',
+    component: () => import('@/views/ResetPasswordView.vue'),
+  },
+  {
+    path: '/auth/callback',
+    name: 'AuthCallback',
+    component: () => import('@/views/AuthCallbackView.vue'),
+  },
+  {
     path: '/extensions',
     name: 'Extensions',
     component: ExtensionsView,

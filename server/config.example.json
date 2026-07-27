@@ -1,0 +1,21 @@
+{
+  "secret": "CHANGE_ME_long_random_string_for_jwt_and_tokens",
+  "database_url": "postgresql+asyncpg://DB_USER:DB_PASSWORD@127.0.0.1:5432/drone_navigation",
+  "frontend_base_url": "http://localhost:5173",
+  "cors_origins": ["http://localhost:5173"],
+  "jwt_lifetime_seconds": 86400,
+  "smtp": {
+    "host": "smtp.example.com",
+    "port": 587,
+    "username": "no-reply@drone-navigation.com",
+    "password": "CHANGE_ME",
+    "from": "Drone Navigation <no-reply@drone-navigation.com>",
+    "start_tls": true
+  },
+  "oauth": {
+    "google": {
+      "client_id": "CHANGE_ME.apps.googleusercontent.com",
+      "client_secret": "CHANGE_ME"
+    }
+  }
+}

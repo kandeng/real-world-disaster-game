@@ -6,6 +6,7 @@ import ViewComposer from '@shared/_ViewComposer.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
+import AccountLoginPanel from '@/views/AccountLoginPanel.vue';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -213,8 +214,12 @@ onUnmounted(() => {
           <!-- Separator -->
           <div class="myspace-separator" />
 
-          <!-- Subpage body (empty until the account backend lands) -->
-          <div class="myspace-body" />
+          <!-- Subpage body (Account -> Login is live; others land later) -->
+          <div class="myspace-body">
+            <AccountLoginPanel
+              v-if="activeSubpage === 'account' && selectedMenuId === 'login'"
+            />
+          </div>
         </div>
       </div>
     </template>
