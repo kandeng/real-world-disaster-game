@@ -130,6 +130,10 @@ onMounted(() => {
   registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
   registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
 
+  // Invisible flex spacers: the top/bottom pair splits the free space
+  // equally, so the 5 navigation buttons stay vertically CENTERED while
+  // the Save button (registered last) is pinned to the very bottom.
+  registerLeft({ id: 'dock_spacer_top', render: () => h('div', { style: 'flex: 1 1 auto' }) });
   registerLeft({
     id: 'router',
     render: () => h(DockMenuButton, {
@@ -156,6 +160,17 @@ onMounted(() => {
     icon: 'MENU_TOOL',
     titleKey: 'aerialview.subpage_settings',
     onClick: () => { router.push('/settings'); },
+  });
+
+  // Save button pinned to the VERY BOTTOM of the left dock: the invisible
+  // flex spacer absorbs the free space above it (same trick as the
+  // RealDroneView volume pill). Action is a testing-phase stub for now.
+  registerLeft({ id: 'dock_spacer_bottom', render: () => h('div', { style: 'flex: 1 1 auto' }) });
+  registerLeft({
+    id: 'save',
+    icon: 'MENU_SAVE',
+    titleKey: 'aerialview.save',
+    onClick: () => { console.debug('[MySpace] Save clicked (action TBD)'); },
   });
 
   applyQueryParams();

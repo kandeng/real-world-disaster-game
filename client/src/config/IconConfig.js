@@ -46,6 +46,7 @@ export const IconMap = {
   MENU_ACCOUNT: '../../icons/account.svg',
   MENU_WALLET: '../../icons/wallet.svg',
   MENU_CONTENT: '../../icons/content.svg',
+  MENU_SAVE: '../../icons/save.svg',
   // Legacy alias, kept for backward compatibility
   MENU_GAMEPAD: '../../icons/control-stick.svg',
 
