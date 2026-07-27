@@ -4,6 +4,14 @@
 	# root CA into the OS trust store (the caddy service user has no sudo,
 	# and the CDN does its own origin verification anyway).
 	skip_install_trust
+
+	# Enables verbose DEBUG logging
+	# debug
+
+	# Restrict Caddy to only offer HTTP/1.1 during TLS negotiation (Port 443)
+	servers {
+		protocols h1
+	}
 }
 
 # 1. Direct Origin Domain (Public Let's Encrypt Cert + WebSocket Gateway)
@@ -12,7 +20,7 @@ drone-navigation.com {
 	# (plain `handle` keeps the path; the gateway expects its WS endpoint at
 	# the root, so rewrite /ws -> / before proxying)
 	handle /ws* {
-		rewrite * /
+		# rewrite * /
 		reverse_proxy 127.0.0.1:18789 {
 			header_up Host {host}
 			header_up X-Real-IP {remote_host}
@@ -20,8 +28,8 @@ drone-navigation.com {
 			header_up X-Forwarded-Proto https
 
 			# Mandatory WebSocket upgrade headers
-			header_up Connection {>Connection}
-			header_up Upgrade {>Upgrade}
+			# header_up Connection {>Connection}
+			# header_up Upgrade {>Upgrade}
 
 			# Infinite timeout for long-lived WS connections
 			transport http {
@@ -69,8 +77,8 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 
 	# OpenClaw WebSocket gateway (identical to the apex block; the CDN in
 	# front must also forward WS upgrades for this to work end-to-end)
-	handle /ws* {
-		rewrite * /
+	handle_path /ws* {
+		# rewrite * /
 		reverse_proxy 127.0.0.1:18789 {
 			header_up Host {host}
 			header_up X-Real-IP {remote_host}
@@ -78,8 +86,8 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 			header_up X-Forwarded-Proto https
 
 			# Mandatory WebSocket upgrade headers
-			header_up Connection {>Connection}
-			header_up Upgrade {>Upgrade}
+			# header_up Connection {>Connection}
+			# header_up Upgrade {>Upgrade}
 
 			# Infinite timeout for long-lived WS connections
 			transport http {
