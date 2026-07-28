@@ -5,6 +5,8 @@
   "email_placeholder": "you{'@'}example.com",
   "password": "密码",
   "password_placeholder": "请输入密码",
+    "password_show": "显示密码",
+    "password_hide": "隐藏密码",
   "new_password_placeholder": "新密码",
   "display_name": "昵称",
   "display_name_placeholder": "例如：Maverick",

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAuth } from '@shared-composables/useAuth.js';
+import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 
 const { t } = useI18n();
 const {
@@ -21,6 +22,8 @@ const email = ref('');
 const password = ref('');
 const confirmPassword = ref('');
 const displayName = ref('');
+const showPassword = ref(false);
+const showConfirmPassword = ref(false);
 const busy = ref(false);
 const errorKey = ref('');
 const noticeKey = ref('');
@@ -172,7 +175,24 @@ async function submitLogout() {
         <label class="auth-label">{{ t('authflow.email') }}</label>
         <input v-model="email" type="email" required class="auth-input" :placeholder="t('authflow.email_placeholder')" />
         <label class="auth-label">{{ t('authflow.password') }}</label>
-        <input v-model="password" type="password" required class="auth-input" :placeholder="t('authflow.password_placeholder')" />
+        <div class="auth-password">
+          <input
+            v-model="password"
+            :type="showPassword ? 'text' : 'password'"
+            required
+            class="auth-input auth-input--password"
+            :placeholder="t('authflow.password_placeholder')"
+          />
+          <button
+            type="button"
+            class="auth-password__toggle"
+            :title="t(showPassword ? 'authflow.password_hide' : 'authflow.password_show')"
+            :aria-label="t(showPassword ? 'authflow.password_hide' : 'authflow.password_show')"
+            @click="showPassword = !showPassword"
+          >
+            <ConfigurableIcon :name="showPassword ? 'PASSWORD_SHOW' : 'PASSWORD_HIDE'" :size="20" />
+          </button>
+        </div>
         <button type="submit" class="auth-button" :disabled="busy">
           {{ busy ? t('authflow.busy') : t('authflow.submit_login') }}
         </button>
@@ -188,9 +208,43 @@ async function submitLogout() {
         <label class="auth-label">{{ t('authflow.email') }}</label>
         <input v-model="email" type="email" required class="auth-input" :placeholder="t('authflow.email_placeholder')" />
         <label class="auth-label">{{ t('authflow.password') }}</label>
-        <input v-model="password" type="password" required class="auth-input" :placeholder="t('authflow.password_placeholder')" />
+        <div class="auth-password">
+          <input
+            v-model="password"
+            :type="showPassword ? 'text' : 'password'"
+            required
+            class="auth-input auth-input--password"
+            :placeholder="t('authflow.password_placeholder')"
+          />
+          <button
+            type="button"
+            class="auth-password__toggle"
+            :title="t(showPassword ? 'authflow.password_hide' : 'authflow.password_show')"
+            :aria-label="t(showPassword ? 'authflow.password_hide' : 'authflow.password_show')"
+            @click="showPassword = !showPassword"
+          >
+            <ConfigurableIcon :name="showPassword ? 'PASSWORD_SHOW' : 'PASSWORD_HIDE'" :size="20" />
+          </button>
+        </div>
         <label class="auth-label">{{ t('authflow.confirm_password') }}</label>
-        <input v-model="confirmPassword" type="password" required class="auth-input" :placeholder="t('authflow.confirm_password_placeholder')" />
+        <div class="auth-password">
+          <input
+            v-model="confirmPassword"
+            :type="showConfirmPassword ? 'text' : 'password'"
+            required
+            class="auth-input auth-input--password"
+            :placeholder="t('authflow.confirm_password_placeholder')"
+          />
+          <button
+            type="button"
+            class="auth-password__toggle"
+            :title="t(showConfirmPassword ? 'authflow.password_hide' : 'authflow.password_show')"
+            :aria-label="t(showConfirmPassword ? 'authflow.password_hide' : 'authflow.password_show')"
+            @click="showConfirmPassword = !showConfirmPassword"
+          >
+            <ConfigurableIcon :name="showConfirmPassword ? 'PASSWORD_SHOW' : 'PASSWORD_HIDE'" :size="20" />
+          </button>
+        </div>
         <button type="submit" class="auth-button" :disabled="busy">
           {{ busy ? t('authflow.busy') : t('authflow.submit_register') }}
         </button>
@@ -340,6 +394,41 @@ async function submitLogout() {
 .auth-input:focus {
   border-color: #007aff;
   box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+}
+
+/* Password visibility toggle */
+.auth-password {
+  position: relative;
+  display: flex;
+}
+
+.auth-input--password {
+  width: 100%;
+  padding-right: 40px;
+}
+
+.auth-password__toggle {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: #6e6e73;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.auth-password__toggle:hover {
+  color: #1d1d1f;
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .auth-button {

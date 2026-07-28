@@ -47,6 +47,10 @@ export const IconMap = {
   MENU_WALLET: '../../icons/wallet.svg',
   MENU_CONTENT: '../../icons/content.svg',
   MENU_SAVE: '../../icons/save.svg',
+
+  // Auth form icons (password visibility toggle)
+  PASSWORD_SHOW: '../../icons/view.svg',
+  PASSWORD_HIDE: '../../icons/hide.svg',
   // Legacy alias, kept for backward compatibility
   MENU_GAMEPAD: '../../icons/control-stick.svg',
 

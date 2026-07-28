@@ -5,6 +5,8 @@
   "email_placeholder": "you{'@'}example.com",
   "password": "Password",
   "password_placeholder": "Your password",
+    "password_show": "Show password",
+    "password_hide": "Hide password",
   "new_password_placeholder": "New password",
   "display_name": "Display Name",
   "display_name_placeholder": "e.g. Maverick",
