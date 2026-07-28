@@ -9,6 +9,7 @@ import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
+import { useStreamConfig } from '@shared-composables/useStreamConfig.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 
 const { t } = useI18n();
@@ -118,7 +119,11 @@ function noop() {}
 // ONE shared connection for both subpages: the Host monitors it fullscreen,
 // the Viewer watches it in the right panel. Switching subpages only
 // re-attaches the already-live MediaStream — no second WHEP handshake.
-const STREAM_WHEP_URL = 'https://drone-navigation.com/live/ubuntu-webcam/whep';
+// WHEP URL comes from the backend's /api/stream/config (server/config.json
+// "mediamtx" section): the desktop MediaMTX in local dev, the ECS MediaMTX
+// in production. Passed to the player as a getter so it is resolved at
+// every start()/retry — the async config fetch needs no await here.
+const { whepUrl: streamWhepUrl } = useStreamConfig();
 
 // Hard-coded stream identity for the TESTING phase, mirroring the
 // publisher's LIVESTREAM_HOSTNAME / LIVESTREAM_DESCRIPTION. Once the
@@ -147,7 +152,7 @@ function onLiveProgress(phase) {
 }
 
 const livePlayer = createWhepPlayer({
-  url: STREAM_WHEP_URL,
+  url: () => streamWhepUrl.value,
   logTag: 'live',
   onProgress: onLiveProgress,
 });

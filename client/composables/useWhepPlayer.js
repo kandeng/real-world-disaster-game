@@ -9,6 +9,8 @@
 //
 // Usage:
 //   const player = createWhepPlayer({ url, logTag: 'live', onProgress });
+//   `url` may be a string or a zero-arg getter (resolved at every start /
+//   retry, so late-arriving runtime config still takes effect).
 //   player.start();            // POSTs the SDP offer, retries on failure
 //   player.attach(videoEl);    // render the stream on this element
 //   player.attach(otherEl);    // re-render elsewhere (instant, no handshake)
@@ -45,6 +47,9 @@ export function createWhepPlayer({
   let active = false;
   let attachedEl = null;
   let attempt = 0; // handshake attempt counter (reset by stop())
+
+  // String or getter — resolved at each start()/retry attempt.
+  const resolveUrl = () => (typeof url === 'function' ? url() : url);
 
   function log(...args) {
     console.log(`[${logTag}]`, ...args);
@@ -190,10 +195,10 @@ export function createWhepPlayer({
       } else {
         log(`${since()} ICE gathering COMPLETE (took ${((performance.now() - tIce) / 1000).toFixed(2)}s; candidates: ${candSummary})`);
       }
-      log(`${since()} POSTing WHEP SDP offer to ${url} ...`);
+      log(`${since()} POSTing WHEP SDP offer to ${resolveUrl()} ...`);
       report('offer');
       const tFetch = performance.now();
-      const res = await fetch(url, {
+      const res = await fetch(resolveUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
         body: conn.localDescription.sdp,
