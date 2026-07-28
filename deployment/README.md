@@ -530,16 +530,17 @@ cd server && /path/to/venv/bin/python -m migrations.generate_ddl
 ```bash
 cd ~/drone-navigation/server
 
-# 1. Create a virtual environment (system Python 3.12 works)
-python3 -m venv /opt/drone-api-venv
-/opt/drone-api-venv/bin/pip install --upgrade pip
+# 1. Create a conda environment (system Python 3.12 works)
+conda create -n drone-navigation python=3.12 -y
+conda config --set auto_activate_base false
+conda activate drone-navigation
 
 # 2. Install dependencies — see server/requirements.txt:
 #    fastapi-users[sqlalchemy]  (FastAPIUsers, JWT strategy, OAuth routers)
 #    sqlalchemy[asyncio] + asyncpg  (async PostgreSQL driver)
 #    aiosmtplib + email-validator   (verification / password-reset emails)
 #    httpx-oauth                    (Google OAuth)
-/opt/drone-api-venv/bin/pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 &nbsp;
@@ -549,7 +550,7 @@ python3 -m venv /opt/drone-api-venv
 
 ```bash
 cp config.example.json config.json
-vim config.json
+nano config.json
 ```
 
 | Key | Production (ECS) | Local dev |
@@ -565,13 +566,33 @@ vim config.json
 ### 3. Run
 
 ```bash
-# Development (auto-reload)
+# Development (auto-reload) in CLI terminal
 cd ~/drone-navigation/server
-/opt/drone-api-venv/bin/uvicorn app.main:app --reload --port 8000
-
-# Production (loopback only; Caddy proxies /api/* to it)
-/opt/drone-api-venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+conda activate drone-navigation
+uvicorn app.main:app --reload --port 8000
 ```
+
+```bash
+# Production (loopback only; Caddy proxies /api/* to it)
+# Run as a system daemon service
+
+# 1. Edit the content of the systemd configuration. 
+nano /etc/systemd/system/drone-fastapi.service
+
+# 2. Reload systemd to parse the new service file
+sudo systemctl daemon-reload
+
+# 3. Enable service on server boot AND start it immediately
+sudo systemctl enable --now drone-fastapi
+
+# 4. Check process health
+sudo systemctl status drone-fastapi
+
+# 5. View real-time logs (replacing terminal output)
+sudo journalctl -u drone-fastapi -f
+```
+
+Refer to [`./fastapi/drone-fastapi.service`](./fastapi/drone-fastapi.service) for its content.
 
 On startup the app runs `Base.metadata.create_all` as a dev convenience; on a fresh server you should still run the migration script from section 3.3 first, because it also creates the `drone_api` role, the database, and the GRANTs. For production, wrap the uvicorn command in a systemd unit (same pattern as the MediaMTX unit in section 3.2).
 
