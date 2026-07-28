@@ -25,7 +25,9 @@ drone-navigation.com {
 		# header (curl, server-to-server) pass; a foreign Origin gets 403.
 		@badOrigin {
 			header_regexp Origin .+
-			not header Origin https://drone-navigation.com https://www.drone-navigation.com https://cdn.drone-navigation.com
+			not header Origin https://drone-navigation.com
+			not header Origin https://www.drone-navigation.com
+			not header Origin https://cdn.drone-navigation.com
 		}
 		respond @badOrigin 403
 
@@ -100,7 +102,9 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 		# Origin allowlist (identical policy to the apex block; see there).
 		@badOrigin {
 			header_regexp Origin .+
-			not header Origin https://drone-navigation.com https://www.drone-navigation.com https://cdn.drone-navigation.com
+			not header Origin https://drone-navigation.com
+			not header Origin https://www.drone-navigation.com
+			not header Origin https://cdn.drone-navigation.com
 		}
 		respond @badOrigin 403
 
