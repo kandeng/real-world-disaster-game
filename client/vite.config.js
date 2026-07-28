@@ -20,5 +20,13 @@ export default defineConfig({
     fs: {
       allow: ['./'],
     },
+    proxy: {
+      // Same-origin reachability to the local Synapse homeserver — the SPA
+      // never talks to Matrix anywhere else (Caddy mirrors this in prod).
+      '/_matrix': {
+        target: 'http://127.0.0.1:8008',
+        changeOrigin: true,
+      },
+    },
   },
 });
