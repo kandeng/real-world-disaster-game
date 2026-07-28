@@ -284,7 +284,7 @@ HTTP/2 200
 &nbsp;
 # 3. Backend Servers
 
-## 3.1. OpenClaw Assistant
+## 3.1. OpenClaw for Customer Service
 
 `Openclaw` is installed and run on `launch-advisor-20260213/i-0xi7m4xb72am9kjxn9mr 8.221.124.43`, an Alibaba ECS server in Virginia USA. 
 
@@ -445,25 +445,160 @@ sudo systemctl restart mediamtx
 &nbsp;
 ## 3.3. PostgreSQL Database
 
-&nbsp;
-## 3.4. FastAPI Backend
+`PostgreSQL` stores the identity data for the `My Space -> Account` page (fastapi-users tables `"user"` and `oauth_account`) and the per-user settings document (`user_settings`, single-row JSONB) written by the `Save` button. It runs on the same ECS instance as Caddy (`8.221.124.43`, PostgreSQL 16 on Ubuntu 24.04).
 
-The FastAPI backend is a planned component for server-side logic (e.g., mission persistence, telemetry ingestion, user accounts). It is not yet implemented.
-
-Planned deployment outline:
+### 1. Installation
 
 ```bash
-# 1. Install Python dependencies
-cd /home/robot/drone-navigation/server
-pip install -r requirements.txt
+# Install the server (Ubuntu 24.04 ships PostgreSQL 16)
+sudo apt update
+sudo apt install -y postgresql postgresql-contrib
 
-# 2. Configure server/config.json from config.example.json
-
-# 3. Start the FastAPI server (adjust host/port as needed)
-# uvicorn main:app --host 0.0.0.0 --port 8000
+# Verify the cluster is up (cluster name: 16-main)
+systemctl status postgresql@16-main
+sudo systemctl enable postgresql@16-main
 ```
 
-Once running, uncomment the `/api/*` reverse-proxy block in [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) so Caddy forwards API requests to the backend.
+&nbsp;
+### 2. Populate the schema (idempotent migration script)
+
+All tables, the login role, and the database are created by one idempotent script — [`server/migrations/001_init_auth_schema.sql`](../server/migrations/001_init_auth_schema.sql). Its table DDL is generated from `server/app/models.py` (SQLAlchemy `CreateTable`/`CreateIndex` with the PostgreSQL dialect), so the schema is guaranteed to match what the FastAPI app expects. It creates:
+
+| Object | Name | Notes |
+|--------|------|-------|
+| Login role | `drone_api` | Password is (re)aligned on every run via `-v app_password=...` |
+| Database | `drone_navigation` | Owner: `drone_api` |
+| Tables | `"user"`, `oauth_account`, `user_settings` | FK `ON DELETE CASCADE`; `user_settings.settings` is JSONB with `'{}'::jsonb` default |
+
+```bash
+# 1. Generate a strong password for the drone_api role (save it — it goes
+#    into server/config.json in the next section)
+openssl rand -hex 24
+
+# 2. Copy the script somewhere the postgres user can read it
+#    (postgres cannot read /root on the ECS)
+sudo cp ~/drone-navigation/server/migrations/001_init_auth_schema.sql /tmp/
+sudo chmod 644 /tmp/001_init_auth_schema.sql
+
+# 3. Run it (safe to re-run; ON_ERROR_STOP aborts on the first failure)
+sudo -u postgres psql -v ON_ERROR_STOP=1 \
+     -v app_password='<paste-generated-password>' \
+     -f /tmp/001_init_auth_schema.sql
+
+# 4. Verify: connect as the application role over TCP and list tables
+psql -h 127.0.0.1 -U drone_api -d drone_navigation -c '\dt'
+```
+
+Two implementation notes, both handled inside the script: `"user"` is a reserved word in PostgreSQL and must stay double-quoted, and `psql` does not substitute `:variables` inside `DO $$ ... $$` blocks, so the role bootstrap uses `SELECT ... \gexec` instead.
+
+&nbsp;
+### 3. Local development variant (no sudo, user-owned cluster)
+
+The system cluster on port 5432 requires the sudo password; for local dev we instead run a user-owned PostgreSQL cluster:
+
+```bash
+# One-time init (trust auth on localhost, port 5433 to avoid the system cluster)
+/usr/lib/postgresql/14/bin/initdb -D ~/pgdata -U robot -E UTF8 --auth=trust
+printf "port = 5433\nunix_socket_directories = '/home/robot/pgdata'\n" >> ~/pgdata/postgresql.conf
+
+# Start / stop
+/usr/lib/postgresql/14/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
+/usr/lib/postgresql/14/bin/pg_ctl -D ~/pgdata stop
+
+# Populate the same schema (as superuser 'robot', trust auth)
+psql -h 127.0.0.1 -p 5433 -U robot -v ON_ERROR_STOP=1 \
+     -v app_password='local-dev-drone-api' \
+     -f server/migrations/001_init_auth_schema.sql
+```
+
+&nbsp;
+### 4. Regenerating DDL after model changes
+
+Whenever `server/app/models.py` changes, regenerate the table blocks and review them before re-running the migration:
+
+```bash
+cd server && /path/to/venv/bin/python -m migrations.generate_ddl
+```
+
+&nbsp;
+## 3.4. FastAPI for My\-Space (fastapi-users)
+
+`FastAPI` + [`fastapi-users`](https://fastapi-users.github.io/) provides the `My Space -> Account` flows: email/password register + login (JWT), password reset and email verification (SMTP), Google OAuth, and `GET`/`PUT /api/users/me/settings` — the endpoints behind the `Save` button (logged-in: settings persisted to `user_settings`; logged-out: the SPA redirects to the Account page with a "please log in" banner). It runs on the same ECS instance as Caddy (`8.221.124.43`), behind the Caddy `/api/*` reverse proxy.
+
+### 1. Installation
+
+```bash
+cd ~/drone-navigation/server
+
+# 1. Create a virtual environment (system Python 3.12 works)
+python3 -m venv /opt/drone-api-venv
+/opt/drone-api-venv/bin/pip install --upgrade pip
+
+# 2. Install dependencies — see server/requirements.txt:
+#    fastapi-users[sqlalchemy]  (FastAPIUsers, JWT strategy, OAuth routers)
+#    sqlalchemy[asyncio] + asyncpg  (async PostgreSQL driver)
+#    aiosmtplib + email-validator   (verification / password-reset emails)
+#    httpx-oauth                    (Google OAuth)
+/opt/drone-api-venv/bin/pip install -r requirements.txt
+```
+
+&nbsp;
+### 2. Configuration
+
+`server/config.json` is gitignored (contains secrets) — create it from [`server/config.example.json`](../server/config.example.json):
+
+```bash
+cp config.example.json config.json
+vim config.json
+```
+
+| Key | Production (ECS) | Local dev |
+|-----|------------------|-----------|
+| `secret` | Long random string (`openssl rand -hex 32`) — signs JWTs | any dev string |
+| `database_url` | `postgresql+asyncpg://drone_api:<app_password>@127.0.0.1:5432/drone_navigation` | `postgresql+asyncpg://drone_api:local-dev-drone-api@127.0.0.1:5433/drone_navigation` |
+| `frontend_base_url` | `https://drone-navigation.com` | `http://localhost:5173` |
+| `cors_origins` | `[]` (same-origin behind Caddy) | `["http://localhost:5173"]` |
+| `smtp` | Real provider credentials (verification/reset emails) | leave placeholders — emails are skipped |
+| `oauth.google` | Google Cloud OAuth client id/secret | can stay empty (Google button hidden) |
+
+&nbsp;
+### 3. Run
+
+```bash
+# Development (auto-reload)
+cd ~/drone-navigation/server
+/opt/drone-api-venv/bin/uvicorn app.main:app --reload --port 8000
+
+# Production (loopback only; Caddy proxies /api/* to it)
+/opt/drone-api-venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+On startup the app runs `Base.metadata.create_all` as a dev convenience; on a fresh server you should still run the migration script from section 3.3 first, because it also creates the `drone_api` role, the database, and the GRANTs. For production, wrap the uvicorn command in a systemd unit (same pattern as the MediaMTX unit in section 3.2).
+
+&nbsp;
+### 4. Smoke test
+
+```bash
+# 1. Health
+curl -s http://127.0.0.1:8000/api/health        # {"status":"ok"}
+
+# 2. Register + login (JWT)
+curl -s -X POST http://127.0.0.1:8000/api/auth/register \
+     -H 'Content-Type: application/json' \
+     -d '{"email":"me@example.com","password":"Secret123!","display_name":"Me"}'
+curl -s -X POST http://127.0.0.1:8000/api/auth/jwt/login \
+     -H 'Content-Type: application/x-www-form-urlencoded' \
+     -d 'username=me@example.com&password=Secret123!'
+
+# 3. Settings round-trip (use the access_token from step 2)
+curl -s -X PUT http://127.0.0.1:8000/api/users/me/settings \
+     -H "Authorization: Bearer <access_token>" -H 'Content-Type: application/json' \
+     -d '{"version":1,"locale":"en","font":{"fontSize":"18px"}}'
+curl -s http://127.0.0.1:8000/api/users/me/settings \
+     -H "Authorization: Bearer <access_token>"   # returns the saved JSONB document
+```
+
+End-to-end check from the browser (the goal of sections 3.3–3.4): open `My Space -> Account`, register and sign in; then on `My Space -> Settings` change a value and click the `Save` button in the left dock — a green "Your settings have been saved." banner appears and the document is persisted in PostgreSQL. Clicking `Save` while logged out instead redirects to `My Space -> Account` with a green "Please log in before saving." banner.
 
 
 &nbsp;
