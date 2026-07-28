@@ -14,7 +14,7 @@ drone-navigation/
 
 ## Quick start (local Ubuntu desktop — full system)
 
-The entire system runs locally without any ECS dependency. In dev, the SPA calls FastAPI cross-origin at `http://localhost:8000` and reaches Synapse through the Vite `/_matrix` proxy — **no Caddy needed locally** (Caddy, Squid, and Tailscale are production-only; see [deployment/README.md](deployment/README.md)).
+The entire system runs locally without any ECS dependency. In dev, the SPA calls FastAPI cross-origin at `http://localhost:8000` and reaches Synapse through the Vite `/_matrix` proxy — **no Caddy needed locally** (Caddy, Squid, and Tailscale are production-only; see [deployment/README.md](deployment/README.md)). After the one-time installs below, section 8 shows how to run all backends as auto-started systemd user services (no terminals).
 
 ### 1. Client (Vue 3 + Vite)
 
@@ -140,6 +140,40 @@ Browser checklist at `http://localhost:5173`:
 3. `Community -> Chat`: with two accounts (two browsers/profiles), exchange DMs both ways; reload → history persists.
 4. `Community -> Customer Service`: connects to the local OpenClaw gateway.
 5. `Livestream`: plays the local `ubuntu-webcam` broadcast (step 6) — the green `ubuntu-webcam - HH:MM:SS` overlay ticks with live frames.
+
+### 8. Background services (optional — no terminals)
+
+Once steps 2–6 are installed, every backend can run as a systemd **user** service — auto-started at boot (user lingering is enabled), no terminals needed:
+
+```bash
+cp deployment/local-systemd/*.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now drone-pg drone-fastapi drone-synapse drone-mediamtx drone-webcam
+```
+
+| Service | Role | Port(s) |
+|---|---|---|
+| `drone-pg` | PostgreSQL dev cluster (`~/pgdata`) | 5433 |
+| `drone-fastapi` | FastAPI backend (uvicorn `--reload`) | 8000 |
+| `drone-synapse` | Matrix Synapse homeserver | 8008 |
+| `drone-mediamtx` | MediaMTX (WHIP/WHEP, HLS, control API) | 8889, 8888, 9997 |
+| `drone-webcam` | Demo webcam → WHIP publisher | — |
+| `openclaw-gateway` | OpenClaw gateway (self-installed by `openclaw gateway install`) | 18789 |
+
+Management cheatsheet:
+
+```bash
+systemctl --user status drone-fastapi         # state
+journalctl --user -u drone-fastapi -f         # follow logs
+systemctl --user restart drone-fastapi        # restart one
+systemctl --user disable --now drone-webcam   # stop the webcam publisher (e.g. a real drone publishes instead)
+```
+
+Notes:
+
+- The Vite dev server (step 1) stays manual — it's the frontend you're actively developing: `npm run dev`.
+- `drone-fastapi` keeps `--reload`: `.py` edits auto-apply; after editing `server/config.json`, `touch server/app/main.py` (works from any shell, no restart needed).
+- `openclaw-gateway.service` is created by OpenClaw's own installer — it's listed only for completeness; don't copy a unit for it.
 
 For production deployment on the two Alibaba ECS servers, see [deployment/README.md](deployment/README.md).
 
