@@ -104,24 +104,27 @@ openclaw gateway --port 18789 # foreground; `openclaw gateway install` for a dae
 
 The SPA connects to `ws://127.0.0.1:18789` — `openclaw.token` in `client/config.json` must match the gateway token in `~/.openclaw/openclaw.json`.
 
-### 6. MediaMTX (Livestream) — currently ECS-hosted
+### 6. MediaMTX (Livestream)
 
-Not installed locally yet; the Livestream pages currently pull from production (`https://drone-navigation.com/live/...`), so that page still needs the ECS until localized. To run it locally:
+Installed at `~/mediamtx_v1.9.0` (v1.9.0, same as ECS 2):
 
 ```bash
-mkdir ~/mediamtx && cd ~/mediamtx
+mkdir ~/mediamtx_v1.9.0 && cd ~/mediamtx_v1.9.0
 # download mediamtx_v1.9.0_linux_amd64.tar.gz from
 # https://github.com/bluenviron/mediamtx/releases/tag/v1.9.0, then:
 tar -xzf mediamtx_v1.9.0_linux_amd64.tar.gz
-./mediamtx                   # WHEP on :8889, WHIP ingest on :8889/whip, HLS :8888
+# Recommended: enable the control API on loopback — in mediamtx.yml set
+#   api: yes  and  apiAddress: 127.0.0.1:9997
+./mediamtx                   # WHEP/WHIP on :8889, HLS :8888, control API :9997
 
 # Publish the local webcam into it (separate terminal):
 cd extension/simple_webcam
 pip install -r requirements.txt   # use the drone-navigation conda env
-python simple_webcam.py           # WHIP-ingests the 'ubuntu-webcam' stream
+MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+  python simple_webcam.py         # WHIP-ingests the 'ubuntu-webcam' stream
 ```
 
-Caveat: `RealDroneView.vue` hardcodes the production WHEP URL — for a fully ECS-free livestream, point it at `http://127.0.0.1:8889/ubuntu-webcam/whep` (a config-driven switch is planned).
+Which MediaMTX the SPA plays is decided by the backend, not the build: `server/config.json` -> `"mediamtx": { "whep_url": ... }` is served at `GET /api/stream/config`, and `RealDroneView.vue` resolves it at playback time (local: `http://127.0.0.1:8889/ubuntu-webcam/whep`; production on ECS: `https://drone-navigation.com/live/ubuntu-webcam/whep`; if the config key is absent, the SPA falls back to those same environment defaults). The publisher defaults to production; the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point it at the local server.
 
 ### 7. Smoke test (whole system)
 
@@ -136,7 +139,7 @@ Browser checklist at `http://localhost:5173`:
 2. `My Space -> Settings`: change a value, click `Save` → green "saved" banner.
 3. `Community -> Chat`: with two accounts (two browsers/profiles), exchange DMs both ways; reload → history persists.
 4. `Community -> Customer Service`: connects to the local OpenClaw gateway.
-5. `Livestream`: plays (from the production ECS stream until step 6 is localized).
+5. `Livestream`: plays the local `ubuntu-webcam` broadcast (step 6) — the green `ubuntu-webcam - HH:MM:SS` overlay ticks with live frames.
 
 For production deployment on the two Alibaba ECS servers, see [deployment/README.md](deployment/README.md).
 
