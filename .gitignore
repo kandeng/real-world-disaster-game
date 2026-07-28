@@ -2,6 +2,10 @@
 client/config.json
 server/config.json
 
+# Private keys (SSH PEMs, TLS private keys — never commit)
+*.pem
+deployment/tls/
+
 # Runtime/generated files
 deployment/acert
 
