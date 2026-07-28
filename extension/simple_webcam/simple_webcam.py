@@ -1,4 +1,5 @@
 import asyncio
+import os
 import socket
 import time
 from urllib.parse import urlparse
@@ -10,14 +11,19 @@ from av import VideoFrame
 import aiohttp
 
 # ── Configuration ──────────────────────────────────────────────────────────
-EXTENSION_ECS_URL = "https://drone-navigation.com/live"
+# MediaMTX base URL for WHIP ingest. Default: production (Caddy /live ->
+# ECS 2). Override for a locally running MediaMTX:
+#   MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+#     python simple_webcam.py
+MEDIAMTX_BASE_URL = os.environ.get("MEDIAMTX_URL", "https://drone-navigation.com/live")
 
 # Specific livestream properties
 LIVESTREAM_HOSTNAME = "ubuntu-webcam"
 LIVESTREAM_DESCRIPTION = "A webcam stream from Kan's Ubuntu desktop"
 
-# MediaMTX control API (default port 9997). Proxied via Caddy /control-api or directly via ECS IP.
-MEDIAMTX_API_URL = "https://drone-navigation.com/control-api"
+# MediaMTX control API (default port 9997). Proxied via Caddy /control-api on
+# ECS; locally enable `api: yes` in mediamtx.yml and use http://127.0.0.1:9997.
+MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API", "https://drone-navigation.com/control-api")
 
 STUN_SERVER = "stun:stun.l.google.com:19302"
 MONITOR_INTERVAL = 10  # seconds between stats / viewer log lines
@@ -271,5 +277,5 @@ async def run_whip_publisher(server_url, stream_id):
 
 
 if __name__ == "__main__":
-    asyncio.run(run_whip_publisher(EXTENSION_ECS_URL, LIVESTREAM_HOSTNAME))
+    asyncio.run(run_whip_publisher(MEDIAMTX_BASE_URL, LIVESTREAM_HOSTNAME))
     
