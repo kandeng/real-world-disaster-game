@@ -71,6 +71,33 @@ Contact Alibaba Cloud support for assistance with this configuration.
 
 
 &nbsp;
+### 3. WebSocket and the CDN (option 2: apex-pinned WS)
+
+Alibaba's base CDN **cannot proxy WebSocket** (that requires the DCDN product and Alibaba staff involvement), so the SPA never upgrades through the CDN edge. Instead, the OpenClaw WebSocket URL is **pinned to the apex** in the production `client/config.json`:
+
+```json
+"openclaw": { "url": "wss://drone-navigation.com/ws", "token": "..." }
+```
+
+An explicitly configured non-loopback URL always wins in `client/composables/useOpenClaw.js`, so every visitor — whether the page was loaded via `drone-navigation.com`, `www`, or `cdn` — opens the WebSocket directly against the apex (which resolves to ECS 1, bypassing the CDN edge). This is bandwidth-neutral for the origin (WebSocket payloads are never edge-cached anyway); the only thing given up is the edge's TCP-junk absorption, and it is 100% self-service (DNS, Caddy, and OpenClaw are all ours — no Alibaba ticket).
+
+Two hardening requirements, both satisfied:
+
+1. **Origin allowlist on `/ws`** — WebSocket has no CORS, so the server must validate the browser `Origin` itself. The `/ws` blocks in [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) return `403` for any `Origin` outside `https://drone-navigation.com`, `https://www.drone-navigation.com`, `https://cdn.drone-navigation.com` (requests with no `Origin` header — curl, server-to-server — are allowed).
+2. **`wss://` with a publicly trusted certificate** — the apex uses Caddy's Let's Encrypt cert (auto-renewed); `tls internal` is only for the CDN edge domains and must never be browser-facing.
+
+Verify after deploy (expect `101 Switching Protocols` for an allowed or absent Origin, `403` for a foreign Origin):
+
+```bash
+curl -i -N --max-time 5 \
+  -H "Connection: Upgrade" -H "Upgrade: websocket" \
+  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+  -H "Origin: https://www.drone-navigation.com" \
+  https://drone-navigation.com/ws
+```
+
+
+&nbsp;
 # 2. Frontend Servers
 
 ## 2.1 Caddy Web Engine
