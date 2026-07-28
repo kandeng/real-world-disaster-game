@@ -49,6 +49,16 @@ drone-navigation.com {
 		}
 	}
 
+	# FastAPI backend (auth/users/settings; plain `handle` keeps the /api
+	# prefix — FastAPI routes include it)
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
 	# Strip the '/live' prefix before sending the request to MediaMTX
 	handle_path /live/* {
 		reverse_proxy 47.85.110.135:8889 {
@@ -94,6 +104,16 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 				read_timeout 0
 				write_timeout 0
 			}
+		}
+	}
+
+	# FastAPI backend (identical to the apex block; the CDN in front
+	# forwards /api/* to the origin unchanged)
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Proto {scheme}
 		}
 	}
 
