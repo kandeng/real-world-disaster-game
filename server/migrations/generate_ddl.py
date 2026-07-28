@@ -14,12 +14,12 @@ Then paste the output into section 3 of 001_init_auth_schema.sql
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateIndex, CreateTable
 
-from app.models import OAuthAccount, User, UserSettings
+from app.models import MatrixAccount, OAuthAccount, User, UserSettings
 
 
 def main() -> None:
     dialect = postgresql.dialect()
-    for table in (User.__table__, OAuthAccount.__table__, UserSettings.__table__):
+    for table in (User.__table__, OAuthAccount.__table__, UserSettings.__table__, MatrixAccount.__table__):
         print(str(CreateTable(table, if_not_exists=True).compile(dialect=dialect)).rstrip(";") + ";")
         for index in sorted(table.indexes, key=lambda i: i.name):
             print(str(CreateIndex(index, if_not_exists=True).compile(dialect=dialect)).rstrip(";") + ";")

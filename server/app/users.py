@@ -9,6 +9,7 @@ Auth model:
     a matching router in main.py.
 """
 
+import logging
 import uuid
 
 from fastapi import Depends
@@ -23,9 +24,12 @@ from httpx_oauth.clients.google import GoogleOAuth2
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import CONFIG
-from .db import get_async_session
+from .db import async_session_maker, get_async_session
 from .email import send_password_reset_email, send_verification_email
+from .matrix_admin import ensure_user as ensure_matrix_user
 from .models import OAuthAccount, User
+
+log = logging.getLogger(__name__)
 
 SECRET = CONFIG["secret"]
 
@@ -43,6 +47,13 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     async def on_after_register(self, user: User, request=None) -> None:
         # Fire the verification email right after sign-up.
         await self.request_verify(user, request)
+        # Provision the hidden Synapse chat account. Failure must NEVER block
+        # registration — the token endpoint lazily re-ensures on first use.
+        try:
+            async with async_session_maker() as session:
+                await ensure_matrix_user(user, session)
+        except Exception:
+            log.exception("matrix provisioning failed for user %s", user.id)
 
     async def on_after_request_verify(self, user: User, token: str, request=None) -> None:
         await send_verification_email(user.email, token)

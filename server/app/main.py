@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import CONFIG
 from .db import Base, engine
+from .matrix_auth import router as matrix_router
 from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
 from .users import auth_backend, fastapi_users, google_oauth_client
@@ -90,6 +91,9 @@ app.include_router(
 
 # --- Per-user settings document (GET/PUT /api/users/me/settings) ------------
 app.include_router(settings_router, prefix="/api")
+
+# --- Community chat: Matrix token brokering + user directory ----------------
+app.include_router(matrix_router, prefix="/api")
 
 
 @app.get("/api/health")

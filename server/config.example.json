@@ -17,5 +17,10 @@
       "client_id": "CHANGE_ME.apps.googleusercontent.com",
       "client_secret": "CHANGE_ME"
     }
+  },
+  "synapse": {
+    "base_url": "http://127.0.0.1:8008",
+    "server_name": "localhost",
+    "admin_access_token": "CHANGE_ME_synapse_admin_user_token"
   }
 }

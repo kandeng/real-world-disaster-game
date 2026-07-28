@@ -1,5 +1,5 @@
-"""SQLAlchemy models: User (with display_name), linked OAuth accounts, and
-the per-user settings document.
+"""SQLAlchemy models: User (with display_name), linked OAuth accounts, the
+per-user settings document, and the hidden Synapse Matrix account mapping.
 
 The OAuthAccount table exists from day one so Google sign-in works now and
 Facebook/GitHub/Instagram only need a new httpx-oauth client — no migration.
@@ -53,4 +53,28 @@ class UserSettings(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class MatrixAccount(Base):
+    """Maps a fastapi-users User to their hidden Synapse account.
+
+    The Matrix account is provisioned automatically (register hook / lazy
+    ensure on token brokering) and is invisible to the user — one website
+    account, chat included. Same relationship pattern as oauth_account /
+    user_settings: separate table, FK to user.id, ON DELETE CASCADE.
+    """
+
+    __tablename__ = "matrix_account"
+
+    user_id: Mapped[GUID] = mapped_column(
+        GUID,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    mxid: Mapped[str] = mapped_column(String(length=255), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
