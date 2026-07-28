@@ -169,6 +169,16 @@ systemctl --user restart drone-fastapi        # restart one
 systemctl --user disable --now drone-webcam   # stop the webcam publisher (e.g. a real drone publishes instead)
 ```
 
+Demo-day startup (current policy on this desktop: all six services are **disabled** so they stay off across reboots — start them manually only when needed):
+
+```bash
+# Bring the whole backend stack up for a demo
+systemctl --user start drone-pg drone-fastapi drone-synapse drone-mediamtx drone-webcam openclaw-gateway
+
+# Shut it down again afterwards
+systemctl --user stop drone-pg drone-fastapi drone-synapse drone-mediamtx drone-webcam openclaw-gateway
+```
+
 Notes:
 
 - The Vite dev server (step 1) stays manual — it's the frontend you're actively developing: `npm run dev`.
