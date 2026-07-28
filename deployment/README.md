@@ -517,7 +517,7 @@ psql -h 127.0.0.1 -p 5433 -U robot -v ON_ERROR_STOP=1 \
 Whenever `server/app/models.py` changes, regenerate the table blocks and review them before re-running the migration:
 
 ```bash
-cd server && /path/to/venv/bin/python -m migrations.generate_ddl
+cd server && ~/miniconda3/envs/drone-navigation/bin/python -m migrations.generate_ddl
 ```
 
 &nbsp;
@@ -625,7 +625,201 @@ End-to-end check from the browser (the goal of sections 3.3–3.4): open `My Spa
 &nbsp;
 ## 3.5. Synapse Matrix
 
-Synapse Matrix integration is planned but not yet implemented. This section will document how to deploy and configure the Matrix homeserver once the integration is ready.
+`Synapse` powers the `Community -> Chat` page: in-site direct messages and team rooms. It runs on ECS 2 (`47.85.110.135`, alongside MediaMTX) and is reached **exclusively through the Tailscale mesh** (section 4.1) — its only listener binds to the Tailscale interface, so nothing Matrix-specific is exposed on the public internet.
+
+Website users never see Matrix: registering in `My Space -> Account` auto-provisions a hidden Synapse account (`@u_<id>:drone-navigation.com`), and logging in transparently brokers a client access token via the Synapse Admin API (single-account illusion). Public registration on the homeserver itself is disabled — the website is the only entrance.
+
+v1 scope: federation is **OFF** (no 8448 listener, no `.well-known`, no `matrix.drone-navigation.com` DNS record), rooms are not end-to-end encrypted, and storage is SQLite (migrate to PostgreSQL later with `synapse_port_db` if volume demands it).
+
+**Prerequisites**
+
+- Section 4.1 (Tailscale) completed on BOTH servers. Below, `<TAILSCALE_B>` = Tailscale IPv4 of ECS 2 (Synapse host), `<TAILSCALE_A>` = Tailscale IPv4 of ECS 1 (Caddy/FastAPI host).
+- Sections 3.3 (PostgreSQL) and 3.4 (FastAPI) already done on ECS 1.
+
+&nbsp;
+### 1. Installation (on ECS 2)
+
+```bash
+# Run on 47.85.110.135 as root (same account style as the MediaMTX setup)
+
+# 1. Install Miniconda (skip if `conda --version` already works)
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
+bash /tmp/miniconda.sh -b -p ~/miniconda3
+
+# 2. Create the Synapse conda environment (Python 3.12) and install Synapse
+#    (pinned to the version verified locally)
+~/miniconda3/bin/conda create -n synapse python=3.12 -y
+~/miniconda3/envs/synapse/bin/pip install matrix-synapse==1.157.1
+
+# 3. Generate the initial config + data directory.
+#    server-name = the PUBLIC domain: user IDs will be @user:drone-navigation.com
+~/miniconda3/envs/synapse/bin/python -m synapse.app.homeserver \
+  --server-name drone-navigation.com \
+  --config-path ~/synapse-data/homeserver.yaml \
+  --generate-config --report-stats=no
+```
+
+&nbsp;
+### 2. homeserver.yaml — Tailscale-only listener
+
+Edit `~/synapse-data/homeserver.yaml` on ECS 2:
+
+1. Keep exactly **one** listener entry, bound to the Tailscale IP (NOT `127.0.0.1`, NOT `0.0.0.0`):
+
+```yaml
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    bind_addresses: ['<TAILSCALE_B>']
+    resources:
+      - names: [client, admin]
+        compress: false
+```
+
+There is no 8448 entry (federation stays off) and no `federation` resource above. `x_forwarded: true` lets Synapse log the real client IPs that Caddy forwards.
+
+2. Verify registration stays closed (users are provisioned by FastAPI, never by the public):
+
+```yaml
+enable_registration: false
+```
+
+3. Keep the generated SQLite `database` block, `macaroon_secret_key`, and `registration_shared_secret` unchanged.
+
+&nbsp;
+### 3. First start + service admin (on ECS 2)
+
+```bash
+# Foreground smoke run — Ctrl-C after verifying
+~/miniconda3/envs/synapse/bin/python -m synapse.app.homeserver -c ~/synapse-data/homeserver.yaml
+```
+
+From **ECS 1**, prove the mesh path before going further:
+
+```bash
+curl http://<TAILSCALE_B>:8008/_matrix/client/versions
+# -> {"versions":[...,"v1.11"]}
+```
+
+Back on **ECS 2**, create the service admin user and harvest its long-lived access token:
+
+```bash
+~/miniconda3/envs/synapse/bin/register_new_matrix_user \
+  -c ~/synapse-data/homeserver.yaml \
+  -u admin -p '<generate-a-strong-password>' --admin \
+  http://<TAILSCALE_B>:8008
+
+curl -s -X POST http://<TAILSCALE_B>:8008/_matrix/client/v3/login \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"m.login.password","user":"admin","password":"<same-password>"}'
+# -> save the returned "access_token" (starts with syt_...); it goes into
+#    server/config.json on ECS 1 in step 5
+```
+
+&nbsp;
+### 4. systemd service (on ECS 2)
+
+Copy [`deployment/synapse/drone-synapse.service`](./synapse/drone-synapse.service) to `/etc/systemd/system/drone-synapse.service`, then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now drone-synapse
+sudo systemctl status drone-synapse        # active (running)
+sudo journalctl -u drone-synapse -f        # live logs
+```
+
+Synapse coexists with MediaMTX without port conflicts: 8008 binds only to the Tailscale interface, while MediaMTX uses 8554/1935/8888/8889/8890 on the public interface.
+
+&nbsp;
+### 5. FastAPI wiring (on ECS 1)
+
+1. Add the `matrix_account` table (idempotent migration):
+
+```bash
+sudo cp ~/drone-navigation/server/migrations/002_matrix_account.sql /tmp/
+sudo chmod 644 /tmp/002_matrix_account.sql
+sudo -u postgres psql -v ON_ERROR_STOP=1 -d drone_navigation -f /tmp/002_matrix_account.sql
+```
+
+2. Edit `~/drone-navigation/server/config.json` — point the backend at Synapse over the mesh:
+
+```json
+"synapse": {
+  "base_url": "http://<TAILSCALE_B>:8008",
+  "server_name": "drone-navigation.com",
+  "admin_access_token": "<syt_... token from step 3>"
+}
+```
+
+3. Restart the backend:
+
+```bash
+sudo systemctl restart drone-fastapi
+sudo journalctl -u drone-fastapi -f
+```
+
+&nbsp;
+### 6. Caddy route (on ECS 1)
+
+Add a `/_matrix/*` block to BOTH site blocks in `/etc/caddy/Caddyfile` (apex `drone-navigation.com` and CDN edge `www.drone-navigation.com`), right after the existing `/api/*` block. Plain `handle` keeps the path prefix (Synapse routes include `/_matrix`):
+
+```plain
+# Synapse Matrix client API (over the Tailscale mesh)
+handle /_matrix/* {
+    reverse_proxy <TAILSCALE_B>:8008 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+    }
+}
+```
+
+Then format, validate, and reload:
+
+```bash
+caddy fmt --overwrite /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+The repo copy [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) intentionally does not carry this block yet — it needs the live Tailscale IP. Back-port the final block into the repo copy on the next push.
+
+&nbsp;
+### 7. Smoke tests
+
+```bash
+# 1. Mesh + homeserver (from ECS 1)
+curl http://<TAILSCALE_B>:8008/_matrix/client/versions
+
+# 2. Public client API through Caddy (apex direct, and via the CDN edge)
+curl https://drone-navigation.com/_matrix/client/versions
+curl https://www.drone-navigation.com/_matrix/client/versions
+
+# 3. Token brokering through the whole stack
+TOKEN=$(curl -s -X POST https://drone-navigation.com/api/auth/jwt/login \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'username=me@example.com&password=Secret123!' | jq -r .access_token)
+curl -s https://drone-navigation.com/api/matrix/token \
+  -H "Authorization: Bearer $TOKEN"
+# -> {"homeserver_url":"","access_token":"syt_...",
+#     "user_id":"@u_...:drone-navigation.com","device_id":null}
+```
+
+The first `/api/matrix/token` call for any pre-existing website user lazily provisions their hidden Synapse account — no manual step needed.
+
+Browser end-to-end: sign in as two different accounts (two browsers or profiles), open `Community -> Chat`, start a New chat with the other user, exchange messages both ways, reload and confirm history persists; then create a team room containing both.
+
+&nbsp;
+### 8. Troubleshooting
+
+| Symptom | Likely cause / check |
+|---------|----------------------|
+| `503 Chat service unavailable` from `/api/matrix/token` | Wrong `base_url`/token in `server/config.json`, or Synapse down — `journalctl -u drone-fastapi -f` (ECS 1) and `journalctl -u drone-synapse -f` (ECS 2) |
+| `curl http://<TAILSCALE_B>:8008/...` times out from ECS 1 | Tailscale down (`tailscale status`), or listener bound to the wrong IP — `ss -tulpn \| grep 8008` on ECS 2 must show the 100.x address |
+| Chat works via apex but `/sync` drops every ~30–60 s when the page is loaded via `www` | CDN edge killing long-polls (same family as the customer-service WebSocket issue) — use the apex domain until the CDN behavior is addressed |
+
+Deferred to later phases (explicit v1 non-goals): federation Variant A provisioning (8448 listener, `.well-known/matrix/server`, `matrix.drone-navigation.com` A record), E2EE, media attachments, OpenClaw appservice bridge, SQLite→PostgreSQL migration, stale-device cleanup, message retention, push notifications.
 
 
 
@@ -633,5 +827,47 @@ Synapse Matrix integration is planned but not yet implemented. This section will
 # 4. Server Cluster
 
 ## 4.1. Tailscale VPN
+
+`Tailscale` builds a private WireGuard mesh ("tailnet") between the two ECS servers. It carries the **private plane**: Caddy's `/_matrix/*` reverse-proxy traffic and FastAPI's Synapse Admin API calls. Because Synapse binds only to the `tailscale0` interface (section 3.5), no Matrix port is ever exposed on the public internet. Both servers join the same tailnet under one Tailscale account.
+
+&nbsp;
+### 1. Install + join (on BOTH servers)
+
+```bash
+# Run on BOTH 8.221.124.43 and 47.85.110.135
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+# -> prints an authentication URL; open it in a browser, sign in, and approve
+#    the machine. Use the SAME Tailscale account for both servers.
+```
+
+&nbsp;
+### 2. Verify the mesh
+
+```bash
+tailscale ip -4                  # this server's 100.x.y.z address — record it
+tailscale status                 # both machines listed
+ping -c 3 <other-100.x>          # ICMP over the mesh
+tailscale ping <other-100.x>     # shows the direct path or DERP relay in use
+```
+
+Record the addresses — they are the `<TAILSCALE_A>` / `<TAILSCALE_B>` placeholders used in section 3.5:
+
+| Server | Public IP | Tailscale IPv4 | Role |
+|--------|-----------|----------------|------|
+| ECS 1 | `8.221.124.43` | `<TAILSCALE_A>` | Caddy + FastAPI + PostgreSQL + OpenClaw |
+| ECS 2 | `47.85.110.135` | `<TAILSCALE_B>` | Synapse + MediaMTX |
+
+&nbsp;
+### 3. Disable key expiry (mandatory for servers)
+
+In the Tailscale admin console (`https://login.tailscale.com/admin/machines`), for each of the two machines: `...` menu -> **Disable key expiry**. Otherwise each machine's key expires after 180 days and the mesh silently breaks.
+
+&nbsp;
+### 4. Notes
+
+- **Alibaba security groups**: no new inbound rules are needed — Tailscale NAT-traverses using outbound connections and falls back to DERP relays. Optionally open UDP `41641` on both servers for faster direct links.
+- **ACLs**: the default tailnet policy lets all nodes reach each other (fine for two servers). An ACL restricting port 8008 to just these two machines can be added later.
+- Renaming the machines in the admin console (e.g. `ecs-caddy`, `ecs-synapse`) makes `tailscale status` output and logs easier to read.
 
 
