@@ -15,6 +15,7 @@ import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
 import { useScreenCapture } from '@shared-composables/useScreenCapture.js';
+import { useAuth } from '@shared-composables/useAuth.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
@@ -65,6 +66,27 @@ const { step: stepCameraPhysics } = useCameraPhysics();
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 const { recorderState, replayProgress, replayPov, captureScreenshot, sampleFrame, toggleRecorder, resetRecorder } = useScreenCapture();
+const { isAuthenticated } = useAuth();
+
+// Login gate for Screenshot / Screen Recording (the 3D Aerial and 3D Mesh
+// subpages share this right dock): anonymous users get a green top-center
+// reminder instead of the capture action.
+const captureAuthNotice = ref(''); // '' | 'screenshot' | 'recording'
+let captureAuthTimer = null;
+function flashCaptureAuth(action) {
+  captureAuthNotice.value = action;
+  clearTimeout(captureAuthTimer);
+  captureAuthTimer = setTimeout(() => { captureAuthNotice.value = ''; }, 6000);
+}
+function guardedScreenshot() {
+  if (isAuthenticated.value) return captureScreenshot();
+  flashCaptureAuth('screenshot');
+}
+function guardedToggleRecorder() {
+  // Never trap an ACTIVE recording: toggling off is always allowed.
+  if (isAuthenticated.value || recorderState.value !== 'idle') return toggleRecorder();
+  flashCaptureAuth('recording');
+}
 const isRecorderActive = computed(() => recorderState.value !== 'idle');
 let savedDiskVisibility = null;
 
@@ -658,7 +680,7 @@ onMounted(() => {
     id: 'screenshot',
     icon: 'MENU_PHOTO',
     titleKey: 'aerialview.screenshot',
-    onClick: captureScreenshot,
+    onClick: guardedScreenshot,
   });
   registerRight({
     id: 'recorder',
@@ -666,7 +688,7 @@ onMounted(() => {
     titleKey: 'aerialview.recorder',
     active: isRecorderActive,
     danger: true,
-    onClick: toggleRecorder,
+    onClick: guardedToggleRecorder,
   });
 
   // Sync dock button active states with toggle state
@@ -850,6 +872,12 @@ onUnmounted(() => {
         </div>
       </Transition>
       <div
+        v-if="captureAuthNotice"
+        class="top-center-message top-center-message--auth"
+      >
+        {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
+      </div>
+      <div
         v-if="assetLoading"
         class="top-center-message asset-loading"
       >
@@ -946,6 +974,12 @@ onUnmounted(() => {
 
 .replay-pill {
   background: rgba(34, 197, 94, 0.88);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
+}
+
+/* Login-gate reminder for Screenshot / Screen Recording */
+.top-center-message--auth {
+  background: rgba(34, 197, 94, 0.92);
   box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
 }
 

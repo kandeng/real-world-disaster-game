@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted, h } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useSettingsSave } from '@shared-composables/useSettingsSave.js';
 import { useRoute, useRouter } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
@@ -13,6 +14,7 @@ const route = useRoute();
 const router = useRouter();
 const { leftItems, registerLeft, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { saveNotice, saveSettings } = useSettingsSave();
 
 /* ─── Left-column width drag (same geometry as Extensions/Settings) ─── */
 const LEFT_MIN = 180;
@@ -170,7 +172,7 @@ onMounted(() => {
     id: 'save',
     icon: 'MENU_SAVE',
     titleKey: 'aerialview.save',
-    onClick: () => { console.debug('[MySpace] Save clicked (action TBD)'); },
+    onClick: () => { saveSettings(); },
   });
 
   applyQueryParams();
@@ -223,6 +225,15 @@ onUnmounted(() => {
 
         <!-- Right content area -->
         <div class="myspace-content">
+          <!-- Save-flow notice (useSettingsSave): saved / login reminder -->
+          <div
+            v-if="saveNotice"
+            class="save-notice"
+            :class="`save-notice--${saveNotice}`"
+          >
+            {{ t(`aerialview.save_notice_${saveNotice}`) }}
+          </div>
+
           <!-- Breadcrumb -->
           <div class="myspace-breadcrumb">{{ breadcrumb }}</div>
 
@@ -314,6 +325,26 @@ onUnmounted(() => {
   font-weight: 500;
   color: #6e6e73;
   margin-bottom: 16px;
+}
+
+/* Save-flow notice banner (useSettingsSave) */
+.save-notice {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.save-notice--saved,
+.save-notice--login_required {
+  background: #eef7ee;
+  color: #1e7a1e;
+  border: 1px solid #cbe8cb;
+}
+.save-notice--save_failed {
+  background: #fff0f0;
+  color: #c41e1e;
+  border: 1px solid #ffd2d2;
 }
 
 .myspace-separator {
