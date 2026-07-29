@@ -76,10 +76,16 @@ function onDividerPointerMove(e) {
   const panel = document.querySelector('.split-page');
   if (!panel) return;
   const rect = panel.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const pct = (x / rect.width) * 100;
-  const minPct = (LEFT_MIN / rect.width) * 100;
-  const maxPct = (LEFT_MAX / rect.width) * 100;
+  // The page keeps horizontal padding to clear the floating docks — the
+  // percentage math must use the CONTENT box, not the padding box.
+  const cs = getComputedStyle(panel);
+  const padL = parseFloat(cs.paddingLeft) || 0;
+  const padR = parseFloat(cs.paddingRight) || 0;
+  const contentW = rect.width - padL - padR;
+  const x = e.clientX - rect.left - padL;
+  const pct = (x / contentW) * 100;
+  const minPct = (LEFT_MIN / contentW) * 100;
+  const maxPct = (LEFT_MAX / contentW) * 100;
   leftWidthPct.value = Math.min(maxPct, Math.max(minPct, pct));
 }
 
@@ -590,6 +596,17 @@ onUnmounted(() => {
   background: #ffffff;
   user-select: none;
   z-index: 6;
+  box-sizing: border-box;
+  /* Clear the floating docks (72px wide; 56px below 768px, mirroring
+     AppDock) — docked areas otherwise swallow clicks meant for the
+     stream cards / stage (the white background still spans full width). */
+  padding: 0 72px;
+}
+
+@media (max-width: 768px) {
+  .split-page {
+    padding: 0 56px;
+  }
 }
 
 /* ─── Left panel ─── */
