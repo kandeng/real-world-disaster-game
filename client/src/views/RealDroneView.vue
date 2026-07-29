@@ -122,14 +122,12 @@ function onPagesBeforeOpen() {
 function noop() {}
 
 /* ─── Livestream: WHEP playback of the MediaMTX stream catalog ─── */
-// ONE shared connection for both subpages. The HOST subpage always
-// monitors the PRIMARY stream (first catalog entry = our own broadcast);
-// the VIEWER subpage plays whichever card is selected in its left panel.
-// Switching subpages with the SAME target stream only re-attaches the
-// already-live MediaStream — no second WHEP handshake. Switching to a
-// DIFFERENT stream (viewer card click, or host<->viewer with another
-// stream selected) does a stop()+start() re-handshake, so only one
-// stream ever consumes bandwidth at a time.
+// ONE shared connection for both subpages, playing ONE selected stream
+// (default: the PRIMARY, first catalog entry = our own broadcast).
+// The ONLY way to change the stream is clicking a card in the Viewer's
+// left panel — a stop()+start() re-handshake, so just one stream ever
+// consumes bandwidth. Switching subpages NEVER changes the stream: it
+// only re-attaches the already-live MediaStream, no second handshake.
 // The catalog comes from the backend's /api/stream/config (server/
 // config.json "mediamtx" section) with per-environment fallbacks — see
 // useStreamConfig. Passed to the player as a getter so it is resolved at
@@ -144,12 +142,9 @@ const primaryStream = computed(() => streams.value[0] || null);
 const selectedStream = computed(
   () => streams.value.find((s) => s.id === selectedStreamId.value) || primaryStream.value,
 );
-// The stream the shared connection should currently play: the Host
-// subpage always monitors the primary broadcast; the Viewer plays the
-// selected card.
-const targetStream = computed(() =>
-  activeSubpage.value === 'host' ? primaryStream.value : selectedStream.value);
-const targetUrl = computed(() => targetStream.value?.whep_url || '');
+// The stream the shared connection plays — the selected card, on BOTH
+// subpages (subpage switches must not change it).
+const targetUrl = computed(() => selectedStream.value?.whep_url || '');
 // What the player was last started with — restart only on a real change.
 let playingUrl = '';
 
@@ -203,9 +198,9 @@ function attachLiveStream(el) {
   livePlayer.attach(el);
 }
 
-// Re-point the shared connection at the current target stream. No-op when
-// the URL is unchanged (the common subpage-switch case: attach() alone is
-// instant). On a real change: stop() [which also forgets the render
+// Re-point the shared connection at the selected stream. No-op when
+// the URL is unchanged. On a real change (Viewer card click or late-
+// arriving server config): stop() [which also forgets the render
 // target], re-attach, then start() — the progress pill replays via
 // onProgress('start').
 function syncLiveStream() {
@@ -351,7 +346,8 @@ watch(activeSubpage, async (val) => {
     setupViewerStage();
     attachLiveStream(viewerVideoEl.value);
   }
-  syncLiveStream(); // no-op unless the target stream differs per subpage
+  // NOTE: the stream itself is intentionally NOT re-synced here —
+  // subpage switches never change the selection, only the render target.
 });
 
 onMounted(() => {
@@ -514,7 +510,8 @@ onUnmounted(() => {
     @cameraModeChange="onCameraModeChange"
   >
     <template #background>
-      <!-- Livestream Host subpage: live monitor of our own MediaMTX broadcast.
+      <!-- Livestream Host subpage: fullscreen monitor of the currently
+           selected stream (same shared connection as the Viewer).
            Muted so autoplay is allowed and to avoid audio feedback. -->
       <video
         v-if="activeSubpage === 'host'"
