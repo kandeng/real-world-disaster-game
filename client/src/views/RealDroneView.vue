@@ -115,7 +115,7 @@ function onPagesBeforeOpen() {
 // Placeholder for dock buttons whose functionality is not implemented yet.
 function noop() {}
 
-/* ─── Livestream: WHEP playback of the 'ubuntu-webcam' broadcast ─── */
+/* ─── Livestream: WHEP playback of the 'crazyflie-drone' broadcast ─── */
 // ONE shared connection for both subpages: the Host monitors it fullscreen,
 // the Viewer watches it in the right panel. Switching subpages only
 // re-attaches the already-live MediaStream — no second WHEP handshake.
@@ -126,10 +126,11 @@ function noop() {}
 const { whepUrl: streamWhepUrl } = useStreamConfig();
 
 // Hard-coded stream identity for the TESTING phase, mirroring the
-// publisher's LIVESTREAM_HOSTNAME / LIVESTREAM_DESCRIPTION. Once the
+// publisher's LIVESTREAM_HOSTNAME / LIVESTREAM_DESCRIPTION
+// (extension/crazyflie_bridge/crazyflie_mediamtx.py). Once the
 // FastAPI-users backend lands, these come from the user database instead.
-const LIVESTREAM_HOSTNAME = 'ubuntu-webcam';
-const LIVESTREAM_DESCRIPTION = "A webcam stream from Kan's Ubuntu desktop";
+const LIVESTREAM_HOSTNAME = 'crazyflie-drone';
+const LIVESTREAM_DESCRIPTION = 'Live video from the Crazyflie drone (ESP32 AI-Deck)';
 const hostVideoEl = ref(null);
 const viewerVideoEl = ref(null);
 

@@ -1,31 +1,41 @@
 import asyncio
 import os
 import socket
+import threading
 import time
+import urllib.request
 from urllib.parse import urlparse
 
 import cv2
+import numpy as np
 from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
-from aiortc.contrib.media import MediaPlayer  # PyAV media wrapper
 from av import VideoFrame
 import aiohttp
 
 # ── Configuration ──────────────────────────────────────────────────────────
-# MediaMTX base URL for WHIP ingest. Default: production (Caddy /live ->
-# ECS 2). Override for a locally running MediaMTX:
+# Publishes the REAL Crazyflie drone's camera to MediaMTX over WHIP, so any
+# number of viewers can watch it via WHEP (e.g. the Real Drone page).
+#
+# Source: the MJPEG proxy from crazyflie_discovery_game/crazyflie_bridge
+# (`start_bridge.sh` -> video_stream_proxy.py), which re-broadcasts the
+# drone's ESP32 AI-Deck stream as multipart/x-mixed-replace.
+#
+# Local run (local MediaMTX):
 #   MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
-#     python simple_webcam.py
+#     python crazyflie_mediamtx.py
+#
+# Env overrides:
+#   CRAZYFLIE_STREAM_URL  MJPEG source      (default http://localhost:8082/stream)
+#   LIVESTREAM_ID         MediaMTX path     (default crazyflie-drone)
+#   MEDIAMTX_URL          WHIP base URL     (default https://drone-navigation.com/live)
+#   MEDIAMTX_API          control API base  (default https://drone-navigation.com/control-api)
 MEDIAMTX_BASE_URL = os.environ.get("MEDIAMTX_URL", "https://drone-navigation.com/live")
 
-# Specific livestream properties. The stream id is overridable via
-# LIVESTREAM_ID so this webcam demo can stand in for any stream (e.g.
-# 'crazyflie-drone', the SPA's default) without a real drone.
-LIVESTREAM_HOSTNAME = os.environ.get("LIVESTREAM_ID", "ubuntu-webcam")
-LIVESTREAM_DESCRIPTION = "A webcam stream from Kan's Ubuntu desktop"
+LIVESTREAM_HOSTNAME = os.environ.get("LIVESTREAM_ID", "crazyflie-drone")
 
-# MediaMTX control API (default port 9997). Proxied via Caddy /control-api on
-# ECS; locally enable `api: yes` in mediamtx.yml and use http://127.0.0.1:9997.
 MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API", "https://drone-navigation.com/control-api")
+
+CRAZYFLIE_STREAM_URL = os.environ.get("CRAZYFLIE_STREAM_URL", "http://localhost:8082/stream")
 
 STUN_SERVER = "stun:stun.l.google.com:19302"
 MONITOR_INTERVAL = 10  # seconds between stats / viewer log lines
@@ -36,29 +46,108 @@ def log(tag, msg):
     print(f"[{time.strftime('%H:%M:%S')}] [{tag}] {msg}", flush=True)
 
 
-class WebcamStreamTrack(VideoStreamTrack):
-    def __init__(self, stream_id):
+class MJPEGReader:
+    """Background-thread reader for multipart/x-mixed-replace MJPEG streams.
+
+    Parses frames by scanning for JPEG SOI/EOI markers (same approach as the
+    bridge's own proxy), so it is immune to boundary-string quirks. Exposes
+    the latest decoded BGR frame plus a sequence number for freshness checks.
+    """
+
+    def __init__(self, url):
+        self.url = url
+        self.connected = False
+        self._frame = None
+        self._seq = 0
+        self._lock = threading.Lock()
+        self._running = False
+
+    def start(self):
+        self._running = True
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        # Bypass system HTTP proxies: the upstream is a localhost/LAN address.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        while self._running:
+            try:
+                req = urllib.request.Request(
+                    self.url,
+                    headers={"User-Agent": "crazyflie-mediamtx/1.0", "Accept": "*/*"},
+                )
+                with opener.open(req, timeout=10) as resp:
+                    self.connected = True
+                    log("MJPEG", f"Connected to {self.url}")
+                    buffer = bytearray()
+                    while self._running:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        buffer.extend(chunk)
+                        while True:
+                            soi = buffer.find(b"\xff\xd8")
+                            if soi < 0:
+                                break
+                            eoi = buffer.find(b"\xff\xd9", soi + 2)
+                            if eoi < 0:
+                                break
+                            jpg = bytes(buffer[soi : eoi + 2])
+                            buffer = bytearray(buffer[eoi + 2 :])
+                            frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                            if frame is None:
+                                continue
+                            with self._lock:
+                                self._frame = frame
+                                self._seq += 1
+            except Exception as e:
+                if self._running:
+                    log("MJPEG", f"Stream error: {e}; retrying in 2 s")
+                self.connected = False
+                time.sleep(2)
+
+    def read(self):
+        """Return (sequence_number, latest BGR frame or None)."""
+        with self._lock:
+            return self._seq, self._frame
+
+    def stop(self):
+        self._running = False
+
+class CrazyflieStreamTrack(VideoStreamTrack):
+    def __init__(self, reader):
         super().__init__()
-        self.stream_id = stream_id
-        self.cap = cv2.VideoCapture(0)
+        self.reader = reader
+        self._last_seq = 0
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
 
-        ret, frame = self.cap.read()
-        if not ret:
-            raise Exception("Webcam read failed")
+        # Wait briefly for a FRESH frame; the ESP32 delivers ~10-15 fps while
+        # WebRTC pacing asks at 30 fps, so reuse the last frame on starvation.
+        deadline = time.monotonic() + 0.5
+        seq, frame = self.reader.read()
+        while seq == self._last_seq and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+            seq, frame = self.reader.read()
+        if frame is None:
+            raise Exception("No Crazyflie frame available yet")
+        self._last_seq = seq
 
-        # Overlay identifying text on frame: the friendly hostname (not
-        # the raw stream_id) so the broadcast top line matches the UI.
+        # Copy before drawing so the reader's stored frame stays pristine
+        # (a reused frame must not accumulate overlays).
+        frame = frame.copy()
+
+        # Overlay identifying text, scaled to the (small) drone resolution.
+        h, w = frame.shape[:2]
+        scale = max(0.4, min(1.0, w / 640))
         cv2.putText(
             frame,
             f"{LIVESTREAM_HOSTNAME} - {time.strftime('%H:%M:%S')}",
-            (20, 40),
+            (10, max(20, int(h * 0.12))),
             cv2.FONT_HERSHEY_SIMPLEX,
-            1,
+            scale,
             (0, 255, 0),
-            2
+            1 if scale < 0.7 else 2,
         )
 
         new_frame = VideoFrame.from_ndarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), format="rgb24")
@@ -90,7 +179,7 @@ def describe_sdp_candidates(sdp):
 
 
 def stream_path_name(server_url, stream_id):
-    """'https://drone-navigation.com/live' + 'ubuntu-webcam' -> 'live/ubuntu-webcam'."""
+    """'https://drone-navigation.com/live' + 'crazyflie-drone' -> 'live/crazyflie-drone'."""
     prefix = urlparse(server_url).path.strip("/")
     return f"{prefix}/{stream_id}" if prefix else stream_id
 
@@ -169,6 +258,7 @@ async def run_whip_publisher(server_url, stream_id):
 
     log("INIT", f"Stream ID: '{stream_id}' (MediaMTX path: '{path_name}')")
     log("INIT", f"WHIP endpoint: {whip_endpoint}")
+    log("INIT", f"Crazyflie MJPEG source: {CRAZYFLIE_STREAM_URL}")
 
     # Resolve target host
     host = urlparse(server_url).hostname
@@ -190,33 +280,27 @@ async def run_whip_publisher(server_url, stream_id):
         elif pc.iceConnectionState == "failed":
             log("ICE", "Handshake FAILED: check STUN server, firewalls, or UDP ports.")
 
-    # 1. Initialize Video Track
-    video_track = None
-    try:
-        video_track = WebcamStreamTrack(stream_id)
-        if video_track.cap.isOpened():
-            w = int(video_track.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(video_track.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            pc.addTrack(video_track)
-            log("INIT", f"Webcam opened: {w}x{h}")
-        else:
-            log("INIT", "WARNING: Webcam device 0 failed to open. Streaming without video.")
-    except Exception as e:
-        log("INIT", f"WARNING: Video initialization failed ({e}).")
-
-    # 2. Initialize Audio Track
-    player = None
-    try:
-        player = MediaPlayer('default', format='pulse')
-        if player.audio:
-            pc.addTrack(player.audio)
-            log("INIT", "Microphone audio track added successfully.")
-    except Exception as e:
-        log("INIT", f"WARNING: Audio track initialization failed ({e}).")
-
-    if not pc.getSenders():
-        log("INIT", "ERROR: No audio or video tracks could be initialized. Terminating.")
+    # 1. Start the MJPEG reader and wait for the first decoded frame.
+    reader = MJPEGReader(CRAZYFLIE_STREAM_URL)
+    reader.start()
+    first = None
+    for _ in range(100):  # up to 10 s for the drone/proxy to deliver a frame
+        _, first = reader.read()
+        if first is not None:
+            break
+        await asyncio.sleep(0.1)
+    if first is None:
+        log("INIT", f"ERROR: no frame from {CRAZYFLIE_STREAM_URL} within 10 s. "
+                    "Is start_bridge.sh (video_stream_proxy.py) running?")
+        reader.stop()
         return
+
+    h, w = first.shape[:2]
+    log("INIT", f"Crazyflie video: {w}x{h} (first frame received)")
+    video_track = CrazyflieStreamTrack(reader)
+    pc.addTrack(video_track)
+
+    # 2. No audio: the drone's ESP32 camera is video-only.
 
     # 3. WebRTC Offer & ICE Gathering
     offer = await pc.createOffer()
@@ -241,11 +325,13 @@ async def run_whip_publisher(server_url, stream_id):
                     text = await resp.text()
                     log("WHIP", f"Handshake FAILED: HTTP {resp.status} from {whip_endpoint}")
                     log("WHIP", f"Error details: {text.strip()[:500]}")
+                    reader.stop()
                     return
                 sdp_answer = await resp.text()
                 log("WHIP", f"Handshake SUCCEEDED: HTTP {resp.status}, SDP answer received.")
         except Exception as e:
             log("WHIP", f"Handshake FAILED: could not reach {whip_endpoint} ({e})")
+            reader.stop()
             return
 
     theirs = describe_sdp_candidates(sdp_answer)
@@ -254,7 +340,8 @@ async def run_whip_publisher(server_url, stream_id):
     answer = RTCSessionDescription(sdp=sdp_answer, type="answer")
     await pc.setRemoteDescription(answer)
 
-    log("LIVE", f"STREAM LIVE. Stream ID: '{stream_id}'")
+    log("LIVE", f"STREAM LIVE. Stream ID: '{stream_id}' — viewers watch via "
+                f"WHEP at {server_url}/{stream_id}/whep")
 
     monitor_task = asyncio.create_task(monitor(pc, MEDIAMTX_API_URL, path_name))
 
@@ -266,18 +353,10 @@ async def run_whip_publisher(server_url, stream_id):
     finally:
         monitor_task.cancel()
         await pc.close()
-
-        if video_track and hasattr(video_track, "cap") and video_track.cap.isOpened():
-            video_track.cap.release()
-            log("CLEANUP", "Webcam hardware released.")
-
-        if player:
-            player.stop()
-            log("CLEANUP", "Audio player stopped.")
-
+        reader.stop()
+        log("CLEANUP", "MJPEG reader stopped.")
         log("LIVE", "Stream shutdown complete.")
 
 
 if __name__ == "__main__":
     asyncio.run(run_whip_publisher(MEDIAMTX_BASE_URL, LIVESTREAM_HOSTNAME))
-    

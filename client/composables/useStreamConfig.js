@@ -10,9 +10,11 @@ const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
 // Last-resort values when the endpoint is unreachable or unconfigured:
 // local MediaMTX in dev, the public Caddy /live path in production.
+// Stream id: 'crazyflie-drone' — the real drone's broadcast (see
+// extension/crazyflie_bridge/crazyflie_mediamtx.py).
 const FALLBACK_WHEP_URL = import.meta.env.DEV
-  ? 'http://127.0.0.1:8889/ubuntu-webcam/whep'
-  : 'https://drone-navigation.com/live/ubuntu-webcam/whep';
+  ? 'http://127.0.0.1:8889/crazyflie-drone/whep'
+  : 'https://drone-navigation.com/live/crazyflie-drone/whep';
 
 const whepUrl = ref(FALLBACK_WHEP_URL);
 let requested = false;

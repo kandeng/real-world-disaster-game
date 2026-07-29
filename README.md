@@ -121,10 +121,13 @@ tar -xzf mediamtx_v1.9.0_linux_amd64.tar.gz
 cd extension/simple_webcam
 pip install -r requirements.txt   # use the drone-navigation conda env
 MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
-  python simple_webcam.py         # WHIP-ingests the 'ubuntu-webcam' stream
+  LIVESTREAM_ID=crazyflie-drone python simple_webcam.py   # WHIP-ingests the 'crazyflie-drone' stream
 ```
 
-Which MediaMTX the SPA plays is decided by the backend, not the build: `server/config.json` -> `"mediamtx": { "whep_url": ... }` is served at `GET /api/stream/config`, and `RealDroneView.vue` resolves it at playback time (local: `http://127.0.0.1:8889/ubuntu-webcam/whep`; production on ECS: `https://drone-navigation.com/live/ubuntu-webcam/whep`; if the config key is absent, the SPA falls back to those same environment defaults). The publisher defaults to production; the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point it at the local server.
+With a real Crazyflie drone, `extension/crazyflie_bridge/crazyflie_mediamtx.py`
+publishes its camera under the same `crazyflie-drone` id instead of the webcam.
+
+Which MediaMTX the SPA plays is decided by the backend, not the build: `server/config.json` -> `"mediamtx": { "whep_url": ... }` is served at `GET /api/stream/config`, and `RealDroneView.vue` resolves it at playback time (local: `http://127.0.0.1:8889/crazyflie-drone/whep`; production on ECS: `https://drone-navigation.com/live/crazyflie-drone/whep`; if the config key is absent, the SPA falls back to those same environment defaults). The publisher defaults to production; the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point it at the local server.
 
 ### 7. Smoke test (whole system)
 
@@ -139,7 +142,7 @@ Browser checklist at `http://localhost:5173`:
 2. `My Space -> Settings`: change a value, click `Save` → green "saved" banner.
 3. `Community -> Chat`: with two accounts (two browsers/profiles), exchange DMs both ways; reload → history persists.
 4. `Community -> Customer Service`: connects to the local OpenClaw gateway.
-5. `Livestream`: plays the local `ubuntu-webcam` broadcast (step 6) — the green `ubuntu-webcam - HH:MM:SS` overlay ticks with live frames.
+5. `Real Drone -> Livestream Host` (and `Livestream Viewer`): plays the local `crazyflie-drone` broadcast (step 6) — the green `crazyflie-drone - HH:MM:SS` overlay ticks with live frames.
 
 ### 8. Background services (optional — no terminals)
 
