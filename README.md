@@ -127,7 +127,7 @@ MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
 With a real Crazyflie drone, `extension/crazyflie_bridge/crazyflie_mediamtx.py`
 publishes its camera under the same `crazyflie-drone` id instead of the webcam.
 
-Which MediaMTX the SPA plays is decided by the backend, not the build: `server/config.json` -> `"mediamtx": { "whep_url": ... }` is served at `GET /api/stream/config`, and `RealDroneView.vue` resolves it at playback time (local: `http://127.0.0.1:8889/crazyflie-drone/whep`; production on ECS: `https://drone-navigation.com/live/crazyflie-drone/whep`; if the config key is absent, the SPA falls back to those same environment defaults). The publisher defaults to production; the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point it at the local server.
+Which MediaMTX the SPA plays is decided by the backend, not the build: `server/config.json` -> `"mediamtx": { "streams": [...] }` is served at `GET /api/stream/config`, and `RealDroneView.vue` resolves it at playback time. The `Livestream Viewer` subpage lists every catalog entry as a clickable card in its left panel; the `Livestream Host` subpage always monitors the FIRST entry (the primary, `crazyflie-drone`). Per-environment fallbacks are built into the SPA (local: `http://127.0.0.1:8889/<id>/whep`; production on ECS: `https://drone-navigation.com/live/<id>/whep`) and are used when the config key is absent; the legacy single `"whep_url"` form is still honored. The publishers default to production; the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point them at the local server.
 
 ### 7. Smoke test (whole system)
 

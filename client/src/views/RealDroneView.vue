@@ -115,22 +115,38 @@ function onPagesBeforeOpen() {
 // Placeholder for dock buttons whose functionality is not implemented yet.
 function noop() {}
 
-/* ─── Livestream: WHEP playback of the 'crazyflie-drone' broadcast ─── */
-// ONE shared connection for both subpages: the Host monitors it fullscreen,
-// the Viewer watches it in the right panel. Switching subpages only
-// re-attaches the already-live MediaStream — no second WHEP handshake.
-// WHEP URL comes from the backend's /api/stream/config (server/config.json
-// "mediamtx" section): the desktop MediaMTX in local dev, the ECS MediaMTX
-// in production. Passed to the player as a getter so it is resolved at
+/* ─── Livestream: WHEP playback of the MediaMTX stream catalog ─── */
+// ONE shared connection for both subpages. The HOST subpage always
+// monitors the PRIMARY stream (first catalog entry = our own broadcast);
+// the VIEWER subpage plays whichever card is selected in its left panel.
+// Switching subpages with the SAME target stream only re-attaches the
+// already-live MediaStream — no second WHEP handshake. Switching to a
+// DIFFERENT stream (viewer card click, or host<->viewer with another
+// stream selected) does a stop()+start() re-handshake, so only one
+// stream ever consumes bandwidth at a time.
+// The catalog comes from the backend's /api/stream/config (server/
+// config.json "mediamtx" section) with per-environment fallbacks — see
+// useStreamConfig. Passed to the player as a getter so it is resolved at
 // every start()/retry — the async config fetch needs no await here.
-const { whepUrl: streamWhepUrl } = useStreamConfig();
+const { streams } = useStreamConfig();
 
-// Hard-coded stream identity for the TESTING phase, mirroring the
-// publisher's LIVESTREAM_HOSTNAME / LIVESTREAM_DESCRIPTION
-// (extension/crazyflie_bridge/crazyflie_mediamtx.py). Once the
-// FastAPI-users backend lands, these come from the user database instead.
-const LIVESTREAM_HOSTNAME = 'crazyflie-drone';
-const LIVESTREAM_DESCRIPTION = 'Live video from the Crazyflie drone (ESP32 AI-Deck)';
+// Viewer card selection. null = follow the primary stream until the user
+// picks a card. (Static catalog for the TESTING phase; once the
+// FastAPI-users backend lands, identities come from the user database.)
+const selectedStreamId = ref(null);
+const primaryStream = computed(() => streams.value[0] || null);
+const selectedStream = computed(
+  () => streams.value.find((s) => s.id === selectedStreamId.value) || primaryStream.value,
+);
+// The stream the shared connection should currently play: the Host
+// subpage always monitors the primary broadcast; the Viewer plays the
+// selected card.
+const targetStream = computed(() =>
+  activeSubpage.value === 'host' ? primaryStream.value : selectedStream.value);
+const targetUrl = computed(() => targetStream.value?.whep_url || '');
+// What the player was last started with — restart only on a real change.
+let playingUrl = '';
+
 const hostVideoEl = ref(null);
 const viewerVideoEl = ref(null);
 
@@ -153,7 +169,7 @@ function onLiveProgress(phase) {
 }
 
 const livePlayer = createWhepPlayer({
-  url: () => streamWhepUrl.value,
+  url: () => targetUrl.value,
   logTag: 'live',
   onProgress: onLiveProgress,
 });
@@ -180,6 +196,23 @@ function attachLiveStream(el) {
   }, { once: true });
   livePlayer.attach(el);
 }
+
+// Re-point the shared connection at the current target stream. No-op when
+// the URL is unchanged (the common subpage-switch case: attach() alone is
+// instant). On a real change: stop() [which also forgets the render
+// target], re-attach, then start() — the progress pill replays via
+// onProgress('start').
+function syncLiveStream() {
+  if (!targetUrl.value || targetUrl.value === playingUrl) return;
+  playingUrl = targetUrl.value;
+  livePlayer.stop();
+  attachLiveStream(activeVideoEl());
+  livePlayer.start();
+}
+
+// Card clicks and late-arriving server config both funnel through
+// targetUrl — a single watcher restarts the connection on any change.
+watch(targetUrl, syncLiveStream);
 
 /* ─── Livestream Viewer: fit the video into the adjustable right panel ─── */
 // Policy: NEVER upscale past the stream's natural resolution; downscale to
@@ -312,6 +345,7 @@ watch(activeSubpage, async (val) => {
     setupViewerStage();
     attachLiveStream(viewerVideoEl.value);
   }
+  syncLiveStream(); // no-op unless the target stream differs per subpage
 });
 
 onMounted(() => {
@@ -437,6 +471,7 @@ onMounted(() => {
   // connection is re-attached to the Viewer's <video> on later switches.
   nextTick(() => {
     if (activeSubpage.value === 'host') attachLiveStream(hostVideoEl.value);
+    playingUrl = targetUrl.value;
     livePlayer.start();
   });
 });
@@ -488,18 +523,25 @@ onUnmounted(() => {
       <!-- Split-layout subpage (Livestream Viewer): two panels
            split by a vertical draggable divider; panel content comes later -->
       <div v-if="isSplitStyle" class="split-page">
-        <!-- Left panel: stream identity (hard-coded for the testing
-             phase; will come from the FastAPI-users backend later) -->
+        <!-- Left panel: stream catalog from /api/stream/config
+             (testing-phase identities; will come from the FastAPI-users
+             backend later). Clicking a card switches the right panel. -->
         <aside
           class="split-sidebar"
           :style="{ flexBasis: leftWidthPct + '%' }"
         >
           <div class="stream-list">
-            <div class="stream-card">
+            <div
+              v-for="s in streams"
+              :key="s.id"
+              class="stream-card"
+              :class="{ 'stream-card--active': s.id === selectedStream?.id }"
+              @click="selectedStreamId = s.id"
+            >
               <div class="stream-card__head">
-                <span class="stream-card__title">{{ LIVESTREAM_HOSTNAME }}</span>
+                <span class="stream-card__title">{{ s.hostname }}</span>
               </div>
-              <p class="stream-card__desc">{{ LIVESTREAM_DESCRIPTION }}</p>
+              <p class="stream-card__desc">{{ s.description }}</p>
             </div>
           </div>
         </aside>
@@ -573,6 +615,18 @@ onUnmounted(() => {
   border-radius: 10px;
   padding: 12px 14px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stream-card:hover {
+  border-color: #007aff;
+}
+
+/* The card whose stream is playing in the right panel. */
+.stream-card--active {
+  border-color: #007aff;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
 }
 
 .stream-card__head {
