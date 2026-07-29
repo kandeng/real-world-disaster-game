@@ -817,7 +817,7 @@ caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-The repo copy [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) intentionally does not carry this block yet — it needs the live Tailscale IP. Back-port the final block into the repo copy on the next push.
+The repo copy [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) carries this block with the live Tailscale IP — keep the two in sync on every route change.
 
 &nbsp;
 ### 7. Smoke tests
@@ -845,7 +845,38 @@ The first `/api/matrix/token` call for any pre-existing website user lazily prov
 Browser end-to-end: sign in as two different accounts (two browsers or profiles), open `Community -> Chat`, start a New chat with the other user, exchange messages both ways, reload and confirm history persists; then create a team room containing both.
 
 &nbsp;
-### 8. Troubleshooting
+### 8. Deleting a website user (incl. Matrix cleanup)
+
+Deleting the PostgreSQL row alone is NOT enough: the hidden Synapse account and its access tokens survive. Token brokering issues *admin-puppeted* tokens — they live in `access_tokens` under `@admin:drone-navigation.com` with `puppets_user_id` set to the hidden account — and Synapse's deactivation does not revoke them (an old chat token keeps passing `whoami` until the row is gone).
+
+1. **PostgreSQL (ECS 1)** — deleting from `"user"` cascades to `matrix_account`, `user_settings`, and `oauth_account`:
+
+```bash
+sudo -u postgres psql -d drone_navigation \
+  -c "DELETE FROM \"user\" WHERE email = '<user@example.com>';"
+```
+
+2. **Synapse (ECS 2)** — deactivate + erase the hidden account (erases its messages; the mxid was stored in `matrix_account`, format `@u_<hex8>:drone-navigation.com`; URL-encode `@` -> `%40`, `:` -> `%3A`):
+
+```bash
+curl -s -X POST http://<TAILSCALE_B>:8008/_synapse/admin/v1/deactivate/<url-encoded-mxid> \
+  -H "Authorization: Bearer <admin syt_ token>" -H 'Content-Type: application/json' \
+  -d '{"erase": true}'
+```
+
+3. **Kill its live tokens (ECS 2)**, then restart to flush Synapse's in-process auth cache:
+
+```bash
+/root/synapse-venv/bin/python -c "import sqlite3; \
+  db = sqlite3.connect('/root/synapse-data/homeserver.db'); \
+  db.execute(\"DELETE FROM access_tokens WHERE puppets_user_id = '<mxid>'\"); db.commit()"
+sudo systemctl restart drone-synapse
+```
+
+Verify: website login -> `LOGIN_BAD_CREDENTIALS`; old chat token -> `M_UNKNOWN_TOKEN` from `https://drone-navigation.com/_matrix/client/v3/account/whoami`.
+
+&nbsp;
+### 9. Troubleshooting
 
 | Symptom | Likely cause / check |
 |---------|----------------------|
@@ -856,6 +887,7 @@ Browser end-to-end: sign in as two different accounts (two browsers or profiles)
 | pip `Failed to resolve 'mirrors.cloud.aliyuncs.com'` | `/etc/pip.conf` points at Alibaba's VPC-internal mirror, which doesn't resolve outside the VPC — always pass `--index-url https://pypi.org/simple` |
 | DNS stops resolving right after `tailscale up` | tailscaled's MagicDNS wedged systemd-resolved — re-run `tailscale up --accept-dns=false` on the server (persistent pref), then `systemctl restart tailscaled systemd-resolved`; if still broken, `resolvectl revert tailscale0` |
 | Chat works via apex but `/sync` drops every ~30–60 s when the page is loaded via `www` | CDN edge killing long-polls (same family as the customer-service WebSocket issue) — use the apex domain until the CDN behavior is addressed |
+| Old chat access token still works after the website user was deleted | Admin-puppeted tokens survive Synapse deactivation — complete steps 2–3 of section 3.5.8 (delete `access_tokens` by `puppets_user_id`, then restart) |
 
 Deferred to later phases (explicit v1 non-goals): federation Variant A provisioning (8448 listener, `.well-known/matrix/server`, `matrix.drone-navigation.com` A record), E2EE, media attachments, OpenClaw appservice bridge, SQLite→PostgreSQL migration, stale-device cleanup, message retention, push notifications.
 
