@@ -70,6 +70,15 @@ drone-navigation.com {
 		}
 	}
 
+	# Synapse Matrix client API (over the Tailscale mesh to ECS 2; plain
+	# `handle` keeps the /_matrix prefix — Synapse routes include it)
+	handle /_matrix/* {
+		reverse_proxy 100.68.213.55:8008 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
 	# Strip the '/live' prefix before sending the request to MediaMTX
 	handle_path /live/* {
 		reverse_proxy 47.85.110.135:8889 {
@@ -134,6 +143,15 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 			header_up Host {host}
 			header_up X-Real-IP {remote_host}
 			header_up X-Forwarded-Proto {scheme}
+		}
+	}
+
+	# Synapse Matrix client API (identical to the apex block; over the
+	# Tailscale mesh to ECS 2)
+	handle /_matrix/* {
+		reverse_proxy 100.68.213.55:8008 {
+			header_up Host {host}
+			header_up X-Real-IP {remote_host}
 		}
 	}
 

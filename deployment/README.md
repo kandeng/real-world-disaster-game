@@ -669,18 +669,25 @@ v1 scope: federation is **OFF** (no 8448 listener, no `.well-known`, no `matrix.
 ```bash
 # Run on 47.85.110.135 as root (same account style as the MediaMTX setup)
 
-# 1. Install Miniconda (skip if `conda --version` already works)
-wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
-bash /tmp/miniconda.sh -b -p ~/miniconda3
+# 1. Create a virtualenv from the SYSTEM python3 (3.12+). Do NOT use a conda
+#    python here: the Anaconda "defaults" SQLite build lacks FTS4/FTS5, and
+#    Synapse's schema needs FTS4 ('no such module: fts4' at first start).
+python3 -m venv --without-pip /root/synapse-venv
+curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+/root/synapse-venv/bin/python /tmp/get-pip.py
 
-# 2. Create the Synapse conda environment (Python 3.12) and install Synapse
-#    (pinned to the version verified locally)
-~/miniconda3/bin/conda create -n synapse python=3.12 -y
-~/miniconda3/envs/synapse/bin/pip install matrix-synapse==1.157.1
+# 2. Install Synapse (pinned to the version verified locally).
+#    NOTE: this host's /etc/pip.conf points at Alibaba's VPC-internal mirror
+#    (mirrors.cloud.aliyuncs.com), which does not always resolve — pass the
+#    public index explicitly:
+/root/synapse-venv/bin/pip install --index-url https://pypi.org/simple matrix-synapse==1.157.1
 
-# 3. Generate the initial config + data directory.
+# 3. Generate the initial config + data directory. cd INTO the data dir first:
+#    generate-config embeds CWD-absolute paths (database, media_store, pid,
+#    log) — running it from ~ would litter /root with homeserver.db etc.
 #    server-name = the PUBLIC domain: user IDs will be @user:drone-navigation.com
-~/miniconda3/envs/synapse/bin/python -m synapse.app.homeserver \
+mkdir -p ~/synapse-data && cd ~/synapse-data
+/root/synapse-venv/bin/python -m synapse.app.homeserver \
   --server-name drone-navigation.com \
   --config-path ~/synapse-data/homeserver.yaml \
   --generate-config --report-stats=no
@@ -701,11 +708,11 @@ listeners:
     x_forwarded: true
     bind_addresses: ['<TAILSCALE_B>']
     resources:
-      - names: [client, admin]
+      - names: [client]
         compress: false
 ```
 
-There is no 8448 entry (federation stays off) and no `federation` resource above. `x_forwarded: true` lets Synapse log the real client IPs that Caddy forwards.
+There is no 8448 entry (federation stays off) and no `federation` resource above. The Admin API (`/_synapse/admin/*`) is served by the `client` listener itself — Synapse has no separate `admin` resource name (passing one fails config validation at startup). `x_forwarded: true` lets Synapse log the real client IPs that Caddy forwards.
 
 2. Verify registration stays closed (users are provisioned by FastAPI, never by the public):
 
@@ -720,7 +727,7 @@ enable_registration: false
 
 ```bash
 # Foreground smoke run — Ctrl-C after verifying
-~/miniconda3/envs/synapse/bin/python -m synapse.app.homeserver -c ~/synapse-data/homeserver.yaml
+/root/synapse-venv/bin/python -m synapse.app.homeserver -c ~/synapse-data/homeserver.yaml
 ```
 
 From **ECS 1**, prove the mesh path before going further:
@@ -733,7 +740,7 @@ curl http://<TAILSCALE_B>:8008/_matrix/client/versions
 Back on **ECS 2**, create the service admin user and harvest its long-lived access token:
 
 ```bash
-~/miniconda3/envs/synapse/bin/register_new_matrix_user \
+/root/synapse-venv/bin/register_new_matrix_user \
   -c ~/synapse-data/homeserver.yaml \
   -u admin -p '<generate-a-strong-password>' --admin \
   http://<TAILSCALE_B>:8008
@@ -844,6 +851,10 @@ Browser end-to-end: sign in as two different accounts (two browsers or profiles)
 |---------|----------------------|
 | `503 Chat service unavailable` from `/api/matrix/token` | Wrong `base_url`/token in `server/config.json`, or Synapse down — `journalctl -u drone-fastapi -f` (ECS 1) and `journalctl -u drone-synapse -f` (ECS 2) |
 | `curl http://<TAILSCALE_B>:8008/...` times out from ECS 1 | Tailscale down (`tailscale status`), or listener bound to the wrong IP — `ss -tulpn \| grep 8008` on ECS 2 must show the 100.x address |
+| `sqlite3.OperationalError: no such module: fts4` at first start | The python's bundled SQLite lacks FTS4 (conda's Anaconda-"defaults" build) — rebuild the env from the SYSTEM python3 per step 1 |
+| `table background_updates already exists` at first start | Stale DB from a previously crashed first start — delete `homeserver.db*` (check BOTH `~/synapse-data/` and `~/`, see step 1 note) and start again |
+| pip `Failed to resolve 'mirrors.cloud.aliyuncs.com'` | `/etc/pip.conf` points at Alibaba's VPC-internal mirror, which doesn't resolve outside the VPC — always pass `--index-url https://pypi.org/simple` |
+| DNS stops resolving right after `tailscale up` | tailscaled's MagicDNS wedged systemd-resolved — re-run `tailscale up --accept-dns=false` on the server (persistent pref), then `systemctl restart tailscaled systemd-resolved`; if still broken, `resolvectl revert tailscale0` |
 | Chat works via apex but `/sync` drops every ~30–60 s when the page is loaded via `www` | CDN edge killing long-polls (same family as the customer-service WebSocket issue) — use the apex domain until the CDN behavior is addressed |
 
 Deferred to later phases (explicit v1 non-goals): federation Variant A provisioning (8448 listener, `.well-known/matrix/server`, `matrix.drone-navigation.com` A record), E2EE, media attachments, OpenClaw appservice bridge, SQLite→PostgreSQL migration, stale-device cleanup, message retention, push notifications.
@@ -893,6 +904,7 @@ In the Tailscale admin console (`https://login.tailscale.com/admin/machines`), f
 &nbsp;
 ### 4. Notes
 
+- **Server DNS**: join with `tailscale up --accept-dns=false` on servers. MagicDNS is meant for client devices; on these Alibaba Ubuntu images it wedged systemd-resolved (all lookups timed out until reverted). See the section 3.5 troubleshooting table.
 - **Alibaba security groups**: no new inbound rules are needed — Tailscale NAT-traverses using outbound connections and falls back to DERP relays. Optionally open UDP `41641` on both servers for faster direct links.
 - **ACLs**: the default tailnet policy lets all nodes reach each other (fine for two servers). An ACL restricting port 8008 to just these two machines can be added later.
 - Renaming the machines in the admin console (e.g. `ecs-caddy`, `ecs-synapse`) makes `tailscale status` output and logs easier to read.
