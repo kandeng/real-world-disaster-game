@@ -183,6 +183,8 @@ systemctl --user restart drone-fastapi        # restart one
 systemctl --user disable --now drone-webcam   # stop the webcam publisher (e.g. a real drone publishes instead)
 ```
 
+### 9. Local Demo of the Whole System
+
 Demo-day startup (current policy on this desktop: all six services are **disabled** so they stay off across reboots — start them manually only when needed):
 
 ```bash
@@ -192,6 +194,64 @@ systemctl --user start drone-pg drone-fastapi drone-synapse drone-mediamtx drone
 # Shut it down again afterwards
 systemctl --user stop drone-pg drone-fastapi drone-synapse drone-mediamtx drone-webcam openclaw-gateway
 ```
+
+Real drone: 
+
+1. Find the IP address of the crazyflie drone.
+
+~~~
+(drone-navigation) robot@robot-test:~/drone-navigation/extension/crazyflie_bridge$ nmap -sn 192.168.0.0/24
+Starting Nmap 7.80 ( https://nmap.org ) at 2026-07-30 21:59 CST
+Nmap scan report for 192.168.0.100
+Host is up (0.021s latency).
+...
+~~~
+
+Then in the chrome browser, visit `http://192.168.0.xxx` one by one in the list, 
+until it displays the video livestream from the crazyflie drone. 
+
+2. Start up `crazyflie_bridge` and `simple_webcam`.
+
+`crazyflie_bridge` — three processes, one terminal each (conda env `crazyflie`):
+
+```bash
+cd extension/crazyflie_bridge
+conda activate crazyflie
+
+# 1) Motion + telemetry bridge and the video proxy (owns the drone link)
+CRAZYFLIE_IP=192.168.0.110 ./start_bridge.sh
+#    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
+#    + motion_control_ws.py   (ws://:8765; radio://0/80/2M/E7E7E7E7E7 by default —
+#      pass --cf-uri usb://0 for a USB-tethered drone, where takeoff is REFUSED).
+#    Stop: Ctrl+C (press twice to force; lands the drone first if it is flying).
+#    Bench safety: CF_NO_FLY=1 ./start_bridge.sh refuses every takeoff (dry-run).
+
+# 2) Telemetry + flight-command relay (drone <-> FastAPI)
+TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
+  python telemetry_relay.py
+#    Stop: Ctrl+C. Omit TELEMETRY_SERVER to relay to PRODUCTION (drone-navigation.com).
+
+# 3) Drone camera -> local MediaMTX (WHIP ingest, id 'crazyflie-drone')
+MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+  python crazyflie_mediamtx.py
+#    Stop: Ctrl+C. Reads the video proxy (override with CRAZYFLIE_STREAM_URL).
+```
+
+`simple_webcam` — the no-drone stand-in (conda env `drone-navigation`); skip it when the real drone publishes:
+
+```bash
+cd extension/simple_webcam
+conda activate drone-navigation
+MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+  python simple_webcam.py
+#    WHIP-ingests the laptop webcam as 'ubuntu-webcam' (LIVESTREAM_ID=crazyflie-drone
+#    makes it stand in for the drone). Stop: Ctrl+C.
+#    Note: the demo-day systemctl line above already runs this as drone-webcam —
+#    don't run both (that would double-publish the same stream id).
+```
+
+Then open `http://localhost:5173` -> `Real Drone`: the `Livestream Viewer` lists the stream cards; the `Livestream Host` HUD shows live telemetry, and the Takeoff/Stop/Landing button + Flight disk fly the drone (armed only over the radio link — never on the USB cable).
+
 
 Notes:
 
