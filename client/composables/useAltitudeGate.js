@@ -113,17 +113,32 @@ export function useAltitudeGate(drone) {
   /**
    * Start an automatic takeoff with a pre-cache delay phase.
    * Phase: IDLE -> PRE_TAKEOFF (delay) -> ASCENDING
+   * Returns false (no sequence started) when the drone is already at/above
+   * the takeoff altitude — the caller surfaces a reminder for that case.
+   *
+   * opts.cameraPrewarm: allow the tile pre-warm to teleport the camera (the
+   * caller must guarantee the Cesium canvas is currently covered — otherwise
+   * the teleport is visible as a tremble; see prewarmTiles).
    */
-  function startTakeoff(viewer) {
+  function startTakeoff(viewer, { cameraPrewarm = true } = {}) {
     update(viewer); // refresh surfaceAlt first
+    const target = surfaceAlt.value + settings.takeoffAltitude;
+    if (drone.alt >= target - AUTO_TOLERANCE) {
+      // Already at/above the takeoff altitude: nothing to climb to.
+      flightPhase.value = PHASES.CRUISING;
+      isOnGround.value = false;
+      lastSequence.value = 'takeoff';
+      return false;
+    }
     flightPhase.value = PHASES.PRE_TAKEOFF;
     isOnGround.value = false; // unlock ground clamp immediately
     lastSequence.value = 'takeoff';
-    prewarmTiles(viewer);
+    prewarmTiles(viewer, cameraPrewarm);
     clearTimeout(phaseTimer);
     phaseTimer = setTimeout(() => {
       flightPhase.value = PHASES.ASCENDING;
     }, PRE_TAKEOFF_DELAY);
+    return true;
   }
 
   /**
@@ -208,7 +223,10 @@ export function useAltitudeGate(drone) {
       }
       isPausedByCollision.value = false;
       const target = surfaceAlt.value + settings.takeoffAltitude;
-      if (stepToward(target, dt)) {
+      // The user-driven takeoff/stop/landing switcher can offer 'takeoff' at
+      // any altitude: when already at/above the target there is nothing to
+      // climb to — complete immediately instead of descending toward it.
+      if (drone.alt >= target - AUTO_TOLERANCE || stepToward(target, dt)) {
         flightPhase.value = PHASES.CRUISING;
         isOnGround.value = false;
         return true;
@@ -244,20 +262,39 @@ export function useAltitudeGate(drone) {
     drone.alt = surfaceAlt.value;
   }
 
-  function cancelAuto() {
+  /**
+   * STOP action of the takeoff/stop/landing switcher: abort any in-progress
+   * auto sequence (including a pending pre-cache timer) and hold the current
+   * altitude (CRUISING). A completed or never-started sequence keeps its IDLE
+   * phase so a grounded drone stays grounded. Inside the bottom ground band
+   * the per-frame ground clamp settles the drone onto the surface, so a
+   * low-altitude stop behaves like an early landing / takeoff abort.
+   */
+  function stopAuto() {
     clearTimeout(phaseTimer);
     phaseTimer = null;
     isPausedByCollision.value = false;
-    flightPhase.value = PHASES.CRUISING;
+    if (isTransitioning.value) {
+      flightPhase.value = PHASES.CRUISING;
+    }
   }
 
   /**
    * Pre-warm the Cesium tile cache at the drone's position and target altitude.
-   * Positions the hidden camera at targetAlt and sweeps pitch from 0 to -30 deg
-   * to cache a wider cone of tiles before the drone ascends.
+   * Teleports the VISIBLE camera to targetAlt and sweeps pitch from 0 to -30
+   * deg to cache a wider cone of tiles before the drone ascends.
+   *
+   * WARNING: this moves the real camera. The dashboard re-asserts the drone
+   * pose every animation frame (window.updateCesiumCamera), so each teleport
+   * snaps back one frame later — when the Cesium canvas is visible this reads
+   * as a short "tremble". Pass allowTeleport=true ONLY when the canvas is
+   * fully covered (Street View overlay, .cesium-hidden = opacity 0 — the
+   * canvas keeps rendering, so the warm poses still trigger tile requests).
+   * When skipped, tiles simply stream in progressively during the slow
+   * (8 m/s) ascent, which is visually fine.
    */
-  function prewarmTiles(viewer) {
-    if (!viewer) return;
+  function prewarmTiles(viewer, allowTeleport = true) {
+    if (!viewer || !allowTeleport) return;
     const camera = viewer.camera;
     const savedPosition = camera.position.clone();
     const savedHeading = camera.heading;
@@ -314,7 +351,7 @@ export function useAltitudeGate(drone) {
     startLanding,
     stepAuto,
     snapToGround,
-    cancelAuto,
+    stopAuto,
     prewarmTiles,
   };
 }

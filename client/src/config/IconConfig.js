@@ -24,6 +24,7 @@ export const IconMap = {
   MENU_CHAT: '../../icons/chat.svg',
   MENU_TAKEOFF: '../../icons/takeoff.svg',
   MENU_LANDING: '../../icons/landing.svg',
+  MENU_STOP: '../../icons/stop.svg',
   MENU_ROUTER: '../../icons/router.svg',
   MENU_RECORDER: '../../icons/recorder.svg',
   MENU_CONTACTS: '../../icons/contacts.svg',

@@ -13,6 +13,8 @@
   "loading_livestream": "Connecting to livestream ...",
   "takeoff": "Takeoff",
   "landing": "Landing",
+  "stop": "Stop",
+  "takeoff_above_limit": "Takeoff altitude is {alt} m — you are already beyond that height.",
   "taking_off": "Taking Off...",
   "landing_in_progress": "Landing...",
   "pages": "Pages",

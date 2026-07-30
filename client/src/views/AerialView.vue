@@ -15,6 +15,7 @@ import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
 import { useScreenCapture } from '@shared-composables/useScreenCapture.js';
+import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
@@ -31,9 +32,6 @@ const { drone, gimbal } = useDrone();
 // control (disks, sidebars, physics) is identical between them.
 const { activeSource, isSwitching, setSource, getActiveTileset } = useTilesetSource();
 const altitudeGate = useAltitudeGate(drone);
-
-const isLowAltitude = computed(() => (drone.alt - altitudeGate.surfaceAlt.value) < 10);
-const isHighAltitude = computed(() => (drone.alt - altitudeGate.surfaceAlt.value) >= 10);
 
 const {
   flight,
@@ -67,6 +65,7 @@ const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockReg
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 const { recorderState, replayProgress, replayPov, captureScreenshot, sampleFrame, toggleRecorder, resetRecorder } = useScreenCapture();
 const { isAuthenticated } = useAuth();
+const { settings } = useAppSettings();
 
 // Login gate for Screenshot / Screen Recording (the 3D Aerial and 3D Mesh
 // subpages share this right dock): anonymous users get a green top-center
@@ -369,13 +368,64 @@ async function swapSourceWithProgress(val) {
   }, 500);
 }
 
+// ── Takeoff / Stop / Landing switcher ──
+// The dock button is a 3-state switcher cycled ENTIRELY by the user:
+//   takeoff -> stop -> landing -> stop -> takeoff -> ...
+// It never judges whether the drone is on the ground or airborne:
+// - 'takeoff' starts the auto takeoff sequence (climb to takeoffAltitude);
+// - 'landing' starts the auto landing sequence (descend to the surface);
+// - 'stop' aborts an in-progress sequence and holds the current altitude
+//   (inside the bottom ground band the ground clamp settles the drone onto
+//   the surface, so a low-altitude stop behaves like an early landing).
+// The button stays ENABLED during takeoff/landing so the sequence can be
+// interrupted mid-flight; the other buttons keep their original locking.
+const SWITCH_SEQUENCE = ['takeoff', 'stop', 'landing', 'stop'];
+const switchIndex = ref(0); // index of the action the button currently offers
+
+function syncTakeoffSwitchItem() {
+  const item = rightItems.find((i) => i.id === 'takeoff');
+  if (!item) return;
+  const action = SWITCH_SEQUENCE[switchIndex.value];
+  item.icon = action === 'takeoff' ? 'MENU_TAKEOFF'
+    : action === 'landing' ? 'MENU_LANDING'
+    : 'MENU_STOP';
+  item.titleKey = `aerialview.${action}`;
+}
+
 function toggleTakeoffLanding() {
   const viewer = window.cesiumViewer;
-  if (altitudeGate.isOnGround.value) {
-    altitudeGate.startTakeoff(viewer);
-  } else {
+  const action = SWITCH_SEQUENCE[switchIndex.value];
+  if (action === 'takeoff') {
+    // startTakeoff returns false when the drone is already above the takeoff
+    // altitude (settings.takeoffAltitude, default 100 m): no sequence starts,
+    // the user just gets the green reminder below.
+    //
+    // The takeoff tile pre-warm teleports the Cesium camera to the target
+    // altitude for a few frames. Only allow that while the Street View
+    // overlay fully covers the (still rendering) Cesium canvas — mirrored
+    // from the .cesium-hidden watcher below — otherwise the teleport shows
+    // up as a visible tremble.
+    const cesiumCovered = svPaneState.value.visible && !svPaneState.value.transitioning && streetViewReady.value;
+    if (!altitudeGate.startTakeoff(viewer, { cameraPrewarm: cesiumCovered })) {
+      flashTakeoffLimitNotice();
+    }
+  } else if (action === 'landing') {
     altitudeGate.startLanding(viewer);
+  } else {
+    altitudeGate.stopAuto();
   }
+  switchIndex.value = (switchIndex.value + 1) % SWITCH_SEQUENCE.length;
+  syncTakeoffSwitchItem();
+}
+
+// Green top-center reminder: 'takeoff' was clicked while the drone is already
+// beyond the takeoff altitude. Auto-hides after a few seconds.
+const takeoffLimitNotice = ref('');
+let takeoffLimitTimer = null;
+function flashTakeoffLimitNotice() {
+  takeoffLimitNotice.value = t('aerialview.takeoff_above_limit', { alt: settings.takeoffAltitude });
+  clearTimeout(takeoffLimitTimer);
+  takeoffLimitTimer = setTimeout(() => { takeoffLimitNotice.value = ''; }, 5000);
 }
 
 watch(
@@ -670,10 +720,13 @@ onMounted(() => {
     active: showFlight.value,
     onClick: toggleFlight,
   });
+  // Takeoff/Stop/Landing switcher — always starts at 'takeoff'; its icon
+  // and title are driven by switchIndex (see toggleTakeoffLanding), NOT by
+  // the drone's altitude.
   registerRight({
     id: 'takeoff',
-    icon: isLowAltitude.value ? 'MENU_TAKEOFF' : 'MENU_LANDING',
-    titleKey: isLowAltitude.value ? 'aerialview.takeoff' : 'aerialview.landing',
+    icon: 'MENU_TAKEOFF',
+    titleKey: 'aerialview.takeoff',
     onClick: toggleTakeoffLanding,
   });
   registerRight({
@@ -750,35 +803,18 @@ onMounted(() => {
     }
   });
 
-  // Sync takeoff/landing button icon and label.
-  // < 10m from ground → Takeoff,  > 100m from ground → Landing.
-  // Between 10–100m → keep the previous state unchanged.
-  watch(
-    [isLowAltitude, isHighAltitude],
-    ([low, high]) => {
-      const item = rightItems.find((i) => i.id === 'takeoff');
-      if (!item) return;
-      // In the 10–100m band, preserve the current button state.
-      if (!low && !high) return;
-      const showTakeoff = low;
-      item.icon = showTakeoff ? 'MENU_TAKEOFF' : 'MENU_LANDING';
-      item.titleKey = showTakeoff ? 'aerialview.takeoff' : 'aerialview.landing';
-    },
-    { immediate: true }
-  );
-
-  // Disable non-navigation dock buttons during takeoff/landing transitions.
-  // During collision pause, only the takeoff/landing button stays disabled
-  // (flight/camera controls remain active so user can reposition).
-  // Pages (router) and Chat buttons remain enabled so the user can navigate away.
+  // Disable non-navigation dock buttons during takeoff/landing transitions —
+  // EXCEPT the takeoff/stop/landing switcher itself, which must stay clickable
+  // so the user can interrupt the sequence mid-flight (its whole purpose).
+  // During a collision pause the other buttons unlock so the user can
+  // reposition. Pages (router) and Chat buttons remain enabled so the user
+  // can navigate away.
   watch([isTakeoffLanding, isPausedByCollision], ([transitioning, paused]) => {
-    const disableAllIds = ['steer', 'takeoff', 'camera', 'recorder'];
-    const disableButtonOnlyIds = ['takeoff'];
-    const disableIds = paused ? disableButtonOnlyIds : disableAllIds;
+    const lockableIds = ['steer', 'camera', 'recorder'];
     for (const list of [leftItems, rightItems]) {
       for (const item of list) {
-        if (disableAllIds.includes(item.id)) {
-          item.disabled = transitioning && disableIds.includes(item.id);
+        if (lockableIds.includes(item.id)) {
+          item.disabled = transitioning && !paused;
         }
       }
     }
@@ -843,6 +879,9 @@ onUnmounted(() => {
       </div>
       <div v-if="lockedMessage" class="top-center-message top-center-message--warning">
         {{ lockedMessage }}
+      </div>
+      <div v-if="takeoffLimitNotice" class="top-center-message top-center-message--success">
+        {{ takeoffLimitNotice }}
       </div>
       <div
         v-if="isPreCaching"
@@ -970,6 +1009,12 @@ onUnmounted(() => {
   background: rgba(180, 100, 0, 0.9);
   box-shadow: 0 0 18px rgba(180, 100, 0, 0.6);
   animation: scan-pulse 1.2s ease-in-out infinite;
+}
+
+/* Green info reminder (e.g. takeoff clicked above the takeoff altitude). */
+.top-center-message--success {
+  background: rgba(34, 197, 94, 0.9);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
 }
 
 .replay-pill {
