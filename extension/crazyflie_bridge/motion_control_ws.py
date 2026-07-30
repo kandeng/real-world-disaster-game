@@ -87,6 +87,15 @@ class CrazyflieBridge:
         # the drone is simply off).
         self._cf_failures = 0
 
+        # SAFETY interlock: a USB-tethered drone must NEVER take off (the
+        # cable would yank it down). Block 'takeoff' and the move-up
+        # auto-takeoff path while the link is usb://*. Override for bench
+        # tests with CF_ALLOW_USB_TAKEOFF=1.
+        self._usb_takeoff_blocked = (
+            self.cf_uri.startswith("usb")
+            and os.environ.get("CF_ALLOW_USB_TAKEOFF", "") != "1"
+        )
+
     # ------------------------------------------------------------------ #
     #  Helpers
     # ------------------------------------------------------------------ #
@@ -400,6 +409,15 @@ class CrazyflieBridge:
 
         action = cmd.get("action")
         print(f"[Bridge] CMD >> {action}  {cmd}")
+
+        # USB-cable interlock: refuse anything that would spin up for takeoff.
+        wants_takeoff = action == "takeoff" or (
+            action == "move" and (cmd.get("vz") or 0) > 0 and not self._is_flying
+        )
+        if wants_takeoff and self._usb_takeoff_blocked:
+            print(f"[Bridge] {action} REFUSED: drone is tethered via USB "
+                  "(unplug the cable / use the radio link to fly)")
+            return
 
         try:
             if action == "takeoff":

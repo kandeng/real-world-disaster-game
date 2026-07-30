@@ -10,6 +10,7 @@ import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
 import { useStreamConfig } from '@shared-composables/useStreamConfig.js';
 import { useDroneTelemetry } from '@shared-composables/useDroneTelemetry.js';
+import { useDroneCommands } from '@shared-composables/useDroneCommands.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 
 const { t } = useI18n();
@@ -19,6 +20,27 @@ const { settings } = useAppSettings();
 // the Host subpage's HUD via the ViewComposer's realTelemetry prop).
 const { telemetry: droneTelemetry } = useDroneTelemetry();
 
+// Real flight commands (takeoff/land/move/...) — the separated module.
+const droneCommands = useDroneCommands();
+// Whether THIS page believes the drone is airborne (drives the Takeoff/
+// Landing toggle's active state).
+const flying = ref(false);
+
+function syncTakeoffItem() {
+  const item = rightItems.find((i) => i.id === 'takeoff');
+  if (item) item.active = flying.value;
+}
+
+// Takeoff/Landing toggle: sends the real command; the state only flips when
+// the command actually went out (a dropped command — link down — must not
+// light up a phantom "flying" state).
+function toggleTakeoff() {
+  const sent = flying.value ? droneCommands.land() : droneCommands.takeoff();
+  if (!sent) return;
+  flying.value = !flying.value;
+  syncTakeoffItem();
+}
+
 // Real Drone (真机接入) page — UI shell only.
 //
 // Two subpages, switched via the left sidebar:
@@ -27,9 +49,13 @@ const { telemetry: droneTelemetry } = useDroneTelemetry();
 //   MediaMTX broadcast. Only the draggable divider is implemented for now.
 // - 'host' (Livestream Host / 机主直播): mirrors the 3D Aerial outlook —
 //   HUD dashboard (REAL drone telemetry, relayed drone -> server -> browser
-//   via extension/crazyflie_bridge/telemetry_relay.py) and the Flight disk
-//   (not wired yet: the drone is tethered by a USB cable). There is NO
-//   Camera/Gimbal UI: the Crazyflie has no gimbal.
+//   via extension/crazyflie_bridge/telemetry_relay.py) and the Flight disk.
+//   The Takeoff/Landing toggle is wired to the REAL drone via the separated
+//   flight-functions module @shared-composables/useDroneCommands.js
+//   (browser -> server /api/drone/command -> telemetry_relay.py ->
+//   motion_control_ws.py); the bridge REFUSES takeoff while the drone is
+//   tethered via USB. The Flight disk joystick itself is not wired yet.
+//   There is NO Camera/Gimbal UI: the Crazyflie has no gimbal.
 //
 // Button locking: Steer (right #1) and Takeoff/Landing
 // (right #2) are only clickable while the 'host' subpage is active.
@@ -402,7 +428,8 @@ onMounted(() => {
     id: 'takeoff',
     icon: 'MENU_TAKEOFF',
     titleKey: 'aerialview.takeoff',
-    onClick: noop,
+    active: flying.value,
+    onClick: toggleTakeoff,
   });
   registerRight({
     id: 'screenshot',

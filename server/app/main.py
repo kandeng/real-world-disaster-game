@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import CONFIG
 from .db import Base, engine
+from .drone_commands import router as drone_commands_router
 from .matrix_auth import router as matrix_router
 from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
@@ -102,6 +103,9 @@ app.include_router(stream_router, prefix="/api")
 
 # --- Real drone: telemetry relay (WS /api/drone/telemetry[/publish]) --------
 app.include_router(telemetry_router, prefix="/api")
+
+# --- Real drone: flight commands (WS /api/drone/command[/downlink]) ----------
+app.include_router(drone_commands_router, prefix="/api")
 
 
 @app.get("/api/health")
