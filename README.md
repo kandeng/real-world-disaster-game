@@ -132,7 +132,7 @@ Which MediaMTX the SPA plays is decided by the backend, not the build: `server/c
 With the physical drone connected, the `Livestream Host` HUD also shows REAL telemetry (link rate, position x/y/z, attitude yaw/pitch/roll, battery voltage). Same desktop -> server -> browser topology as the video: `motion_control_ws.py` owns the Crazyflie link and broadcasts telemetry on `ws://127.0.0.1:8765`; `telemetry_relay.py` forwards it to the server (`WS /api/drone/telemetry/publish`), which fans out to browsers (`WS /api/drone/telemetry`):
 
 ```bash
-cd extension/crazyflie_bridge   # conda activate crazyflie first
+cd extension/crazyflie_bridge   # conda activate drone-navigation first
 python motion_control_ws.py --cf-uri usb://0   # drone on the USB cable (radio://0/80/2M/E7E7E7E7E7 over Crazyradio otherwise)
 TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
   python telemetry_relay.py                    # omit TELEMETRY_SERVER to publish to PRODUCTION
@@ -212,29 +212,25 @@ until it displays the video livestream from the crazyflie drone.
 
 2. Start up `crazyflie_bridge` and `simple_webcam`.
 
-`crazyflie_bridge` — three processes, one terminal each (conda env `crazyflie`):
+`crazyflie_bridge` — one script starts all four processes (it self-activates the `drone-navigation` conda env):
 
 ```bash
 cd extension/crazyflie_bridge
-conda activate crazyflie
 
-# 1) Motion + telemetry bridge and the video proxy (owns the drone link)
-CRAZYFLIE_IP=192.168.0.110 ./start_bridge.sh
+CRAZYFLIE_IP=192.168.0.110 \
+TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
+MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+  ./start_bridge.sh
 #    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
 #    + motion_control_ws.py   (ws://:8765; radio://0/80/2M/E7E7E7E7E7 by default —
-#      pass --cf-uri usb://0 for a USB-tethered drone, where takeoff is REFUSED).
-#    Stop: Ctrl+C (press twice to force; lands the drone first if it is flying).
-#    Bench safety: CF_NO_FLY=1 ./start_bridge.sh refuses every takeoff (dry-run).
-
-# 2) Telemetry + flight-command relay (drone <-> FastAPI)
-TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
-  python telemetry_relay.py
-#    Stop: Ctrl+C. Omit TELEMETRY_SERVER to relay to PRODUCTION (drone-navigation.com).
-
-# 3) Drone camera -> local MediaMTX (WHIP ingest, id 'crazyflie-drone')
-MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
-  python crazyflie_mediamtx.py
-#    Stop: Ctrl+C. Reads the video proxy (override with CRAZYFLIE_STREAM_URL).
+#      pass --cf-uri usb://0 for a USB-tethered drone, where takeoff is REFUSED)
+#    + telemetry_relay.py     (telemetry + flight commands, drone <-> FastAPI)
+#    + crazyflie_mediamtx.py  (drone camera -> MediaMTX WHIP, id 'crazyflie-drone')
+#    Stop: Ctrl+C (press twice to force) — lands the drone first if it is
+#    flying, then stops the relay, publisher, and proxy.
+#    Bench safety: CF_NO_FLY=1 refuses every takeoff (dry-run).
+#    Omit TELEMETRY_SERVER / MEDIAMTX_* to relay + publish to PRODUCTION
+#    (drone-navigation.com).
 ```
 
 `simple_webcam` — the no-drone stand-in (conda env `drone-navigation`); skip it when the real drone publishes:
