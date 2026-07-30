@@ -18,6 +18,13 @@ const RECONNECT_MS = 2000;
 // retried: during the heavy initial page load the WS handshake can be
 // starved indefinitely without ever firing onclose/onerror.
 const CONNECT_TIMEOUT_MS = 10000;
+// Post-open zombie guard: an OPEN socket that delivers nothing (or goes
+// silent) never fires onclose either. The server ALWAYS sends a snapshot
+// immediately on subscribe, so zero frames within LIVENESS_MS of onopen
+// means a broken connection; SILENCE_MS of silence afterwards means the
+// same (a live publisher streams ~20 frames/s).
+const LIVENESS_MS = 5000;
+const SILENCE_MS = 30000;
 // Data older than this is treated as "link lost" (publisher/bridge down).
 const STALE_MS = 2500;
 
@@ -66,9 +73,12 @@ function connect() {
   }
   let opened = false;
   let settled = false;
+  let framesThisConn = 0;
+  let livenessTimer = null;
   const retry = () => {
     if (settled) return;
     settled = true;
+    if (livenessTimer) clearInterval(livenessTimer);
     ws = null;
     setTimeout(connect, RECONNECT_MS);
   };
@@ -82,8 +92,20 @@ function connect() {
   ws.onopen = () => {
     opened = true;
     clearTimeout(watchdog);
+    livenessTimer = setInterval(() => {
+      const silentMs = Date.now() - telemetry.lastRx;
+      if (framesThisConn === 0 || silentMs > SILENCE_MS) {
+        try {
+          ws.close();
+        } catch { /* already gone */ }
+        retry();
+      }
+    }, LIVENESS_MS);
   };
-  ws.onmessage = onMessage;
+  ws.onmessage = (event) => {
+    framesThisConn += 1;
+    onMessage(event);
+  };
   ws.onclose = () => {
     clearTimeout(watchdog);
     retry();
