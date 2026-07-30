@@ -12,6 +12,8 @@ import { useStreamConfig } from '@shared-composables/useStreamConfig.js';
 import { useDroneTelemetry } from '@shared-composables/useDroneTelemetry.js';
 import { useDroneCommands } from '@shared-composables/useDroneCommands.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
+import { useAuth } from '@shared-composables/useAuth.js';
+import { useLiveCapture } from '@shared-composables/useLiveCapture.js';
 
 const { t } = useI18n();
 const { settings } = useAppSettings();
@@ -20,25 +22,136 @@ const { settings } = useAppSettings();
 // the Host subpage's HUD via the ViewComposer's realTelemetry prop).
 const { telemetry: droneTelemetry } = useDroneTelemetry();
 
-// Real flight commands (takeoff/land/move/...) — the separated module.
+// Real flight commands (takeoff/land/hover/move/...) — the separated module.
 const droneCommands = useDroneCommands();
-// Whether THIS page believes the drone is airborne (drives the Takeoff/
-// Landing toggle's active state).
-const flying = ref(false);
 
-function syncTakeoffItem() {
+// ── Takeoff / Stop / Landing switcher (real drone) ──
+// Same user-driven 4-state cycle as the 3D Exploration subpages:
+//   takeoff -> stop -> landing -> stop -> takeoff -> ...
+// No airborne/on-ground judgment: the user cycles freely, even mid-maneuver.
+//   takeoff -> bridge MotionCommander takeoff to ~0.5 m
+//   stop    -> hover in place (zero velocity — NOT the motor-cut emergency)
+//   landing -> the bridge's gentle landing profile
+// The state advances only when the command was actually sent (a dropped
+// command — link down — must not light up a phantom state). The button is
+// never disabled by maneuvers; the subpage locking below is unchanged.
+const SWITCH_SEQUENCE = ['takeoff', 'stop', 'landing', 'stop'];
+const switchIndex = ref(0); // index of the action the button currently offers
+
+function syncTakeoffSwitchItem() {
   const item = rightItems.find((i) => i.id === 'takeoff');
-  if (item) item.active = flying.value;
+  if (!item) return;
+  const action = SWITCH_SEQUENCE[switchIndex.value];
+  item.icon = action === 'takeoff' ? 'MENU_TAKEOFF'
+    : action === 'landing' ? 'MENU_LANDING'
+    : 'MENU_STOP';
+  item.titleKey = `aerialview.${action}`;
 }
 
-// Takeoff/Landing toggle: sends the real command; the state only flips when
-// the command actually went out (a dropped command — link down — must not
-// light up a phantom "flying" state).
 function toggleTakeoff() {
-  const sent = flying.value ? droneCommands.land() : droneCommands.takeoff();
+  const action = SWITCH_SEQUENCE[switchIndex.value];
+  const sent = action === 'takeoff' ? droneCommands.takeoff()
+    : action === 'landing' ? droneCommands.land()
+    : droneCommands.hover();
   if (!sent) return;
-  flying.value = !flying.value;
-  syncTakeoffItem();
+  switchIndex.value = (switchIndex.value + 1) % SWITCH_SEQUENCE.length;
+  syncTakeoffSwitchItem();
+}
+
+// ── Flight disk -> real drone ──
+// Disk payloads are in ±sensitivity units (FlightController default 3),
+// scaled here into the bridge's safe ranges. While a command is active it is
+// re-sent every 150 ms: the bridge's dead-man switch (0.5 s) would otherwise
+// hover the drone — and lost keep-alives (closed tab, dead relay) hover it
+// automatically. currentMove holds DISK axes (vx right+, vy forward+);
+// sendCurrentMove maps them onto the cflib body frame (vx forward, vy left,
+// vz up, yawrate deg/s — sign calibration pending the first flight test).
+const DISK_UNITS = 3;
+const DISK_MAX_XY = 0.5;  // m/s horizontal
+const DISK_MAX_Z = 0.5;   // m/s vertical
+const DISK_MAX_YAW = 60;  // deg/s yaw
+const MOVE_KEEPALIVE_MS = 150;
+
+const currentMove = { vx: 0, vy: 0, vz: 0, yawRate: 0 };
+let moveKeepAlive = null;
+
+function sendCurrentMove() {
+  const c = currentMove;
+  droneCommands.move({ vx: c.vy, vy: -c.vx, vz: c.vz, yawRate: c.yawRate });
+}
+
+function ensureMoveKeepAlive() {
+  if (moveKeepAlive) return;
+  moveKeepAlive = setInterval(() => {
+    const c = currentMove;
+    if (c.vx || c.vy || c.vz || c.yawRate) sendCurrentMove();
+  }, MOVE_KEEPALIVE_MS);
+}
+
+function onRealFlightMove(payload) {
+  onFlightMove(payload); // keep the disk UI state in sync
+  if (!payload || !payload.mode) return;
+  if (payload.mode === 'M') {
+    currentMove.vx = ((payload.vx || 0) / DISK_UNITS) * DISK_MAX_XY;
+    currentMove.vy = ((payload.vy || 0) / DISK_UNITS) * DISK_MAX_XY;
+    currentMove.vz = 0;
+    currentMove.yawRate = 0;
+  } else if (payload.mode === 'H') {
+    currentMove.vx = 0;
+    currentMove.vy = 0;
+    currentMove.vz = ((payload.vz || 0) / DISK_UNITS) * DISK_MAX_Z;
+    currentMove.yawRate = 0;
+  } else if (payload.mode === 'R') {
+    currentMove.vx = 0;
+    currentMove.vy = 0;
+    currentMove.vz = 0;
+    currentMove.yawRate = ((payload.yaw || 0) / DISK_UNITS) * DISK_MAX_YAW;
+  }
+  ensureMoveKeepAlive();
+  sendCurrentMove(); // immediate response; the interval keeps it alive
+}
+
+// Zero the command and tell the drone to hover (the zero-velocity move also
+// disarms the bridge watchdog). Called on disk release, disk close, subpage
+// switch away from 'host', and unmount.
+function stopRealFlight() {
+  onFlightStop();
+  currentMove.vx = 0;
+  currentMove.vy = 0;
+  currentMove.vz = 0;
+  currentMove.yawRate = 0;
+  droneCommands.hover();
+}
+
+function onRealFlightStop() {
+  stopRealFlight();
+}
+
+// ── Screenshot / Recorder on the live stream ──
+// Same login gate as the 3D subpages: anonymous users get a green top-center
+// reminder instead of the capture action. The capture source is whichever
+// <video> is on screen (both subpages play the SAME shared stream, so both
+// buttons work on the Viewer too).
+const { isAuthenticated } = useAuth();
+const { recorderState, isRecorderActive, captureScreenshot, toggleRecorder, stopRecorder } = useLiveCapture();
+
+const captureAuthNotice = ref(''); // '' | 'screenshot' | 'recording'
+let captureAuthTimer = null;
+function flashCaptureAuth(action) {
+  captureAuthNotice.value = action;
+  clearTimeout(captureAuthTimer);
+  captureAuthTimer = setTimeout(() => { captureAuthNotice.value = ''; }, 6000);
+}
+
+function guardedScreenshot() {
+  if (isAuthenticated.value) return captureScreenshot(activeVideoEl());
+  flashCaptureAuth('screenshot');
+}
+
+function guardedToggleRecorder() {
+  // Never trap an ACTIVE recording: toggling off is always allowed.
+  if (isAuthenticated.value || recorderState.value !== 'idle') return toggleRecorder(activeVideoEl());
+  flashCaptureAuth('recording');
 }
 
 // Real Drone (真机接入) page — UI shell only.
@@ -50,11 +163,13 @@ function toggleTakeoff() {
 // - 'host' (Livestream Host / 机主直播): mirrors the 3D Aerial outlook —
 //   HUD dashboard (REAL drone telemetry, relayed drone -> server -> browser
 //   via extension/crazyflie_bridge/telemetry_relay.py) and the Flight disk.
-//   The Takeoff/Landing toggle is wired to the REAL drone via the separated
-//   flight-functions module @shared-composables/useDroneCommands.js
-//   (browser -> server /api/drone/command -> telemetry_relay.py ->
-//   motion_control_ws.py); the bridge REFUSES takeoff while the drone is
-//   tethered via USB. The Flight disk joystick itself is not wired yet.
+//   The Takeoff/Stop/Landing switcher AND the Flight disk are wired to the
+//   REAL drone via the separated flight-functions module
+//   @shared-composables/useDroneCommands.js (browser -> server
+//   /api/drone/command -> telemetry_relay.py -> motion_control_ws.py).
+//   Safety: the bridge REFUSES takeoff while the drone is tethered via USB,
+//   and a 0.5 s dead-man switch hovers the drone if velocity commands stop
+//   arriving (closed tab, dead relay/server).
 //   There is NO Camera/Gimbal UI: the Crazyflie has no gimbal.
 //
 // Button locking: Steer (right #1) and Takeoff/Landing
@@ -120,6 +235,7 @@ function onDividerPointerUp() {
 }
 
 function hideAllDisks() {
+  stopRealFlight(); // never leave a stale velocity running on the real drone
   showFlight.value = false;
 }
 
@@ -140,9 +256,6 @@ function onPagesBeforeOpen() {
   hideAllDisks();
   setControlsLocked(true);
 }
-
-// Placeholder for dock buttons whose functionality is not implemented yet.
-function noop() {}
 
 /* ─── Livestream: WHEP playback of the MediaMTX stream catalog ─── */
 // ONE shared connection for both subpages, playing ONE selected stream
@@ -428,22 +541,21 @@ onMounted(() => {
     id: 'takeoff',
     icon: 'MENU_TAKEOFF',
     titleKey: 'aerialview.takeoff',
-    active: flying.value,
     onClick: toggleTakeoff,
   });
   registerRight({
     id: 'screenshot',
     icon: 'MENU_PHOTO',
     titleKey: 'aerialview.screenshot',
-    onClick: noop,
+    onClick: guardedScreenshot,
   });
   registerRight({
     id: 'recorder',
     icon: 'MENU_RECORDER',
     titleKey: 'aerialview.recorder',
-    active: false,
+    active: isRecorderActive,
     danger: true,
-    onClick: noop,
+    onClick: guardedToggleRecorder,
   });
   registerRight({
     id: 'fullscreen',
@@ -481,6 +593,8 @@ onMounted(() => {
     }
     // Flight-control buttons are only clickable on the 'host' subpage.
     setControlsLocked(val !== 'host');
+    // Yielding the Host subpage must never leave a stale velocity running.
+    if (val !== 'host') stopRealFlight();
   });
 
   // Default subpage is 'host' — connect the livestream right away; the SAME
@@ -494,6 +608,13 @@ onMounted(() => {
 
 onUnmounted(() => {
   onDividerPointerUp();
+  stopRealFlight();
+  stopRecorder(); // an active clip still downloads via the recorder's onstop
+  clearTimeout(captureAuthTimer);
+  if (moveKeepAlive) {
+    clearInterval(moveKeepAlive);
+    moveKeepAlive = null;
+  }
   livePlayer.stop();
   teardownViewerStage();
   clear();
@@ -516,8 +637,8 @@ onUnmounted(() => {
     :show-hud="isAerialStyle"
     :flight="flight"
     :real-telemetry="droneTelemetry"
-    @flightMove="onFlightMove"
-    @flightStop="onFlightStop"
+    @flightMove="onRealFlightMove"
+    @flightStop="onRealFlightStop"
     @flightModeChange="onFlightModeChange"
   >
     <template #background>
@@ -584,6 +705,13 @@ onUnmounted(() => {
     </template>
 
     <template #top-overlay>
+      <!-- Login reminder for Screenshot / Recorder (same gate as the 3D pages) -->
+      <div
+        v-if="captureAuthNotice"
+        class="top-center-message top-center-message--auth"
+      >
+        {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
+      </div>
       <!-- Green progress pill while the livestream connection is set up -->
       <div v-if="liveLoading" class="top-center-message asset-loading">
         <span>{{ t('aerialview.loading_livestream') }}</span>
@@ -765,6 +893,11 @@ onUnmounted(() => {
   white-space: nowrap;
   pointer-events: none;
   text-align: center;
+}
+
+.top-center-message--auth {
+  background: rgba(34, 197, 94, 0.92);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
 }
 
 .asset-loading {

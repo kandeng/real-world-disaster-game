@@ -39,6 +39,13 @@ import logging
 # keep errors only; connection problems still surface as exceptions below.
 logging.getLogger("cflib").setLevel(logging.ERROR)
 
+# Dead-man switch: a 'move' velocity setpoint expires this many seconds after
+# the last velocity command unless refreshed (the web Flight disk re-sends
+# every 150 ms while active). On expiry the drone is put into a hover — a
+# dropped browser / relay / server must never leave it flying a stale
+# velocity.
+MOVE_WATCHDOG_S = 0.5
+
 import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.log import LogConfig
@@ -91,10 +98,18 @@ class CrazyflieBridge:
         # cable would yank it down). Block 'takeoff' and the move-up
         # auto-takeoff path while the link is usb://*. Override for bench
         # tests with CF_ALLOW_USB_TAKEOFF=1.
-        self._usb_takeoff_blocked = (
+        # CF_NO_FLY=1 is a dry-run mode for ANY link (incl. radio): every
+        # takeoff attempt is refused, so the full command chain can be
+        # exercised without the drone ever leaving the ground.
+        self._no_fly = os.environ.get("CF_NO_FLY", "") == "1"
+        self._usb_takeoff_blocked = self._no_fly or (
             self.cf_uri.startswith("usb")
             and os.environ.get("CF_ALLOW_USB_TAKEOFF", "") != "1"
         )
+
+        # Dead-man switch deadline (epoch seconds) for velocity setpoints;
+        # None while the last 'move' was all-zeros or no move is active.
+        self._velocity_deadline = None
 
     # ------------------------------------------------------------------ #
     #  Helpers
@@ -165,6 +180,13 @@ class CrazyflieBridge:
         finally:
             self._clients.discard(websocket)
             print(f"[Bridge] Client disconnected: {remote}")
+            # Safety: the LAST command channel went away while a velocity
+            # setpoint could still be active -> hover. (Relay/server restart
+            # mid-flight must not leave the drone flying blind.)
+            if not self._clients and self._is_flying:
+                self._command_queue.put_nowait(
+                    {"action": "move", "vx": 0, "vy": 0, "vz": 0, "yawrate": 0}
+                )
 
     async def _broadcast_telemetry(self):
         """Continuously read from telemetry queue and broadcast to all clients."""
@@ -218,6 +240,19 @@ class CrazyflieBridge:
                                 self._dispatch_command(cmd)
                             except queue.Empty:
                                 pass
+                            # Dead-man switch: stale velocity -> hover.
+                            if (
+                                self._is_flying
+                                and self._velocity_deadline is not None
+                                and time.time() > self._velocity_deadline
+                                and self._motion_commander is not None
+                            ):
+                                print("[Bridge] Velocity watchdog expired -> hover")
+                                try:
+                                    self._motion_commander.start_linear_motion(0, 0, 0, 0)
+                                except Exception:
+                                    pass
+                                self._velocity_deadline = None
                             time.sleep(0.01)
                     finally:
                         # Shutdown — land and properly exit MotionCommander
@@ -415,18 +450,23 @@ class CrazyflieBridge:
             action == "move" and (cmd.get("vz") or 0) > 0 and not self._is_flying
         )
         if wants_takeoff and self._usb_takeoff_blocked:
-            print(f"[Bridge] {action} REFUSED: drone is tethered via USB "
-                  "(unplug the cable / use the radio link to fly)")
+            reason = ("CF_NO_FLY dry-run mode" if self._no_fly
+                      else "drone is tethered via USB "
+                      "(unplug the cable / use the radio link to fly)")
+            print(f"[Bridge] {action} REFUSED: {reason}")
             return
 
         try:
             if action == "takeoff":
+                self._velocity_deadline = None
                 self._do_takeoff(height=cmd.get("height", 0.5))
             elif action == "land":
+                self._velocity_deadline = None
                 if self._is_flying:
                     self._gentle_land()
                     self._is_flying = False
             elif action == "stop":
+                self._velocity_deadline = None
                 if self._is_flying:
                     self._motion_commander.stop()
             elif action == "move":
@@ -454,6 +494,11 @@ class CrazyflieBridge:
                 if vz < 0:
                     vz = self._clamp_descent(vz)
                 self._motion_commander.start_linear_motion(vx, vy, vz, yawrate)
+                # Arm the dead-man switch on nonzero velocity, disarm on hover.
+                if vx or vy or vz or yawrate:
+                    self._velocity_deadline = time.time() + MOVE_WATCHDOG_S
+                else:
+                    self._velocity_deadline = None
             elif action == "up":
                 self._motion_commander.up(cmd.get("distance", 0.2))
             elif action == "down":
