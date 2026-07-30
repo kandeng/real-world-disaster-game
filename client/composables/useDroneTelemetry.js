@@ -14,6 +14,10 @@ const WS_URL = import.meta.env.DEV
   : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/drone/telemetry`;
 
 const RECONNECT_MS = 2000;
+// A socket stuck in CONNECTING longer than this is force-closed and
+// retried: during the heavy initial page load the WS handshake can be
+// starved indefinitely without ever firing onclose/onerror.
+const CONNECT_TIMEOUT_MS = 10000;
 // Data older than this is treated as "link lost" (publisher/bridge down).
 const STALE_MS = 2500;
 
@@ -60,10 +64,29 @@ function connect() {
     setTimeout(connect, RECONNECT_MS);
     return;
   }
-  ws.onmessage = onMessage;
-  ws.onclose = () => {
+  let opened = false;
+  let settled = false;
+  const retry = () => {
+    if (settled) return;
+    settled = true;
     ws = null;
     setTimeout(connect, RECONNECT_MS);
+  };
+  const watchdog = setTimeout(() => {
+    if (opened) return;
+    try {
+      ws.close();
+    } catch { /* already gone */ }
+    retry(); // belt-and-braces: don't rely on close() firing onclose
+  }, CONNECT_TIMEOUT_MS);
+  ws.onopen = () => {
+    opened = true;
+    clearTimeout(watchdog);
+  };
+  ws.onmessage = onMessage;
+  ws.onclose = () => {
+    clearTimeout(watchdog);
+    retry();
   };
   ws.onerror = () => ws.close();
 }
