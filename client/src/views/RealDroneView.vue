@@ -5,7 +5,6 @@ import ViewComposer from '@shared/_ViewComposer.vue';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import VolumeDockButton from '@shared/VolumeDockButton.vue';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
-import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
@@ -28,10 +27,11 @@ const { telemetry: droneTelemetry } = useDroneTelemetry();
 //   MediaMTX broadcast. Only the draggable divider is implemented for now.
 // - 'host' (Livestream Host / 机主直播): mirrors the 3D Aerial outlook —
 //   HUD dashboard (REAL drone telemetry, relayed drone -> server -> browser
-//   via extension/crazyflie_bridge/telemetry_relay.py), Flight / Gimbal
-//   disks (Flight not wired yet: the drone is tethered by a USB cable).
+//   via extension/crazyflie_bridge/telemetry_relay.py) and the Flight disk
+//   (not wired yet: the drone is tethered by a USB cable). There is NO
+//   Camera/Gimbal UI: the Crazyflie has no gimbal.
 //
-// Button locking: Camera (left #4), Steer (right #1) and Takeoff/Landing
+// Button locking: Steer (right #1) and Takeoff/Landing
 // (right #2) are only clickable while the 'host' subpage is active.
 // Switching to 'viewer' or opening the Pages menu locks them;
 // clicking 'Livestream Host' re-enables them.
@@ -44,15 +44,6 @@ const {
   onFlightStop,
   onFlightModeChange,
 } = useFlightCommands();
-
-const {
-  camera,
-  showCamera,
-  toggleCamera,
-  onCameraMove,
-  onCameraStop,
-  onCameraModeChange,
-} = useCameraCommands();
 
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
@@ -104,12 +95,11 @@ function onDividerPointerUp() {
 
 function hideAllDisks() {
   showFlight.value = false;
-  showCamera.value = false;
 }
 
-// Lock/unlock the flight-control buttons (Camera, Steer, Takeoff/Landing).
+// Lock/unlock the flight-control buttons (Steer, Takeoff/Landing).
 // Locked buttons ignore clicks and render dimmed with a not-allowed cursor.
-const LOCKABLE_BUTTON_IDS = ['camera', 'steer', 'takeoff'];
+const LOCKABLE_BUTTON_IDS = ['steer', 'takeoff'];
 
 function setControlsLocked(locked) {
   for (const list of [leftItems, rightItems]) {
@@ -393,13 +383,8 @@ onMounted(() => {
       activeSubpage.value = 'host';
     },
   });
-  registerLeft({
-    id: 'camera',
-    icon: 'MENU_CAMERA',
-    titleKey: 'aerialview.camera',
-    active: showCamera.value,
-    onClick: toggleCamera,
-  });
+  // NOTE: no 'camera' button here — the Crazyflie has no gimbal, so the
+  // Gimbal disk and its toggle are deliberately absent on this page.
 
   // Invisible flex spacer: with .app-dock__inner at full height, the two
   // spacers absorb the free space above/below the button group so the
@@ -457,11 +442,6 @@ onMounted(() => {
     const item = rightItems.find((i) => i.id === 'steer');
     if (item) item.active = val;
   });
-  watch(showCamera, (val) => {
-    const item = leftItems.find((i) => i.id === 'camera');
-    if (item) item.active = val;
-  });
-
   // Keep the subpage selector buttons in sync with the active subpage.
   watch(activeSubpage, (val) => {
     const pairs = [
@@ -505,17 +485,13 @@ onUnmounted(() => {
     :left-items="leftItems"
     :right-items="rightItems"
     :show-flight="isAerialStyle && showFlight"
-    :show-camera="isAerialStyle && showCamera"
+    :show-camera="false"
     :show-hud="isAerialStyle"
     :flight="flight"
-    :camera="camera"
     :real-telemetry="droneTelemetry"
     @flightMove="onFlightMove"
     @flightStop="onFlightStop"
     @flightModeChange="onFlightModeChange"
-    @cameraMove="onCameraMove"
-    @cameraStop="onCameraStop"
-    @cameraModeChange="onCameraModeChange"
   >
     <template #background>
       <!-- Livestream Host subpage: fullscreen monitor of the currently
