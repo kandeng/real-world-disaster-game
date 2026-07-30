@@ -33,6 +33,12 @@ def _silent_warn(message, category=UserWarning, stacklevel=1, **kwargs):
     _original_warn(message, category=category, stacklevel=stacklevel, **kwargs)
 warnings.warn = _silent_warn
 
+import logging
+
+# cflib is very chatty (link drivers, TOC downloads, reconnect warnings) —
+# keep errors only; connection problems still surface as exceptions below.
+logging.getLogger("cflib").setLevel(logging.ERROR)
+
 import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.log import LogConfig
@@ -74,6 +80,12 @@ class CrazyflieBridge:
 
         # Current height tracked from telemetry (thread-safe via GIL for float)
         self._current_z = 0.0
+
+        # Consecutive Crazyflie connection failures — the error line is
+        # logged on the 1st failure and then only every 30th retry (the
+        # worker retries forever every 2 s, which is ~43k lines/day when
+        # the drone is simply off).
+        self._cf_failures = 0
 
     # ------------------------------------------------------------------ #
     #  Helpers
@@ -171,6 +183,7 @@ class CrazyflieBridge:
             try:
                 with SyncCrazyflie(self.cf_uri, cf=Crazyflie(rw_cache='./cache')) as scf:
                     self._scf = scf
+                    self._cf_failures = 0
                     print(f"[Bridge] Crazyflie connected: {self.cf_uri}")
 
                     self._setup_logging(scf.cf)
@@ -221,7 +234,9 @@ class CrazyflieBridge:
                         print("[Bridge] Drone connection clean.")
 
             except Exception as e:
-                print(f"[Bridge] Crazyflie error: {e}")
+                self._cf_failures += 1
+                if self._cf_failures == 1 or self._cf_failures % 30 == 0:
+                    print(f"[Bridge] Crazyflie error (attempt {self._cf_failures}): {e}")
                 self._motion_commander = None
                 self._scf = None
                 if self._running:

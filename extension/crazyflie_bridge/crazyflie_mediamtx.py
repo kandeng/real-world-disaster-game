@@ -29,6 +29,8 @@ import aiohttp
 #   LIVESTREAM_ID         MediaMTX path     (default crazyflie-drone)
 #   MEDIAMTX_URL          WHIP base URL     (default https://drone-navigation.com/live)
 #   MEDIAMTX_API          control API base  (default https://drone-navigation.com/control-api)
+#   STATS_INTERVAL_S      periodic upload-stats log line in seconds
+#                         (default 0 = quiet: logs only on state changes)
 MEDIAMTX_BASE_URL = os.environ.get("MEDIAMTX_URL", "https://drone-navigation.com/live")
 
 LIVESTREAM_HOSTNAME = os.environ.get("LIVESTREAM_ID", "crazyflie-drone")
@@ -38,7 +40,11 @@ MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API", "https://drone-navigation.com/
 CRAZYFLIE_STREAM_URL = os.environ.get("CRAZYFLIE_STREAM_URL", "http://localhost:8082/stream")
 
 STUN_SERVER = "stun:stun.l.google.com:19302"
-MONITOR_INTERVAL = 10  # seconds between stats / viewer log lines
+MONITOR_INTERVAL = 10  # seconds between monitor ticks (not necessarily log lines)
+# Periodic STATS/VIEWERS lines are OFF by default — the monitor logs on
+# CHANGE only (viewer count, API up/down, stats errors). Set STATS_INTERVAL_S
+# (e.g. 60) to re-enable a periodic upload-stats line for debugging.
+STATS_INTERVAL_S = int(os.environ.get("STATS_INTERVAL_S", "0"))
 
 
 def log(tag, msg):
@@ -204,26 +210,37 @@ async def log_selected_ice_pair(pc):
 
 
 async def monitor(pc, api_base, path_name, interval=MONITOR_INTERVAL):
-    """Log upload bitrate and viewer counts from MediaMTX Control API."""
+    """Watch upload stats and viewer counts; log on CHANGE only (quiet by
+    default — a 10 s periodic line is ~17k lines/day/publisher)."""
     api_ok = True
+    stats_ok = True
     last_bytes = 0
+    last_counts = None  # (viewers, publishers) last logged
+    ticks = 0
     async with aiohttp.ClientSession() as session:
         while True:
             await asyncio.sleep(interval)
+            ticks += 1
 
-            # Upload progress
+            # Upload progress — periodic line only when STATS_INTERVAL_S > 0.
             try:
                 stats = await pc.getStats()
                 for stat in stats.values():
                     if getattr(stat, "type", None) == "outbound-rtp" and getattr(stat, "kind", None) == "video":
-                        mb = stat.bytesSent / 1_000_000
-                        kbps = (stat.bytesSent - last_bytes) * 8 / 1000 / interval
+                        if STATS_INTERVAL_S and ticks % max(1, STATS_INTERVAL_S // interval) == 0:
+                            mb = stat.bytesSent / 1_000_000
+                            kbps = (stat.bytesSent - last_bytes) * 8 / 1000 / interval
+                            log("STATS", f"Uploading: {mb:.2f} MB total, {stat.packetsSent} packets, ~{kbps:.0f} kbps")
                         last_bytes = stat.bytesSent
-                        log("STATS", f"Uploading: {mb:.2f} MB total, {stat.packetsSent} packets, ~{kbps:.0f} kbps")
+                if not stats_ok:
+                    log("STATS", "WebRTC stats readable again.")
+                    stats_ok = True
             except Exception as e:
-                log("STATS", f"Could not read WebRTC stats: {e}")
+                if stats_ok:  # log the failure once, not every tick
+                    log("STATS", f"Could not read WebRTC stats ({e}); muted until it recovers.")
+                    stats_ok = False
 
-            # Viewer count via MediaMTX API
+            # Viewer count via MediaMTX API — log only when the counts change.
             if not api_base:
                 continue
             try:
@@ -240,11 +257,14 @@ async def monitor(pc, api_base, path_name, interval=MONITOR_INTERVAL):
                 if not api_ok:
                     log("VIEWERS", "MediaMTX control API reachable again.")
                     api_ok = True
-                log("VIEWERS", f"{len(viewers)} viewer(s) watching '{path_name}' "
-                               f"(publish sessions: {len(publishers)})")
-                for v in viewers:
-                    log("VIEWERS", f"  - {v.get('remoteAddr', '?')} "
-                                   f"({v.get('bytesSent', 0) / 1000:.0f} kB delivered)")
+                counts = (len(viewers), len(publishers))
+                if counts != last_counts:
+                    log("VIEWERS", f"{counts[0]} viewer(s) watching '{path_name}' "
+                                   f"(publish sessions: {counts[1]})")
+                    for v in viewers:
+                        log("VIEWERS", f"  - {v.get('remoteAddr', '?')} "
+                                       f"({v.get('bytesSent', 0) / 1000:.0f} kB delivered)")
+                    last_counts = counts
             except Exception as e:
                 if api_ok:
                     log("VIEWERS", f"MediaMTX control API unreachable at {api_base} ({e}); "
