@@ -129,6 +129,17 @@ publishes its camera under the same `crazyflie-drone` id instead of the webcam.
 
 Which MediaMTX the SPA plays is decided by the backend, not the build: `server/config.json` -> `"mediamtx": { "streams": [...] }` is served at `GET /api/stream/config`, and `RealDroneView.vue` resolves it at playback time. The `Livestream Viewer` subpage lists every catalog entry as a clickable card in its left panel — clicking a card is the ONLY way to switch streams (default: the FIRST entry, the primary `crazyflie-drone`); the `Livestream Host` subpage keeps monitoring whichever stream is selected. Per-environment fallbacks are built into the SPA (local: `http://127.0.0.1:8889/<id>/whep`; production on ECS: `https://drone-navigation.com/live/<id>/whep`) and are used when the config key is absent; the legacy single `"whep_url"` form is still honored. The publishers default to production; the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point them at the local server.
 
+With the physical drone connected, the `Livestream Host` HUD also shows REAL telemetry (link rate, position x/y/z, attitude yaw/pitch/roll, battery voltage). Same desktop -> server -> browser topology as the video: `motion_control_ws.py` owns the Crazyflie link and broadcasts telemetry on `ws://127.0.0.1:8765`; `telemetry_relay.py` forwards it to the server (`WS /api/drone/telemetry/publish`), which fans out to browsers (`WS /api/drone/telemetry`):
+
+```bash
+cd extension/crazyflie_bridge   # conda activate crazyflie first
+python motion_control_ws.py --cf-uri usb://0   # drone on the USB cable (radio://0/80/2M/E7E7E7E7E7 over Crazyradio otherwise)
+TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
+  python telemetry_relay.py                    # omit TELEMETRY_SERVER to publish to PRODUCTION
+```
+
+Set `"drone": { "telemetry_token": "..." }` in the deployed `server/config.json` to require `TELEMETRY_TOKEN=<same>` on the relay (empty = open, fine locally).
+
 ### 7. Smoke test (whole system)
 
 ```bash
@@ -142,7 +153,7 @@ Browser checklist at `http://localhost:5173`:
 2. `My Space -> Settings`: change a value, click `Save` → green "saved" banner.
 3. `Community -> Chat`: with two accounts (two browsers/profiles), exchange DMs both ways; reload → history persists.
 4. `Community -> Customer Service`: connects to the local OpenClaw gateway.
-5. `Real Drone -> Livestream Host` (and `Livestream Viewer`): plays the local `crazyflie-drone` broadcast (step 6) — the green `crazyflie-drone - HH:MM:SS` overlay ticks with live frames.
+5. `Real Drone -> Livestream Host` (and `Livestream Viewer`): plays the local `crazyflie-drone` broadcast (step 6) — the green `crazyflie-drone - HH:MM:SS` overlay ticks with live frames. With the drone + relay running (step 6), the Host HUD shows `Link live | ~20 Hz` with live position / attitude / battery values.
 
 ### 8. Background services (optional — no terminals)
 

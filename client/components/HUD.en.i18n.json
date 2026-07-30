@@ -10,5 +10,9 @@
   "alt": "alt:",
   "yaw": "Z (yaw):",
   "pitch": "Y (pitch):",
-  "roll": "X (roll):"
+  "roll": "X (roll):",
+  "link": "Link",
+  "live": "live",
+  "lost": "lost",
+  "battery": "Battery"
 }

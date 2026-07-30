@@ -22,6 +22,7 @@ from .matrix_auth import router as matrix_router
 from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
 from .stream import router as stream_router
+from .telemetry import router as telemetry_router
 from .users import auth_backend, fastapi_users, google_oauth_client
 
 logging.basicConfig(level=logging.INFO)
@@ -98,6 +99,9 @@ app.include_router(matrix_router, prefix="/api")
 
 # --- Livestream: MediaMTX runtime config for the SPA (GET /api/stream/config)
 app.include_router(stream_router, prefix="/api")
+
+# --- Real drone: telemetry relay (WS /api/drone/telemetry[/publish]) --------
+app.include_router(telemetry_router, prefix="/api")
 
 
 @app.get("/api/health")

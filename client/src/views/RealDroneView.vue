@@ -10,10 +10,15 @@ import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
 import { useStreamConfig } from '@shared-composables/useStreamConfig.js';
+import { useDroneTelemetry } from '@shared-composables/useDroneTelemetry.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 
 const { t } = useI18n();
 const { settings } = useAppSettings();
+
+// Live telemetry of the physical drone (singleton WS subscription; feeds
+// the Host subpage's HUD via the ViewComposer's realTelemetry prop).
+const { telemetry: droneTelemetry } = useDroneTelemetry();
 
 // Real Drone (真机接入) page — UI shell only.
 //
@@ -22,7 +27,9 @@ const { settings } = useAppSettings();
 //   left panel lists the available livestreams, right panel plays the
 //   MediaMTX broadcast. Only the draggable divider is implemented for now.
 // - 'host' (Livestream Host / 机主直播): mirrors the 3D Aerial outlook —
-//   HUD dashboard, Flight / Gimbal disks; content intentionally empty.
+//   HUD dashboard (REAL drone telemetry, relayed drone -> server -> browser
+//   via extension/crazyflie_bridge/telemetry_relay.py), Flight / Gimbal
+//   disks (Flight not wired yet: the drone is tethered by a USB cable).
 //
 // Button locking: Camera (left #4), Steer (right #1) and Takeoff/Landing
 // (right #2) are only clickable while the 'host' subpage is active.
@@ -502,6 +509,7 @@ onUnmounted(() => {
     :show-hud="isAerialStyle"
     :flight="flight"
     :camera="camera"
+    :real-telemetry="droneTelemetry"
     @flightMove="onFlightMove"
     @flightStop="onFlightStop"
     @flightModeChange="onFlightModeChange"

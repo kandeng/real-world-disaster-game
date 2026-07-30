@@ -14,11 +14,51 @@ defineProps({
     type: Object,
     default: () => ({ mode: '-', yaw: 0, pitch: 0, roll: 0 }),
   },
+  // Real-drone telemetry (useDroneTelemetry). When set, the HUD shows the
+  // physical drone's live state instead of the simulator rows; the Flight /
+  // Camera / Gimbal rows are hidden (the Crazyflie has no gimbal and its
+  // 'camera' is the livestream itself).
+  real: {
+    type: Object,
+    default: null,
+  },
 });
+
+// Null-safe number formatting ('-' until the first frame of a category).
+const fmt = (v, digits = 2) =>
+  v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(digits);
 </script>
 
 <template>
-  <div class="telemetry">
+  <!-- Real drone: live telemetry from the physical Crazyflie. -->
+  <div v-if="real" class="telemetry">
+    <div class="telemetry-row">
+      <span class="telemetry-key">{{ t('hud.link') }}</span>
+      <span class="telemetry-value" :class="{ 'telemetry-value--lost': !real.linked }">
+        <template v-if="real.linked">{{ t('hud.live') }} | {{ real.hz.toFixed(1) }} Hz</template>
+        <template v-else>{{ t('hud.lost') }}</template>
+      </span>
+    </div>
+    <div class="telemetry-row">
+      <span class="telemetry-key">{{ t('hud.position') }}</span>
+      <span class="telemetry-value">
+        x: {{ fmt(real.position.x) }} m | y: {{ fmt(real.position.y) }} m | z: {{ fmt(real.position.z) }} m
+      </span>
+    </div>
+    <div class="telemetry-row">
+      <span class="telemetry-key">{{ t('hud.direction') }}</span>
+      <span class="telemetry-value">
+        {{ t('hud.yaw') }} {{ fmt(real.attitude.yaw, 1) }} | {{ t('hud.pitch') }} {{ fmt(real.attitude.pitch, 1) }} | {{ t('hud.roll') }} {{ fmt(real.attitude.roll, 1) }}
+      </span>
+    </div>
+    <div class="telemetry-row">
+      <span class="telemetry-key">{{ t('hud.battery') }}</span>
+      <span class="telemetry-value">{{ real.battery.voltage === null ? '-' : `${fmt(real.battery.voltage)} V` }}</span>
+    </div>
+  </div>
+
+  <!-- Simulator (3D Aerial / 2D maps). -->
+  <div v-else class="telemetry">
     <div class="telemetry-row">
       <span class="telemetry-key">{{ t('hud.flight') }}</span>
       <span class="telemetry-value">
@@ -94,6 +134,11 @@ defineProps({
 
 .telemetry-value {
   flex: 1;
+}
+
+/* Real-drone link lost: warn in red instead of the nominal green. */
+.telemetry-value--lost {
+  color: #f87171;
 }
 
 @media (max-width: 768px) {

@@ -15,6 +15,9 @@ defineProps({
   showHud: { type: Boolean, default: true },
   flight: { type: Object, default: () => ({ mode: '-', vx: 0, vy: 0, yaw: 0, vz: 0 }) },
   camera: { type: Object, default: () => ({ mode: '-', yaw: 0, pitch: 0, roll: 0 }) },
+  // Real-drone telemetry override for the HUD (Real Drone page); when set,
+  // the HUD renders the physical drone's live state instead of the sim rows.
+  realTelemetry: { type: Object, default: null },
   disabled: { type: Boolean, default: false },
 });
 
@@ -83,7 +86,7 @@ defineEmits([
       @itemClick="$emit('dockItemClick', $event)"
     />
 
-    <HUD v-if="showHud" :flight="flight" :camera="camera" />
+    <HUD v-if="showHud" :flight="flight" :camera="camera" :real="realTelemetry" />
   </div>
 </template>
 
