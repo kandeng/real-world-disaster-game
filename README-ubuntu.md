@@ -2,10 +2,11 @@
 
 A multi-view drone navigation dashboard combining 3D aerial visualization, 2D mapping, and mission-control interfaces.
 
-This guide runs the **entire system locally on a native Ubuntu desktop** — no ECS dependency. In dev, the SPA calls FastAPI cross-origin at `http://localhost:8000` and reaches Synapse through the Vite `/_matrix` proxy — **no Caddy needed locally** (Caddy, Squid, and Tailscale are production-only). Other platforms:
+This guide runs the **entire system locally on a native Ubuntu desktop** — no ECS dependency. In dev, the SPA calls FastAPI cross-origin at `http://localhost:8000` and reaches Synapse through the Vite `/_matrix` proxy — **no Caddy needed locally** (Caddy, Squid, and Tailscale are production-only). Other platforms and languages:
 
-- Windows 10/11 (WSL2): [README.md](README.md)
-- macOS: [README-macos.md](README-macos.md)
+- Windows 10/11 (WSL2): [English](README.md) | [中文](README-zh.md)
+- macOS: [English](README-macos.md) | [中文](README-macos-zh.md)
+- Ubuntu: [English](README-ubuntu.md) | [中文](README-ubuntu-zh.md)
 - Production deployment (Alibaba ECS, Caddy, Tailscale): [deployment/README.md](deployment/README.md)
 
 Everything runs natively. Ubuntu is also the only platform with optional systemd user services (Section 11) that run the whole stack in the background, no terminals.

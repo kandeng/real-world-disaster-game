@@ -2,10 +2,11 @@
 
 A multi-view drone navigation dashboard combining 3D aerial visualization, 2D mapping, and mission-control interfaces.
 
-This guide runs the **entire system natively on macOS** (Apple Silicon and Intel) — no server accounts, no VM. Other platforms:
+This guide runs the **entire system natively on macOS** (Apple Silicon and Intel) — no server accounts, no VM. Other platforms and languages:
 
-- Windows 10/11 (WSL2): [README.md](README.md)
-- Native Ubuntu desktop: [README-ubuntu.md](README-ubuntu.md)
+- Windows 10/11 (WSL2): [English](README.md) | [中文](README-zh.md)
+- macOS: [English](README-macos.md) | [中文](README-macos-zh.md)
+- Ubuntu: [English](README-ubuntu.md) | [中文](README-ubuntu-zh.md)
 - Production deployment (Alibaba ECS, Caddy, Tailscale): [deployment/README.md](deployment/README.md)
 
 macOS is actually the smoothest path: everything runs natively (no WSL layer, no USB pass-through), including the webcam publisher and the Crazyradio. The only macOS-specific notes are Homebrew paths, camera permission prompts, and `libusb` for the radio.

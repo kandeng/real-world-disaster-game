@@ -2,10 +2,11 @@
 
 A multi-view drone navigation dashboard combining 3D aerial visualization, 2D mapping, and mission-control interfaces.
 
-This guide runs the **entire system locally on Windows 10/11 with WSL2** — no server accounts needed. Other platforms:
+This guide runs the **entire system locally on Windows 10/11 with WSL2** — no server accounts needed. Other platforms and languages:
 
-- Native Ubuntu desktop: [README-ubuntu.md](README-ubuntu.md)
-- macOS: [README-macos.md](README-macos.md)
+- Windows 10/11 (WSL2): [English](README.md) | [中文](README-zh.md)
+- macOS: [English](README-macos.md) | [中文](README-macos-zh.md)
+- Ubuntu: [English](README-ubuntu.md) | [中文](README-ubuntu-zh.md)
 - Production deployment (Alibaba ECS, Caddy, Tailscale): [deployment/README.md](deployment/README.md)
 
 ## Project structure
