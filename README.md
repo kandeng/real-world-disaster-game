@@ -241,6 +241,16 @@ lsusb | grep 1915        # Nordic Semiconductor — the dongle is visible
 
 Find the drone's camera IP: browse `http://192.168.0.x` candidates from a Windows browser (`nmap -sn 192.168.0.0/24` inside WSL lists them) until one shows the AI-Deck livestream — WSL can reach it directly (outbound LAN works).
 
+**Changing the drone's EEPROM identity** (only needed when several drones share one room — same channel + same address = cross-control): connect the drone over its USB cable, attach it to WSL with usbipd the same way as the radio, then run the provisioning script — it writes the new radio channel/address into the drone's EEPROM, then verifies it over the radio after a power-cycle:
+
+```bash
+cd ~/drone-navigation/extension/crazyflie_bridge
+python provision_drone.py --channel 14 --address E7E7E7E707
+# -> then connect with: ./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707
+```
+
+Give each drone a distinct channel, ≥2 MHz apart at 2M datarate (e.g. channels 2, 4, 6, ... with matching addresses `E7E7E7E702`, `E7E7E7E703`, ...). `--team N` applies that scheme automatically; `--read-only` just prints the current identity.
+
 Start the whole bridge with one script (it self-activates the `drone-navigation` conda env):
 
 ```bash
@@ -262,7 +272,7 @@ MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
 Safety rules that are always in effect:
 
 - Takeoff is **refused on a USB cable** (`usb://*`); flight goes over the Crazyradio only. (Using `usb://0` in WSL also requires attaching the drone's USB cable via usbipd.)
-- **Classrooms (13 groups, one drone per group):** the default URI is for SOLO use — same channel + same address = cross-control. Provision each team's drone once over the USB cable (attach the drone's USB to WSL with usbipd, same as the radio) with `python provision_drone.py --team N` — the script writes the EEPROM identity, then verifies it over the radio after a power-cycle. Students then connect with `./start_bridge.sh --cf-uri radio://0/<CH>/2M/<ADDR>`. Roster: team N -> channel 2N (2..26, ≥2 MHz apart at 2M datarate), address E7E7E7E7NN.
+- **Multiple drones in one room:** the default URI is for SOLO use — provision each drone with its own channel/address (steps above) and fly only on it.
 
 ## Section 10. Daily workflow + troubleshooting
 

@@ -204,15 +204,15 @@ lsusb | grep 1915        # Nordic Semiconductor — the Crazyradio is visible
 
 Find the drone's camera IP (`nmap -sn 192.168.0.0/24`, then browse `http://192.168.0.x` candidates) until one shows the AI-Deck livestream.
 
-**Classrooms (13 groups, one drone per group):** provision each team's drone once over the USB cable — the script writes the EEPROM identity, then verifies it over the radio after a power-cycle:
+**Changing the drone's EEPROM identity** (only needed when several drones share one room — same channel + same address = cross-control): connect the drone over the USB cable and run the provisioning script — it writes the new radio channel/address into the drone's EEPROM, then verifies it over the radio after a power-cycle:
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-python provision_drone.py --team 7
-# -> students then connect with: ./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707
+python provision_drone.py --channel 14 --address E7E7E7E707
+# -> then connect with: ./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707
 ```
 
-Roster: team N -> channel 2N (2..26, ≥2 MHz apart at 2M datarate), address E7E7E7E7NN. Same channel + same address = cross-control — never fly with the default URI in class.
+Give each drone a distinct channel, ≥2 MHz apart at 2M datarate (e.g. channels 2, 4, 6, ... with matching addresses `E7E7E7E702`, `E7E7E7E703`, ...). `--team N` applies that scheme automatically; `--read-only` just prints the current identity.
 
 Start the whole bridge with one script (it self-activates the `drone-navigation` conda env):
 
@@ -237,7 +237,7 @@ MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
 Safety rules that are always in effect:
 
 - Takeoff is **refused on a USB cable** (`usb://*`); flight goes over the Crazyradio only.
-- **Classrooms:** see the provisioning roster above — each team flies only its own assigned channel/address.
+- **Multiple drones in one room:** each drone flies only on its own provisioned channel/address (see the steps above).
 
 The telemetry path mirrors the video path: `motion_control_ws.py` owns the Crazyflie link and broadcasts telemetry on `ws://127.0.0.1:8765`; `telemetry_relay.py` forwards it to the server (`WS /api/drone/telemetry/publish`), which fans out to browsers (`WS /api/drone/telemetry`). Set `"drone": { "telemetry_token": "..." }` in the deployed `server/config.json` to require `TELEMETRY_TOKEN=<same>` on the relay (empty = open, fine locally).
 
