@@ -47,6 +47,8 @@ A screenshot of the security group rules is attached below.
 
 ![Alibaba Cloud security group rules](assets/alibaba_02.png)
 
+The table above covers ECS 1 (the Caddy host). ECS 2 (`47.85.110.135`, MediaMTX + Synapse) needs its own inbound rules: TCP `8889` (WHIP/WHEP signaling — Caddy proxies `/live/*` to it), TCP `9997` (control API — Caddy proxies `/control-api/*` to it), and UDP `8189` (WebRTC ICE media). Synapse's port 8008 needs no rule at all — it binds only to the Tailscale interface (section 3.5).
+
 
 &nbsp;
 ### 2. CDN
@@ -940,5 +942,94 @@ In the Tailscale admin console (`https://login.tailscale.com/admin/machines`), f
 - **Alibaba security groups**: no new inbound rules are needed — Tailscale NAT-traverses using outbound connections and falls back to DERP relays. Optionally open UDP `41641` on both servers for faster direct links.
 - **ACLs**: the default tailnet policy lets all nodes reach each other (fine for two servers). An ACL restricting port 8008 to just these two machines can be added later.
 - Renaming the machines in the admin console (e.g. `ecs-caddy`, `ecs-synapse`) makes `tailscale status` output and logs easier to read.
+
+
+
+&nbsp;
+# 5. Extension
+
+The two extensions under `extension/` run where the hardware is — in practice the maintainer's Ubuntu desktop — and publish **into** the production servers:
+
+| Extension | What it does | Publishes into production |
+|---|---|---|
+| `extension/simple_webcam` | Grabs the desktop webcam and WHIP-ingests it as one MediaMTX stream | MediaMTX on ECS 2, via Caddy (`https://drone-navigation.com/live/*` -> `:8889`) |
+| `extension/crazyflie_bridge` | Four processes around one Crazyradio link: MJPEG video proxy (`:8082`), motion-control WebSocket (`:8765`), telemetry relay (drone <-> FastAPI), drone-camera WHIP publisher | Video -> MediaMTX on ECS 2; telemetry -> FastAPI on ECS 1 (`wss://drone-navigation.com/api/drone/telemetry/publish`, via the Caddy `/api/*` proxy) |
+
+Both default to PRODUCTION — no environment variables are needed to serve the real site. Set `MEDIAMTX_URL` / `MEDIAMTX_API` / `TELEMETRY_SERVER` only when targeting a local stack instead (that local flow is covered by the platform READMEs at the repository root).
+
+&nbsp;
+## 5.1. Prerequisites (Ubuntu desktop)
+
+1. Clone the repo to `~/drone-navigation` and create the shared conda environment:
+
+```bash
+conda create -n drone-navigation python=3.12 -y
+conda activate drone-navigation
+pip install -r ~/drone-navigation/extension/simple_webcam/requirements.txt
+pip install -r ~/drone-navigation/extension/crazyflie_bridge/requirements.txt
+```
+
+2. (Drone only) one-time udev rules so userland can reach the Crazyradio PA, and the drone itself over USB (used when changing its EEPROM identity):
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1915", ATTR{idProduct}=="7777", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5740", MODE="0666"' \
+  | sudo tee /etc/udev/rules.d/99-crazyflie.rules
+sudo udevadm control --reload && sudo udevadm trigger
+lsusb | grep 1915        # Nordic Semiconductor — the Crazyradio is visible
+```
+
+3. (Drone only) the drone's AI-Deck joins the same LAN as the desktop — find its IP (`nmap -sn 192.168.0.0/24`, then browse the `http://192.168.0.x` candidates until one shows the livestream). The examples below use `192.168.0.110`.
+
+&nbsp;
+## 5.2. simple_webcam (webcam -> production MediaMTX)
+
+```bash
+cd ~/drone-navigation/extension/simple_webcam
+conda activate drone-navigation
+python simple_webcam.py            # publishes stream id 'ubuntu-webcam' to PRODUCTION
+```
+
+Environment variables (defaults target production):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MEDIAMTX_URL` | `https://drone-navigation.com/live` | WHIP base URL (Caddy proxies `/live/*` -> ECS 2 `:8889`) |
+| `MEDIAMTX_API` | `https://drone-navigation.com/control-api` | control API (Caddy proxies `/control-api/*` -> ECS 2 `:9997`) |
+| `LIVESTREAM_ID` | `ubuntu-webcam` | MediaMTX path / stream id |
+
+Verify: `curl https://drone-navigation.com/control-api/v3/paths/list` shows the id, and the website's `Real Drone -> Livestream Viewer` plays it. Which ids the SPA lists comes from the `"mediamtx": { "streams": [...] }` catalog in the deployed `server/config.json` — both `crazyflie-drone` and `ubuntu-webcam` are present by default (see `server/config.example.json`).
+
+systemd variant: [`deployment/local-systemd/drone-webcam.service`](./local-systemd/drone-webcam.service) wraps the same publisher as a systemd **user** service — but note it overrides `MEDIAMTX_URL` / `MEDIAMTX_API` to `127.0.0.1` (it is meant for the local stack, section 11 of `README-ubuntu.md`). For production publishing, run the publisher manually as above or edit the unit's `Environment=` lines first.
+
+&nbsp;
+## 5.3. crazyflie_bridge (real drone -> production)
+
+Plug in the Crazyradio PA and power the drone, then launch all four processes with one script (it self-activates the `drone-navigation` conda env):
+
+```bash
+cd ~/drone-navigation/extension/crazyflie_bridge
+CRAZYFLIE_IP=192.168.0.110 ./start_bridge.sh
+#    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
+#    + motion_control_ws.py   (ws://:8765; radio://0/80/2M/E7E7E7E7E7 by default)
+#    + telemetry_relay.py     (telemetry + flight commands, drone <-> FastAPI)
+#    + crazyflie_mediamtx.py  (drone camera -> MediaMTX WHIP, id 'crazyflie-drone')
+#    Stop: Ctrl+C (press twice to force) — lands the drone first if flying.
+```
+
+Environment variables (defaults target production):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CRAZYFLIE_IP` | `192.168.0.106` (script default) | drone AI-Deck IP — override as shown above |
+| `TELEMETRY_SERVER` | `wss://drone-navigation.com/api/drone/telemetry/publish` | FastAPI ingest WebSocket; the command downlink derives from it (`.../command/downlink`) |
+| `TELEMETRY_TOKEN` | empty | must match `"drone": { "telemetry_token" }` in the deployed `server/config.json` if set there (empty = open) |
+| `MEDIAMTX_URL` / `MEDIAMTX_API` | production `/live` + `/control-api` | same meaning as in 5.2 |
+| `LIVESTREAM_ID` | `crazyflie-drone` | stream id for the drone camera |
+| `CF_NO_FLY` | — | `=1` refuses every takeoff (bench dry-run) |
+
+Smoke test without flying: `python e2e_command_check.py` validates the full command chain. Then the website's `Livestream Host` HUD shows `Link live | ~20 Hz` with real position / attitude / battery, and the Takeoff/Stop/Landing button + Flight disk fly the drone. Safety rule that is always in effect: takeoff is **refused on a USB cable** (`usb://*`) — flight goes over the Crazyradio only.
+
+Multi-drone note: the default radio URI is for SOLO use — same channel + same address = cross-control. To fly several drones in one room, provision each drone's EEPROM identity once over its USB cable (`python provision_drone.py --channel 14 --address E7E7E7E707` writes the identity, then verifies it over the radio after a power-cycle) and connect with `./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707`. Give each drone a distinct channel, >=2 MHz apart at 2M datarate; `--read-only` prints the current identity without writing.
 
 
