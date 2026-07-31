@@ -217,6 +217,8 @@ Browser checklist at `http://localhost:5173`:
 
 ## Section 9. Real Crazyflie drone (usbipd-win + crazyflie_bridge)
 
+**New to the Crazyflie?** Bitcraze's [step-by-step tutorial](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/) is the recommended starting point — first connect and read the telemetry data, then progress to flying.
+
 WSL2 cannot see USB devices by default. Pass the **Crazyradio PA** into WSL with usbipd-win — in **Windows PowerShell (Administrator)**:
 
 ```powershell
@@ -260,7 +262,7 @@ MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
 Safety rules that are always in effect:
 
 - Takeoff is **refused on a USB cable** (`usb://*`); flight goes over the Crazyradio only. (Using `usb://0` in WSL also requires attaching the drone's USB cable via usbipd.)
-- **Classrooms:** the default URI is for SOLO use. Every team gets an assigned channel/address, the drone is provisioned to match once (Bitcraze CFclient -> `Connect -> Configure 2.x` -> Write -> power-cycle), and students run `./start_bridge.sh --cf-uri radio://0/<CH>/2M/<ADDR>`. Same channel + same address = cross-control; keep 2M datarate and channels ≥2 MHz apart.
+- **Classrooms (13 groups, one drone per group):** the default URI is for SOLO use — same channel + same address = cross-control. Provision each team's drone once over the USB cable (attach the drone's USB to WSL with usbipd, same as the radio) with `python provision_drone.py --team N` — the script writes the EEPROM identity, then verifies it over the radio after a power-cycle. Students then connect with `./start_bridge.sh --cf-uri radio://0/<CH>/2M/<ADDR>`. Roster: team N -> channel 2N (2..26, ≥2 MHz apart at 2M datarate), address E7E7E7E7NN.
 
 ## Section 10. Daily workflow + troubleshooting
 

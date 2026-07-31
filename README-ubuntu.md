@@ -1,6 +1,14 @@
-# Drone Navigation
+# Drone Navigation — Ubuntu
 
 A multi-view drone navigation dashboard combining 3D aerial visualization, 2D mapping, and mission-control interfaces.
+
+This guide runs the **entire system locally on a native Ubuntu desktop** — no ECS dependency. In dev, the SPA calls FastAPI cross-origin at `http://localhost:8000` and reaches Synapse through the Vite `/_matrix` proxy — **no Caddy needed locally** (Caddy, Squid, and Tailscale are production-only). Other platforms:
+
+- Windows 10/11 (WSL2): [README.md](README.md)
+- macOS: [README-macos.md](README-macos.md)
+- Production deployment (Alibaba ECS, Caddy, Tailscale): [deployment/README.md](deployment/README.md)
+
+Everything runs natively. Ubuntu is also the only platform with optional systemd user services (Section 11) that run the whole stack in the background, no terminals.
 
 ## Project structure
 
@@ -8,18 +16,43 @@ A multi-view drone navigation dashboard combining 3D aerial visualization, 2D ma
 drone-navigation/
 ├── client/       # Vue 3 + Vite frontend (Cesium, Google Maps, Street View)
 ├── server/       # FastAPI backend (fastapi-users auth, settings, Matrix token brokering)
-├── extension/    # Standalone publishers/tools (e.g. simple_webcam WHIP ingest)
+├── extension/    # Standalone publishers/tools (simple_webcam WHIP ingest, crazyflie_bridge)
 └── deployment/   # Production configs + ops docs (Caddy, Squid, OpenClaw, MediaMTX, Synapse)
 ```
 
-## Quick start (local Ubuntu desktop — full system)
+| Component | Port(s) |
+|---|---|
+| Client (Vite dev server) | 5173 |
+| FastAPI backend | 8000 |
+| PostgreSQL dev cluster | 5433 |
+| Synapse (Community chat) | 8008 |
+| OpenClaw (Customer Service) | 18789 |
+| MediaMTX (Livestream) | 8889, 8888, 9997 |
+| crazyflie_bridge (real drone) | 8082, 8765 |
 
-The entire system runs locally without any ECS dependency. In dev, the SPA calls FastAPI cross-origin at `http://localhost:8000` and reaches Synapse through the Vite `/_matrix` proxy — **no Caddy needed locally** (Caddy, Squid, and Tailscale are production-only; see [deployment/README.md](deployment/README.md)). After the one-time installs below, section 8 shows how to run all backends as auto-started systemd user services (no terminals).
-
-### 1. Client (Vue 3 + Vite)
+## Section 1. Ubuntu setup
 
 ```bash
-cd client
+sudo apt update && sudo apt install -y git curl postgresql nmap
+
+# Miniconda
+curl -LO https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
+~/miniconda3/bin/conda init bash && source ~/.bashrc
+
+# Node.js LTS
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt install -y nodejs
+
+git clone https://github.com/kandeng/drone-navigation.git ~/drone-navigation
+```
+
+Checkpoint: `node -v`, `npm -v`, `conda --version`, `git --version` all print versions.
+
+## Section 2. Client (Vue 3 + Vite)
+
+```bash
+cd ~/drone-navigation/client
 npm install
 cp config.example.json config.json   # fill in googleApiKey, cesiumIonToken, openclaw.token
 npm run dev                          # http://localhost:5173
@@ -27,31 +60,35 @@ npm run dev                          # http://localhost:5173
 
 For API key prerequisites (Google Maps APIs, Cesium ion), see [client/README.md](client/README.md).
 
-### 2. PostgreSQL (user-owned dev cluster, port 5433)
+**Smoke test:** the `3D Aerial` globe and the `2D Map` render immediately — they need no backend.
+
+## Section 3. PostgreSQL (user-owned dev cluster, port 5433)
 
 No sudo, separate from any system cluster (details: deployment/README.md §3.3.3):
 
 ```bash
+VER=$(ls /usr/lib/postgresql)        # 14 on Ubuntu 22.04
+
 # One-time init (trust auth on localhost, port 5433)
-/usr/lib/postgresql/14/bin/initdb -D ~/pgdata -U $USER -E UTF8 --auth=trust
+/usr/lib/postgresql/$VER/bin/initdb -D ~/pgdata -U $USER -E UTF8 --auth=trust
 printf "port = 5433\nunix_socket_directories = '$HOME/pgdata'\n" >> ~/pgdata/postgresql.conf
 
 # Start / stop
-/usr/lib/postgresql/14/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
-/usr/lib/postgresql/14/bin/pg_ctl -D ~/pgdata stop
+/usr/lib/postgresql/$VER/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
+/usr/lib/postgresql/$VER/bin/pg_ctl -D ~/pgdata stop
 
 # Populate the schema (idempotent; run 002 after 001)
 psql -h 127.0.0.1 -p 5433 -U $USER -v ON_ERROR_STOP=1 \
      -v app_password='local-dev-drone-api' \
-     -f server/migrations/001_init_auth_schema.sql
+     -f ~/drone-navigation/server/migrations/001_init_auth_schema.sql
 psql -h 127.0.0.1 -p 5433 -U $USER -d drone_navigation \
-     -v ON_ERROR_STOP=1 -f server/migrations/002_matrix_account.sql
+     -v ON_ERROR_STOP=1 -f ~/drone-navigation/server/migrations/002_matrix_account.sql
 ```
 
-### 3. FastAPI backend (auth + settings + Matrix brokering)
+## Section 4. FastAPI backend (auth + settings + Matrix brokering)
 
 ```bash
-cd server
+cd ~/drone-navigation/server
 conda create -n drone-navigation python=3.12 -y
 conda activate drone-navigation
 pip install -r requirements.txt
@@ -63,7 +100,9 @@ uvicorn app.main:app --reload --port 8000
 
 Note: `--reload` watches only `.py` files — after editing `config.json`, `touch app/main.py` to force a reload.
 
-### 4. Synapse (Community chat)
+**Smoke test:** `curl http://localhost:8000/api/health` → `{"status":"ok"}`; then `My Space -> Account` register + sign in, and a Settings save shows the green banner.
+
+## Section 5. Synapse (Community chat)
 
 Runs on `127.0.0.1:8008` with public registration disabled — the website is the only entrance (a conda env works equally well as the venv shown):
 
@@ -93,71 +132,141 @@ curl -s -X POST localhost:8008/_matrix/client/v3/login \
 #                "admin_access_token": "<syt_... token>" }
 ```
 
-### 5. OpenClaw (Customer Service)
+**Smoke test:** with two accounts in two browser profiles, `Community -> Chat` DMs flow both ways and survive a reload.
+
+## Section 6. OpenClaw (Customer Service)
 
 ```bash
-pnpm add -g openclaw          # or: npm install -g openclaw
+npm install -g openclaw          # or: pnpm add -g openclaw
 # Configure model provider + gateway token in ~/.openclaw/openclaw.json
 # (see deployment/openclaw/openclaw.json for the reference shape)
-openclaw gateway --port 18789 # foreground; `openclaw gateway install` for a daemon
+openclaw gateway --port 18789    # foreground; `openclaw gateway install` for a daemon
 ```
 
 The SPA connects to `ws://127.0.0.1:18789` — `openclaw.token` in `client/config.json` must match the gateway token in `~/.openclaw/openclaw.json`.
 
-### 6. MediaMTX (Livestream)
+## Section 7. MediaMTX + webcam (both native)
 
-Installed at `~/mediamtx_v1.9.0` (v1.9.0, same as ECS 2):
+**MediaMTX** (v1.9.0, same as ECS 2):
 
 ```bash
 mkdir ~/mediamtx_v1.9.0 && cd ~/mediamtx_v1.9.0
-# download mediamtx_v1.9.0_linux_amd64.tar.gz from
-# https://github.com/bluenviron/mediamtx/releases/tag/v1.9.0, then:
+curl -LO https://github.com/bluenviron/mediamtx/releases/download/v1.9.0/mediamtx_v1.9.0_linux_amd64.tar.gz
 tar -xzf mediamtx_v1.9.0_linux_amd64.tar.gz
 # Recommended: enable the control API on loopback — in mediamtx.yml set
 #   api: yes  and  apiAddress: 127.0.0.1:9997
 ./mediamtx                   # WHEP/WHIP on :8889, HLS :8888, control API :9997
+```
 
-# Publish the local webcam into it (separate terminal):
-cd extension/simple_webcam
-pip install -r requirements.txt   # use the drone-navigation conda env
+**Webcam publisher** (separate terminal):
+
+```bash
+cd ~/drone-navigation/extension/simple_webcam
+conda activate drone-navigation
 MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
   LIVESTREAM_ID=crazyflie-drone python simple_webcam.py   # WHIP-ingests the 'crazyflie-drone' stream
 ```
 
-With a real Crazyflie drone, `extension/crazyflie_bridge/crazyflie_mediamtx.py`
-publishes its camera under the same `crazyflie-drone` id instead of the webcam.
+With a real Crazyflie drone, `extension/crazyflie_bridge/crazyflie_mediamtx.py` publishes its camera under the same `crazyflie-drone` id instead of the webcam (Section 9).
 
-Which MediaMTX the SPA plays is decided by the backend, not the build: `server/config.json` -> `"mediamtx": { "streams": [...] }` is served at `GET /api/stream/config`, and `RealDroneView.vue` resolves it at playback time. The `Livestream Viewer` subpage lists every catalog entry as a clickable card in its left panel — clicking a card is the ONLY way to switch streams (default: the FIRST entry, the primary `crazyflie-drone`); the `Livestream Host` subpage keeps monitoring whichever stream is selected. Per-environment fallbacks are built into the SPA (local: `http://127.0.0.1:8889/<id>/whep`; production on ECS: `https://drone-navigation.com/live/<id>/whep`) and are used when the config key is absent; the legacy single `"whep_url"` form is still honored. The publishers default to production; the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point them at the local server.
+Which stream the SPA plays is decided by the backend at runtime (`server/config.json` -> `"mediamtx": { "streams": [...] }`, served at `GET /api/stream/config`); when the key is absent the SPA falls back to `http://127.0.0.1:8889/<id>/whep` locally (production: `https://drone-navigation.com/live/<id>/whep`). The `Livestream Viewer` subpage lists every catalog entry as a clickable card (default: the first entry, `crazyflie-drone`); the publishers default to production — the `MEDIAMTX_URL` / `MEDIAMTX_API` env vars above point them at the local server.
 
-With the physical drone connected, the `Livestream Host` HUD also shows REAL telemetry (link rate, position x/y/z, attitude yaw/pitch/roll, battery voltage). Same desktop -> server -> browser topology as the video: `motion_control_ws.py` owns the Crazyflie link and broadcasts telemetry on `ws://127.0.0.1:8765`; `telemetry_relay.py` forwards it to the server (`WS /api/drone/telemetry/publish`), which fans out to browsers (`WS /api/drone/telemetry`):
+**Smoke test:** `Real Drone -> Livestream Viewer` plays the webcam; the green `crazyflie-drone - HH:MM:SS` overlay ticks.
 
-```bash
-cd extension/crazyflie_bridge   # conda activate drone-navigation first
-python motion_control_ws.py --cf-uri usb://0   # drone on the USB cable (radio://0/80/2M/E7E7E7E7E7 over Crazyradio otherwise)
-TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
-  python telemetry_relay.py                    # omit TELEMETRY_SERVER to publish to PRODUCTION
-```
-
-Set `"drone": { "telemetry_token": "..." }` in the deployed `server/config.json` to require `TELEMETRY_TOKEN=<same>` on the relay (empty = open, fine locally).
-
-### 7. Smoke test (whole system)
+## Section 8. Whole-system smoke test
 
 ```bash
-curl http://localhost:8000/api/health            # {"status":"ok"}
-curl http://localhost:5173/_matrix/client/versions   # via the Vite proxy
+curl http://localhost:8000/api/health              # {"status":"ok"}
+curl http://localhost:5173/_matrix/client/versions # via the Vite proxy
 ```
 
 Browser checklist at `http://localhost:5173`:
 
 1. `My Space -> Account`: register + sign in.
 2. `My Space -> Settings`: change a value, click `Save` → green "saved" banner.
-3. `Community -> Chat`: with two accounts (two browsers/profiles), exchange DMs both ways; reload → history persists.
+3. `Community -> Chat`: two accounts exchange DMs; reload → history persists.
 4. `Community -> Customer Service`: connects to the local OpenClaw gateway.
-5. `Real Drone -> Livestream Host` (and `Livestream Viewer`): plays the local `crazyflie-drone` broadcast (step 6) — the green `crazyflie-drone - HH:MM:SS` overlay ticks with live frames. With the drone + relay running (step 6), the Host HUD shows `Link live | ~20 Hz` with live position / attitude / battery values.
+5. `Real Drone -> Livestream Viewer` (and `Host`): plays the Section 7 broadcast.
 
-### 8. Background services (optional — no terminals)
+## Section 9. Real Crazyflie drone
 
-Once steps 2–6 are installed, every backend can run as a systemd **user** service — auto-started at boot (user lingering is enabled), no terminals needed:
+**New to the Crazyflie?** Bitcraze's [step-by-step tutorial](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/) is the recommended starting point — first connect and read the telemetry data, then progress to flying.
+
+Everything is native here — the only preparation is a one-time udev rule granting user access to the Crazyradio PA, and to the drone itself over USB (used for classroom provisioning):
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1915", ATTR{idProduct}=="7777", MODE="0666"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5740", MODE="0666"' \
+  | sudo tee /etc/udev/rules.d/99-crazyflie.rules
+sudo udevadm control --reload && sudo udevadm trigger
+lsusb | grep 1915        # Nordic Semiconductor — the Crazyradio is visible
+```
+
+Find the drone's camera IP (`nmap -sn 192.168.0.0/24`, then browse `http://192.168.0.x` candidates) until one shows the AI-Deck livestream.
+
+**Classrooms (13 groups, one drone per group):** provision each team's drone once over the USB cable — the script writes the EEPROM identity, then verifies it over the radio after a power-cycle:
+
+```bash
+cd ~/drone-navigation/extension/crazyflie_bridge
+python provision_drone.py --team 7
+# -> students then connect with: ./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707
+```
+
+Roster: team N -> channel 2N (2..26, ≥2 MHz apart at 2M datarate), address E7E7E7E7NN. Same channel + same address = cross-control — never fly with the default URI in class.
+
+Start the whole bridge with one script (it self-activates the `drone-navigation` conda env):
+
+```bash
+cd ~/drone-navigation/extension/crazyflie_bridge
+CRAZYFLIE_IP=192.168.0.110 \
+TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
+MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+  ./start_bridge.sh
+#    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
+#    + motion_control_ws.py   (ws://:8765; radio://0/80/2M/E7E7E7E7E7 by default)
+#    + telemetry_relay.py     (telemetry + flight commands, drone <-> FastAPI)
+#    + crazyflie_mediamtx.py  (drone camera -> MediaMTX WHIP, id 'crazyflie-drone')
+#    Stop: Ctrl+C (press twice to force) — lands the drone first if flying.
+#    Bench safety: CF_NO_FLY=1 refuses every takeoff (dry-run).
+#    Omit TELEMETRY_SERVER / MEDIAMTX_* to relay + publish to PRODUCTION
+#    (drone-navigation.com).
+```
+
+**Smoke test (no flight):** `python e2e_command_check.py` validates the full command chain. Then the `Livestream Host` HUD shows `Link live | ~20 Hz` with real position / attitude / battery, and the Takeoff/Stop/Landing button + Flight disk fly the drone.
+
+Safety rules that are always in effect:
+
+- Takeoff is **refused on a USB cable** (`usb://*`); flight goes over the Crazyradio only.
+- **Classrooms:** see the provisioning roster above — each team flies only its own assigned channel/address.
+
+The telemetry path mirrors the video path: `motion_control_ws.py` owns the Crazyflie link and broadcasts telemetry on `ws://127.0.0.1:8765`; `telemetry_relay.py` forwards it to the server (`WS /api/drone/telemetry/publish`), which fans out to browsers (`WS /api/drone/telemetry`). Set `"drone": { "telemetry_token": "..." }` in the deployed `server/config.json` to require `TELEMETRY_TOKEN=<same>` on the relay (empty = open, fine locally).
+
+## Section 10. Daily workflow + troubleshooting
+
+Start order each session (one terminal each) — or use the systemd services in Section 11:
+
+```bash
+/usr/lib/postgresql/$(ls /usr/lib/postgresql)/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
+cd ~/drone-navigation/server && conda activate drone-navigation && uvicorn app.main:app --reload --port 8000
+nohup ~/synapse-venv/bin/python -m synapse.app.homeserver -c ~/synapse-data/homeserver.yaml &
+openclaw gateway --port 18789
+~/mediamtx_v1.9.0/mediamtx
+cd ~/drone-navigation/extension/simple_webcam && conda activate drone-navigation && \
+  MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 LIVESTREAM_ID=crazyflie-drone \
+  python simple_webcam.py
+cd ~/drone-navigation/client && npm run dev
+# Real drone: Section 9
+```
+
+Stop: Ctrl+C each process; `pg_ctl -D ~/pgdata stop` for PostgreSQL.
+
+- The Vite dev server stays manual — it's the frontend you're actively developing.
+- `drone-fastapi` keeps `--reload`: `.py` edits auto-apply; after editing `server/config.json`, `touch server/app/main.py` (works from any shell, no restart needed).
+- If the `drone-webcam` service (Section 11) is running, don't also run `simple_webcam.py` manually — that would double-publish the same stream id.
+
+## Section 11. Background services (optional — systemd user services)
+
+Once Sections 3–7 are installed, every backend can run as a systemd **user** service — auto-started at boot (user lingering is enabled), no terminals needed:
 
 ```bash
 cp deployment/local-systemd/*.service ~/.config/systemd/user/
@@ -183,9 +292,7 @@ systemctl --user restart drone-fastapi        # restart one
 systemctl --user disable --now drone-webcam   # stop the webcam publisher (e.g. a real drone publishes instead)
 ```
 
-### 9. Local Demo of the Whole System
-
-Demo-day startup (current policy on this desktop: all six services are **disabled** so they stay off across reboots — start them manually only when needed):
+Demo-day policy on the maintainer's desktop: all six services are **disabled** so they stay off across reboots — start them manually only when needed:
 
 ```bash
 # Bring the whole backend stack up for a demo
@@ -195,67 +302,7 @@ systemctl --user start drone-pg drone-fastapi drone-synapse drone-mediamtx drone
 systemctl --user stop drone-pg drone-fastapi drone-synapse drone-mediamtx drone-webcam openclaw-gateway
 ```
 
-Real drone: 
-
-1. Find the IP address of the crazyflie drone.
-
-~~~
-(drone-navigation) robot@robot-test:~/drone-navigation/extension/crazyflie_bridge$ nmap -sn 192.168.0.0/24
-Starting Nmap 7.80 ( https://nmap.org ) at 2026-07-30 21:59 CST
-Nmap scan report for 192.168.0.100
-Host is up (0.021s latency).
-...
-~~~
-
-Then in the chrome browser, visit `http://192.168.0.xxx` one by one in the list, 
-until it displays the video livestream from the crazyflie drone. 
-
-2. Start up `crazyflie_bridge` and `simple_webcam`.
-
-`crazyflie_bridge` — one script starts all four processes (it self-activates the `drone-navigation` conda env):
-
-```bash
-cd extension/crazyflie_bridge
-
-CRAZYFLIE_IP=192.168.0.110 \
-TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
-MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
-  ./start_bridge.sh
-#    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
-#    + motion_control_ws.py   (ws://:8765; radio://0/80/2M/E7E7E7E7E7 by default —
-#      pass --cf-uri usb://0 for a USB-tethered drone, where takeoff is REFUSED)
-#    + telemetry_relay.py     (telemetry + flight commands, drone <-> FastAPI)
-#    + crazyflie_mediamtx.py  (drone camera -> MediaMTX WHIP, id 'crazyflie-drone')
-#    Stop: Ctrl+C (press twice to force) — lands the drone first if it is
-#    flying, then stops the relay, publisher, and proxy.
-#    Bench safety: CF_NO_FLY=1 refuses every takeoff (dry-run).
-#    Omit TELEMETRY_SERVER / MEDIAMTX_* to relay + publish to PRODUCTION
-#    (drone-navigation.com).
-```
-
-`simple_webcam` — the no-drone stand-in (conda env `drone-navigation`); skip it when the real drone publishes:
-
-```bash
-cd extension/simple_webcam
-conda activate drone-navigation
-MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
-  python simple_webcam.py
-#    WHIP-ingests the laptop webcam as 'ubuntu-webcam' (LIVESTREAM_ID=crazyflie-drone
-#    makes it stand in for the drone). Stop: Ctrl+C.
-#    Note: the demo-day systemctl line above already runs this as drone-webcam —
-#    don't run both (that would double-publish the same stream id).
-```
-
-Then open `http://localhost:5173` -> `Real Drone`: the `Livestream Viewer` lists the stream cards; the `Livestream Host` HUD shows live telemetry, and the Takeoff/Stop/Landing button + Flight disk fly the drone (armed only over the radio link — never on the USB cable).
-
-
-Notes:
-
-- The Vite dev server (step 1) stays manual — it's the frontend you're actively developing: `npm run dev`.
-- `drone-fastapi` keeps `--reload`: `.py` edits auto-apply; after editing `server/config.json`, `touch server/app/main.py` (works from any shell, no restart needed).
-- `openclaw-gateway.service` is created by OpenClaw's own installer — it's listed only for completeness; don't copy a unit for it.
-
-For production deployment on the two Alibaba ECS servers, see [deployment/README.md](deployment/README.md).
+Note: `openclaw-gateway.service` is created by OpenClaw's own installer — it's listed only for completeness; don't copy a unit for it.
 
 ## License
 
