@@ -1,12 +1,14 @@
-# Drone Navigation
+# Drone Navigation — macOS
 
 A multi-view drone navigation dashboard combining 3D aerial visualization, 2D mapping, and mission-control interfaces.
 
-This guide runs the **entire system locally on Windows 10/11 with WSL2** — no server accounts needed. Other platforms:
+This guide runs the **entire system natively on macOS** (Apple Silicon and Intel) — no server accounts, no VM. Other platforms:
 
+- Windows 10/11 (WSL2): [README.md](README.md)
 - Native Ubuntu desktop: [README-ubuntu.md](README-ubuntu.md)
-- macOS: [README-macos.md](README-macos.md)
 - Production deployment (Alibaba ECS, Caddy, Tailscale): [deployment/README.md](deployment/README.md)
+
+macOS is actually the smoothest path: everything runs natively (no WSL layer, no USB pass-through), including the webcam publisher and the Crazyradio. The only macOS-specific notes are Homebrew paths, camera permission prompts, and `libusb` for the radio.
 
 ## Project structure
 
@@ -18,51 +20,31 @@ drone-navigation/
 └── deployment/   # Production configs + ops docs (Caddy, Squid, OpenClaw, MediaMTX, Synapse)
 ```
 
-## How it works on Windows (read this first)
+| Component | Port(s) |
+|---|---|
+| Client (Vite dev server) | 5173 |
+| FastAPI backend | 8000 |
+| PostgreSQL dev cluster | 5433 |
+| Synapse (Community chat) | 8008 |
+| OpenClaw (Customer Service) | 18789 |
+| MediaMTX (Livestream) | 8889, 8888, 9997 |
+| crazyflie_bridge (real drone) | 8082, 8765 |
 
-Everything server-side runs **inside WSL2 Ubuntu**; you interact with it from Windows through WSL2's localhost forwarding — a service listening on a port inside WSL is reachable from Windows at `http://localhost:<port>`.
-
-Two pieces are the exception:
-
-- **The webcam publisher runs on native Windows Python.** WSL2 has no access to the laptop camera (there is no `/dev/video0`), so `simple_webcam.py` runs in Windows and pushes the stream *into* MediaMTX inside WSL via `127.0.0.1:8889` (the Windows→WSL direction of localhost forwarding).
-- **The Crazyradio PA dongle needs usbipd-win** to pass the USB device into WSL (Section 9).
-
-| Component | Runs in | Port(s) |
-|---|---|---|
-| Client (Vite dev server) | WSL | 5173 |
-| FastAPI backend | WSL | 8000 |
-| PostgreSQL dev cluster | WSL | 5433 |
-| Synapse (Community chat) | WSL | 8008 |
-| OpenClaw (Customer Service) | WSL | 18789 |
-| MediaMTX (Livestream) | WSL | 8889, 8888, 9997 |
-| simple_webcam publisher | **Windows** | — |
-| crazyflie_bridge (real drone) | WSL (+ usbipd radio) | 8082, 8765 |
-
-## Section 1. Windows + WSL2 setup
-
-In **Windows PowerShell (Administrator)**:
-
-```powershell
-wsl --install                  # installs WSL2 + Ubuntu; reboot when asked
-wsl --set-default-version 2
-```
-
-Then in the **Ubuntu (WSL) terminal**:
+## Section 1. macOS setup
 
 ```bash
-sudo apt update && sudo apt install -y git curl
+xcode-select --install            # Command Line Tools (git, compilers)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Miniconda
-curl -LO https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-bash Miniconda3-latest-Linux-x86_64.sh -b -p ~/miniconda3
-~/miniconda3/bin/conda init bash && source ~/.bashrc
+brew install git node postgresql@14 libusb
+# libusb: needed by pyusb/cflib to talk to the Crazyradio — there is no
+# usbipd equivalent on macOS; USB works natively.
 
-# Node.js LTS
-curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-sudo apt install -y nodejs
+# Miniconda (installer route — keeps shells consistent with the Linux guides)
+curl -LO https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh   # Intel: ...-MacOSX-x86_64.sh
+bash Miniconda3-latest-MacOSX-arm64.sh -b -p ~/miniconda3
+~/miniconda3/bin/conda init zsh && source ~/.zshrc
 
-# Clone into the WSL HOME — never under /mnt/c
-# (npm install on the Windows filesystem is 10-50x slower)
 git clone https://github.com/kandeng/drone-navigation.git ~/drone-navigation
 ```
 
@@ -74,28 +56,25 @@ Checkpoint: `node -v`, `npm -v`, `conda --version`, `git --version` all print ve
 cd ~/drone-navigation/client
 npm install
 cp config.example.json config.json   # fill in googleApiKey, cesiumIonToken, openclaw.token
-npm run dev
+npm run dev                          # http://localhost:5173
 ```
 
-Open `http://localhost:5173` in your **Windows** browser (WSL forwards it). For API key prerequisites (Google Maps APIs, Cesium ion), see [client/README.md](client/README.md).
+For API key prerequisites (Google Maps APIs, Cesium ion), see [client/README.md](client/README.md).
 
-**Smoke test:** the `3D Aerial` globe and the `2D Map` render immediately — they need no backend. Most other pages come alive as you add the sections below.
+**Smoke test:** the `3D Aerial` globe and the `2D Map` render immediately — they need no backend.
 
-## Section 3. PostgreSQL (dev cluster in WSL, port 5433)
+## Section 3. PostgreSQL (user-owned dev cluster, port 5433)
 
-A user-owned cluster, no systemd needed (WSL's apt also installs its own cluster on port 5432 — ignore it; we never touch it):
+Do **not** use `brew services` here — we run a throwaway user cluster like the Linux guides (paths below are Apple Silicon; on Intel replace `/opt/homebrew` with `/usr/local`):
 
 ```bash
-sudo apt install -y postgresql
-VER=$(ls /usr/lib/postgresql)        # 14 on Ubuntu 22.04, 16 on 24.04
-
 # One-time init (trust auth on localhost, port 5433)
-/usr/lib/postgresql/$VER/bin/initdb -D ~/pgdata -U $USER -E UTF8 --auth=trust
+/opt/homebrew/opt/postgresql@14/bin/initdb -D ~/pgdata -U $USER -E UTF8 --auth=trust
 printf "port = 5433\nunix_socket_directories = '$HOME/pgdata'\n" >> ~/pgdata/postgresql.conf
 
 # Start / stop
-/usr/lib/postgresql/$VER/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
-/usr/lib/postgresql/$VER/bin/pg_ctl -D ~/pgdata stop
+/opt/homebrew/opt/postgresql@14/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
+/opt/homebrew/opt/postgresql@14/bin/pg_ctl -D ~/pgdata stop
 
 # Populate the schema (idempotent; run 002 after 001)
 psql -h 127.0.0.1 -p 5433 -U $USER -v ON_ERROR_STOP=1 \
@@ -104,6 +83,8 @@ psql -h 127.0.0.1 -p 5433 -U $USER -v ON_ERROR_STOP=1 \
 psql -h 127.0.0.1 -p 5433 -U $USER -d drone_navigation \
      -v ON_ERROR_STOP=1 -f ~/drone-navigation/server/migrations/002_matrix_account.sql
 ```
+
+(`psql` is at `/opt/homebrew/opt/postgresql@14/bin/psql` — add it to PATH or use the full path.)
 
 ## Section 4. FastAPI backend (auth + settings + Matrix brokering)
 
@@ -120,7 +101,7 @@ uvicorn app.main:app --reload --port 8000
 
 Note: `--reload` watches only `.py` files — after editing `config.json`, `touch app/main.py` to force a reload.
 
-**Smoke test:** `curl http://localhost:8000/api/health` → `{"status":"ok"}` — run it **in Windows PowerShell too**; it proves WSL→Windows forwarding works. Then in the browser: `My Space -> Account`, register + sign in; `My Space -> Settings`, change a value, `Save` → green banner.
+**Smoke test:** `curl http://localhost:8000/api/health` → `{"status":"ok"}`; then `My Space -> Account` register + sign in, and a Settings save shows the green banner.
 
 ## Section 5. Synapse (Community chat)
 
@@ -165,38 +146,33 @@ openclaw gateway --port 18789    # foreground; `openclaw gateway install` for a 
 
 The SPA connects to `ws://127.0.0.1:18789` — `openclaw.token` in `client/config.json` must match the gateway token in `~/.openclaw/openclaw.json`.
 
-## Section 7. MediaMTX (WSL) + webcam (native Windows)
+## Section 7. MediaMTX + webcam (both native)
 
-**MediaMTX — inside WSL:**
+**MediaMTX** (binary tarball keeps the config file next to it; `brew install mediamtx` also works):
 
 ```bash
 mkdir ~/mediamtx_v1.9.0 && cd ~/mediamtx_v1.9.0
-curl -LO https://github.com/bluenviron/mediamtx/releases/download/v1.9.0/mediamtx_v1.9.0_linux_amd64.tar.gz
-tar -xzf mediamtx_v1.9.0_linux_amd64.tar.gz
+# Apple Silicon: darwin_arm64; Intel: darwin_amd64
+curl -LO https://github.com/bluenviron/mediamtx/releases/download/v1.9.0/mediamtx_v1.9.0_darwin_arm64.tar.gz
+tar -xzf mediamtx_v1.9.0_darwin_arm64.tar.gz
 # Recommended: enable the control API on loopback — in mediamtx.yml set
 #   api: yes  and  apiAddress: 127.0.0.1:9997
 ./mediamtx                       # WHEP/WHIP on :8889, HLS :8888, control API :9997
+# If Gatekeeper blocks the binary: xattr -d com.apple.quarantine ./mediamtx
 ```
 
-**Webcam publisher — on native Windows** (WSL2 has no camera device):
+**Webcam publisher** (native — unlike WSL, the camera works directly):
 
-1. Install **Python 3.12 for Windows** from python.org (tick "Add python.exe to PATH").
-2. Copy the publisher out of the WSL filesystem (replace `<wsl-user>` with your WSL username), in **Windows PowerShell**:
-
-```powershell
-Copy-Item -Recurse \\wsl.localhost\Ubuntu\home\<wsl-user>\drone-navigation\extension\simple_webcam $HOME\simple_webcam
-cd $HOME\simple_webcam
-py -m pip install -r requirements.txt    # opencv-python, aiortc, av, aiohttp (all have Windows wheels)
-
-$env:MEDIAMTX_URL="http://127.0.0.1:8889"
-$env:MEDIAMTX_API="http://127.0.0.1:9997"
-$env:LIVESTREAM_ID="crazyflie-drone"     # stand in for the drone stream
-py simple_webcam.py
+```bash
+cd ~/drone-navigation/extension/simple_webcam
+conda activate drone-navigation   # requirements already installed in Section 4
+MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+  LIVESTREAM_ID=crazyflie-drone python simple_webcam.py
 ```
 
-`127.0.0.1:8889` from Windows reaches MediaMTX inside WSL via localhost forwarding. Allow Windows Defender Firewall's Python prompt if asked, and make sure Windows camera privacy settings allow desktop apps to use the camera.
+On first run macOS asks to grant **camera access to your terminal** (System Settings -> Privacy & Security -> Camera — enable Terminal/iTerm/VS Code, then restart the terminal). The stream publishes as `crazyflie-drone`, standing in for the real drone.
 
-Which stream the SPA plays is decided by the backend at runtime (`server/config.json` -> `"mediamtx": { "streams": [...] }`, served at `GET /api/stream/config`); when the key is absent the SPA falls back to `http://127.0.0.1:8889/<id>/whep` locally. The `Livestream Viewer` subpage lists every catalog entry as a clickable card (default: the first entry, `crazyflie-drone`).
+Which stream the SPA plays is decided by the backend at runtime (`server/config.json` -> `"mediamtx": { "streams": [...] }`, served at `GET /api/stream/config`); when the key is absent the SPA falls back to `http://127.0.0.1:8889/<id>/whep` locally.
 
 **Smoke test:** `Real Drone -> Livestream Viewer` plays the webcam; the green `crazyflie-drone - HH:MM:SS` overlay ticks.
 
@@ -215,29 +191,15 @@ Browser checklist at `http://localhost:5173`:
 4. `Community -> Customer Service`: connects to the local OpenClaw gateway.
 5. `Real Drone -> Livestream Viewer` (and `Host`): plays the Section 7 broadcast.
 
-## Section 9. Real Crazyflie drone (usbipd-win + crazyflie_bridge)
+## Section 9. Real Crazyflie drone
 
-WSL2 cannot see USB devices by default. Pass the **Crazyradio PA** into WSL with usbipd-win — in **Windows PowerShell (Administrator)**:
-
-```powershell
-winget install usbipd
-usbipd list                          # find the Crazyradio PA (Nordic, VID 1915 PID 7777) -> note BUSID
-usbipd bind --busid <BUSID>          # one-time, persists across reboots
-usbipd attach --wsl --busid <BUSID>  # repeat after each replug / WSL restart
-```
-
-In **WSL**, grant user access (one-time), then verify:
+No USB pass-through needed — plug the **Crazyradio PA** in and it just works (`libusb` from Section 1 provides the userspace driver; no udev rules, no sudo):
 
 ```bash
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1915", ATTR{idProduct}=="7777", MODE="0666"' \
-  | sudo tee /etc/udev/rules.d/99-crazyradio.rules
-sudo udevadm control --reload && sudo udevadm trigger
-lsusb | grep 1915        # Nordic Semiconductor — the dongle is visible
-# If WSL has no udev running (no systemd): sudo chmod 0666 /dev/bus/usb/<bus>/<dev>
-# (find <bus>/<dev> via lsusb)
+system_profiler SPUSBDataType | grep -A3 1915   # Crazyradio PA present
 ```
 
-Find the drone's camera IP: browse `http://192.168.0.x` candidates from a Windows browser (`nmap -sn 192.168.0.0/24` inside WSL lists them) until one shows the AI-Deck livestream — WSL can reach it directly (outbound LAN works).
+Find the drone's camera IP (`nmap -sn 192.168.0.0/24`, or browse `http://192.168.0.x` candidates) until one shows the AI-Deck livestream.
 
 Start the whole bridge with one script (it self-activates the `drone-navigation` conda env):
 
@@ -259,31 +221,30 @@ MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
 
 Safety rules that are always in effect:
 
-- Takeoff is **refused on a USB cable** (`usb://*`); flight goes over the Crazyradio only. (Using `usb://0` in WSL also requires attaching the drone's USB cable via usbipd.)
+- Takeoff is **refused on a USB cable** (`usb://*`); flight goes over the Crazyradio only.
 - **Classrooms:** the default URI is for SOLO use. Every team gets an assigned channel/address, the drone is provisioned to match once (Bitcraze CFclient -> `Connect -> Configure 2.x` -> Write -> power-cycle), and students run `./start_bridge.sh --cf-uri radio://0/<CH>/2M/<ADDR>`. Same channel + same address = cross-control; keep 2M datarate and channels ≥2 MHz apart.
 
 ## Section 10. Daily workflow + troubleshooting
 
-Start order each session (one WSL terminal tab each, except the webcam in Windows PowerShell):
+Start order each session (one terminal tab each):
 
 ```bash
-/usr/lib/postgresql/$(ls /usr/lib/postgresql)/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
+/opt/homebrew/opt/postgresql@14/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
 cd ~/drone-navigation/server && conda activate drone-navigation && uvicorn app.main:app --reload --port 8000
 nohup ~/synapse-venv/bin/python -m synapse.app.homeserver -c ~/synapse-data/homeserver.yaml &
 openclaw gateway --port 18789
 ~/mediamtx_v1.9.0/mediamtx
+cd ~/drone-navigation/extension/simple_webcam && MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 LIVESTREAM_ID=crazyflie-drone python simple_webcam.py
 cd ~/drone-navigation/client && npm run dev
-# Windows PowerShell: cd $HOME\simple_webcam; $env:MEDIAMTX_URL=...; py simple_webcam.py
-# Real drone: Section 9 (usbipd attach first)
+# Real drone: Section 9
 ```
 
 Stop: Ctrl+C each process; `pg_ctl -D ~/pgdata stop` for PostgreSQL.
 
-- **`localhost:<port>` unreachable from Windows:** confirm the process is actually listening inside WSL (`ss -tlnp | grep <port>`); `wsl --shutdown` in PowerShell resets a wedged network.
-- **Firewall prompts:** allow Python/MediaMTX when Windows Defender asks (private networks).
-- **Slow `npm install` / file ops:** you are in `/mnt/c/...` — move the repo to the WSL home (Section 1).
-- **Camera black on the Windows publisher:** Windows Settings -> Privacy & security -> Camera -> allow desktop apps; only ONE app can hold the camera — close Teams/Zoom/Camera app.
-- **Editing WSL files from Windows:** use `\\wsl.localhost\Ubuntu\home\<wsl-user>\...` (VS Code's WSL extension is the comfortable option).
+- **Camera black / `cv2.VideoCapture(0)` fails:** camera permission missing for your terminal (Section 7), or another app (Zoom/FaceTime/Photo Booth) holds the camera.
+- **`psql: command not found`:** use the full `/opt/homebrew/opt/postgresql@14/bin/` path or add it to PATH (`brew link --force postgresql@14`).
+- **Apple Silicon vs Intel paths:** Homebrew prefixes are `/opt/homebrew` (M-series) and `/usr/local` (Intel) — substitute throughout.
+- **Port already in use:** `lsof -i :<port>` to find the holder; AirPlay Receiver occupies 5000/7000 on some macOS versions but none of this stack's ports.
 
 ## License
 
