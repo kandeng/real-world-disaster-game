@@ -1,5 +1,7 @@
 # simple_crazyflie — Connect, Read Telemetry, Fly
 
+English | [中文](README-zh.md)
+
 The scripts in this folder are modified from the official Bitcraze tutorial
 [Step-by-Step: Connecting, logging and parameters](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/),
 using **cflib directly** — no server, no MediaMTX, no browser. Three
@@ -152,9 +154,11 @@ off, radio MCU stays alive), then bring it back with `stm_power_up()` or
 `stm_power_cycle()` — no physical access needed. Note: the Crazyradio can
 only serve one program at a time, so **stop `03_flying.py` (or the bridge)
 first** — `Ctrl+C` releases the radio — and only then run the power-off
-command from a free terminal. If the drone is airborne and you cannot
-afford that sequence, unplug the radio: the watchdog cuts the motors in
-about a second and the script exits on its own.
+command from a free terminal. 
+
+If the drone is airborne and you cannot afford that sequence, 
+**unplug the radio**: 
+the watchdog cuts the motors in about a second and the script exits on its own.
 
 Rule of thumb: on an airborne drone, always reach for the *recoverable*
 options first — unplugging the radio, `send_stop_setpoint()`, or
