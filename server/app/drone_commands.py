@@ -63,7 +63,7 @@ def _validate(raw: dict) -> dict | None:
     action = raw.get("action")
     if action == "takeoff":
         return {"action": "takeoff", "height": _clamp(raw.get("height", 0.5), 0.1, 1.5, 0.5)}
-    if action in ("land", "stop"):
+    if action in ("land", "stop", "estop"):
         return {"action": action}
     if action == "move":
         return {

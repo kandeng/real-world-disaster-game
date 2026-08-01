@@ -127,6 +127,23 @@ function onRealFlightStop() {
   stopRealFlight();
 }
 
+// ── Emergency stop (red button, top of the right sidebar) ──
+// Cuts the motors NOW — the drone falls, even mid-air (bridge 'estop' ->
+// commander.send_stop_setpoint). Zero the disk state FIRST so the 150 ms
+// keep-alive cannot resurrect thrust before the estop lands; then reset
+// the takeoff switcher to offer 'takeoff' again (the drone is down).
+// Deliberately NOT the switcher's 'stop' (hover) nor 'landing' (gentle).
+function emergencyStop() {
+  currentMove.vx = 0;
+  currentMove.vy = 0;
+  currentMove.vz = 0;
+  currentMove.yawRate = 0;
+  onFlightStop();
+  droneCommands.estop();
+  switchIndex.value = 0;
+  syncTakeoffSwitchItem();
+}
+
 // ── Screenshot / Recorder on the live stream ──
 // Same login gate as the 3D subpages: anonymous users get a green top-center
 // reminder instead of the capture action. The capture source is whichever
@@ -529,6 +546,16 @@ onMounted(() => {
   // spacers absorb the free space above/below the button group so the
   // volume pill (registered last) sits at the VERY BOTTOM of the right
   // sidebar while the buttons keep their roughly centered look.
+  // Emergency stop pinned to the VERY TOP of the right sidebar, above the
+  // flex spacer that centers the other buttons. Never locked by subpage —
+  // an emergency button must always be clickable.
+  registerRight({
+    id: 'estop',
+    icon: 'MENU_RED_STOP',
+    titleKey: 'aerialview.emergency_stop',
+    danger: true,
+    onClick: emergencyStop,
+  });
   registerRight({ id: 'dock_spacer_top', render: () => h('div', { style: 'flex: 1 1 auto' }) });
   registerRight({
     id: 'steer',

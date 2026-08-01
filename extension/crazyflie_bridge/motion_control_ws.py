@@ -469,6 +469,24 @@ class CrazyflieBridge:
                 self._velocity_deadline = None
                 if self._is_flying:
                     self._motion_commander.stop()
+            elif action == "estop":
+                # EMERGENCY motor cut (mid-air): kill the setpoint thread
+                # FIRST so nothing re-arms the commander, then cut thrust
+                # immediately — no landing profile, the drone falls. The
+                # link stays up and a fresh MotionCommander is staged, so
+                # the next takeoff works without reconnecting.
+                self._velocity_deadline = None
+                try:
+                    self._motion_commander._thread.stop()
+                except Exception:
+                    pass
+                try:
+                    self._scf.cf.commander.send_stop_setpoint()
+                except Exception:
+                    pass
+                self._is_flying = False
+                self._motion_commander = MotionCommander(self._scf, default_height=0.5)
+                print("[Bridge] EMERGENCY STOP: motors cut.")
             elif action == "move":
                 vx = cmd.get("vx") or 0
                 vy = cmd.get("vy") or 0

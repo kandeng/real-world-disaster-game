@@ -114,9 +114,13 @@ export function useDroneCommands() {
     land() {
       return sendCommand({ action: 'land' });
     },
-    /** Emergency stop: cut motors immediately. */
+    /** Stop in place: zero velocity, keeps flying (bridge hover). */
     stop() {
       return sendCommand({ action: 'stop' });
+    },
+    /** EMERGENCY stop: cut the motors immediately — the drone falls, even mid-air. */
+    estop() {
+      return sendCommand({ action: 'estop' });
     },
     /**
      * Continuous velocity command (m/s, deg/s). The bridge re-applies the

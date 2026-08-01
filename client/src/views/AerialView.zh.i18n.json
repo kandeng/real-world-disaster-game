@@ -14,6 +14,7 @@
   "takeoff": "起飞",
   "landing": "降落",
   "stop": "停止",
+  "emergency_stop": "紧急停机（切断电机）",
   "takeoff_above_limit": "起飞高度为 {alt} 米，您已超出该高度。",
   "taking_off": "起飞中...",
   "landing_in_progress": "降落中...",

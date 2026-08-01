@@ -14,6 +14,7 @@
   "takeoff": "Takeoff",
   "landing": "Landing",
   "stop": "Stop",
+  "emergency_stop": "Emergency stop (cuts motors)",
   "takeoff_above_limit": "Takeoff altitude is {alt} m — you are already beyond that height.",
   "taking_off": "Taking Off...",
   "landing_in_progress": "Landing...",
