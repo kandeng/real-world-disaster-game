@@ -218,7 +218,7 @@ curl http://localhost:5173/_matrix/client/versions # 经 Vite 代理
 
 ## 第 9 节. 真实 Crazyflie 无人机（usbipd-win + crazyflie_bridge）
 
-**第一次接触 Crazyflie？** Bitcraze 的[分步教程](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/)是推荐的起点 —— 先连接并读取遥测数据，再进阶到飞行。
+**第一次接触 Crazyflie？** 请从 [`extension/simple_crazyflie/README.md`](extension/simple_crazyflie/README.md)（英文）开始 —— 它会一步步带你完成：从电脑连接无人机、读取遥测数据，再到让它飞起来。
 
 WSL2 默认看不到 USB 设备。用 usbipd-win 把 **Crazyradio PA** 传入 WSL —— 在 **Windows PowerShell（管理员）** 中：
 

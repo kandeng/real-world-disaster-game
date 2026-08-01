@@ -191,7 +191,7 @@ curl http://localhost:5173/_matrix/client/versions # 经 Vite 代理
 
 ## 第 9 节. 真实 Crazyflie 无人机
 
-**第一次接触 Crazyflie？** Bitcraze 的[分步教程](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/)是推荐的起点 —— 先连接并读取遥测数据，再进阶到飞行。
+**第一次接触 Crazyflie？** 请从 [`extension/simple_crazyflie/README.md`](extension/simple_crazyflie/README.md)（英文）开始 —— 它会一步步带你完成：从电脑连接无人机、读取遥测数据，再到让它飞起来。
 
 这里一切原生 —— 唯一的准备是一条一次性 udev 规则，授予用户对 Crazyradio PA 以及 USB 连接的无人机本体的访问权限（用于修改其 EEPROM 身份标识）：
 

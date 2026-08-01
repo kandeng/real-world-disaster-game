@@ -218,7 +218,7 @@ Browser checklist at `http://localhost:5173`:
 
 ## Section 9. Real Crazyflie drone (usbipd-win + crazyflie_bridge)
 
-**New to the Crazyflie?** Bitcraze's [step-by-step tutorial](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/) is the recommended starting point — first connect and read the telemetry data, then progress to flying.
+**New to the Crazyflie?** Start with [`extension/simple_crazyflie/README.md`](extension/simple_crazyflie/README.md) — it walks you through connecting your computer to the drone, reading its telemetry, and then flying it, one step at a time.
 
 WSL2 cannot see USB devices by default. Pass the **Crazyradio PA** into WSL with usbipd-win — in **Windows PowerShell (Administrator)**:
 

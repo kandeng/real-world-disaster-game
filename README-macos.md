@@ -194,7 +194,7 @@ Browser checklist at `http://localhost:5173`:
 
 ## Section 9. Real Crazyflie drone
 
-**New to the Crazyflie?** Bitcraze's [step-by-step tutorial](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/) is the recommended starting point — first connect and read the telemetry data, then progress to flying.
+**New to the Crazyflie?** Start with [`extension/simple_crazyflie/README.md`](extension/simple_crazyflie/README.md) — it walks you through connecting your computer to the drone, reading its telemetry, and then flying it, one step at a time.
 
 No USB pass-through needed — plug the **Crazyradio PA** in and it just works (`libusb` from Section 1 provides the userspace driver; no udev rules, no sudo):
 
