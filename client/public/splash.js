@@ -342,9 +342,20 @@
   }
 
   // ── Start the first clip and preload the second ──
+  // Wait for 'canplay' before pressing play: on a slow link, calling play()
+  // with only a frame or two of buffer stalls the video almost immediately
+  // (the "choked splash" symptom). The clips are stream-encoded (~1.5 Mbps,
+  // faststart), so 'canplay' fires after roughly a second of buffering.
   videoA.src = playlist[0];
-  videoA.play().catch(() => {});
   console.log('[splash] Now playing: ' + clipName(playlist[0]));
+  videoA.addEventListener(
+    'canplay',
+    function onFirstCanPlay() {
+      videoA.removeEventListener('canplay', onFirstCanPlay);
+      videoA.play().catch(() => {});
+    },
+    { once: true }
+  );
   preloadNext(1); // Start buffering clip 2
 
   /**

@@ -6,12 +6,10 @@
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Cesium.js"></script>
     <link href="https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <!-- Preload ONLY the first splash clip so it starts instantly. The
-         subsequent clips are downloaded lazily by splash.js (preloadNext)
-         once the current clip begins playing, so they are cached and ready
-         when needed without competing with the 3D tile download for
-         bandwidth at page load. -->
-    <link rel="preload" href="/splash/video_00.mp4" as="video" type="video/mp4">
+    <!-- No <link rel="preload" as="video"> here: Chrome does not support the
+         'video' fetch destination, so the hint is ignored (console warning)
+         and would only double-download. The first splash clip is small and
+         stream-encoded; splash.js starts it on the 'canplay' event. -->
 </head>
 <body>
     <div id="cesiumContainer"></div>
