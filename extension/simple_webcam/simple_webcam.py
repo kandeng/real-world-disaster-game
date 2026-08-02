@@ -27,7 +27,14 @@ LIVESTREAM_DESCRIPTION = "A webcam stream from Kan's Ubuntu desktop"
 # ECS; locally enable `api: yes` in mediamtx.yml and use http://127.0.0.1:9997.
 MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API", "https://drone-navigation.com/control-api")
 
-STUN_SERVER = "stun:stun.l.google.com:19302"
+# STUN is intentionally NOT configured by default: MediaMTX advertises
+# public host candidates, and an ICE-lite peer learns our address from the
+# binding requests themselves (prflx), so client-side STUN adds nothing.
+# Worse, the usual Google STUN endpoint is unreachable from some networks —
+# its doomed retry transactions are what trigger aioice's noisy-but-harmless
+# "InvalidStateError: invalid state" tracebacks (aiortc issue #1133).
+# Set STUN_SERVER=stun:host:port only if you know a setup needs it.
+STUN_SERVER = os.environ.get("STUN_SERVER", "")
 MONITOR_INTERVAL = 10  # seconds between stats / viewer log lines
 
 # Webcam device: set WEBCAM_DEVICE=2 to force /dev/video2. When unset, the
@@ -106,9 +113,9 @@ class WebcamStreamTrack(VideoStreamTrack):
         return new_frame
 
 
-# STUN server configuration for NAT traversal
+# ICE configuration (no STUN by default — see STUN_SERVER comment above)
 rtc_config = RTCConfiguration(
-    iceServers=[RTCIceServer(urls=[STUN_SERVER])]
+    iceServers=[RTCIceServer(urls=[STUN_SERVER])] if STUN_SERVER else []
 )
 
 
@@ -217,7 +224,7 @@ async def run_whip_publisher(server_url, stream_id):
     except Exception as e:
         log("INIT", f"Could not resolve host '{host}': {e}")
 
-    log("INIT", f"Using STUN server: {STUN_SERVER}")
+    log("INIT", f"Using STUN server: {STUN_SERVER or 'none (host candidates only)'}")
 
     pc = RTCPeerConnection(configuration=rtc_config)
 
