@@ -30,17 +30,53 @@ MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API", "https://drone-navigation.com/
 STUN_SERVER = "stun:stun.l.google.com:19302"
 MONITOR_INTERVAL = 10  # seconds between stats / viewer log lines
 
+# Webcam device: set WEBCAM_DEVICE=2 to force /dev/video2. When unset, the
+# script probes 0..3 and picks the first device that actually delivers a
+# frame — some nodes (IR/metadata sensors of an "Integrated RGB Camera"
+# pair, or a device held by another app) open fine and report a resolution
+# but never produce a single frame, which silently kills the stream.
+WEBCAM_DEVICE = os.environ.get("WEBCAM_DEVICE")
+
 
 def log(tag, msg):
     """Timestamped, tagged log line."""
     print(f"[{time.strftime('%H:%M:%S')}] [{tag}] {msg}", flush=True)
 
 
+def open_working_webcam():
+    """Find a capture device that actually delivers frames.
+
+    Returns (device_index, cap) with cap still open, or (None, None) if no
+    usable device exists. Probing matters: cv2.VideoCapture.read() blocks
+    forever on a dead node, so 'opened OK' alone proves nothing.
+    """
+    candidates = [int(WEBCAM_DEVICE)] if WEBCAM_DEVICE is not None else [0, 2, 1, 3]
+    for idx in candidates:
+        path = f"/dev/video{idx}"
+        if not os.path.exists(path):
+            continue
+        cap = cv2.VideoCapture(idx)
+        if not cap.isOpened():
+            log("INIT", f"WARNING: {path} failed to open (busy or metadata-only) — skipping.")
+            cap.release()
+            continue
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            ret, _ = cap.read()
+            if ret:
+                return idx, cap
+        log("INIT", f"WARNING: {path} opened but delivered no frames within 2 s — skipping.")
+        cap.release()
+    return None, None
+
+
 class WebcamStreamTrack(VideoStreamTrack):
-    def __init__(self, stream_id):
+    def __init__(self, stream_id, device, cap):
         super().__init__()
         self.stream_id = stream_id
-        self.cap = cv2.VideoCapture(0)
+        self.device = device
+        self.cap = cap
+        self.frames = 0
 
     async def recv(self):
         pts, time_base = await self.next_timestamp()
@@ -48,6 +84,9 @@ class WebcamStreamTrack(VideoStreamTrack):
         ret, frame = self.cap.read()
         if not ret:
             raise Exception("Webcam read failed")
+        if self.frames == 0:
+            log("INIT", f"First frame captured from /dev/video{self.device} — encoder pipeline live.")
+        self.frames += 1
 
         # Overlay identifying text on frame: the friendly hostname (not
         # the raw stream_id) so the broadcast top line matches the UI.
@@ -182,6 +221,9 @@ async def run_whip_publisher(server_url, stream_id):
 
     pc = RTCPeerConnection(configuration=rtc_config)
 
+    ice_failed = asyncio.Event()
+    interrupted = False  # set on Ctrl+C, so a clean quit doesn't exit 1
+
     @pc.on("iceconnectionstatechange")
     async def on_ice_state_change():
         log("ICE", f"ICE connection state -> {pc.iceConnectionState}")
@@ -189,18 +231,24 @@ async def run_whip_publisher(server_url, stream_id):
             await log_selected_ice_pair(pc)
         elif pc.iceConnectionState == "failed":
             log("ICE", "Handshake FAILED: check STUN server, firewalls, or UDP ports.")
+            ice_failed.set()
+        elif pc.iceConnectionState == "closed" and not interrupted:
+            # The remote side (MediaMTX) closed the session mid-stream.
+            log("ICE", "Session closed by the remote side.")
+            ice_failed.set()
 
-    # 1. Initialize Video Track
+    # 1. Initialize Video Track (auto-probe a device that delivers frames)
     video_track = None
     try:
-        video_track = WebcamStreamTrack(stream_id)
-        if video_track.cap.isOpened():
-            w = int(video_track.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            h = int(video_track.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        dev, cap = open_working_webcam()
+        if cap is not None:
+            video_track = WebcamStreamTrack(stream_id, dev, cap)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             pc.addTrack(video_track)
-            log("INIT", f"Webcam opened: {w}x{h}")
+            log("INIT", f"Webcam opened: {w}x{h} on /dev/video{dev}")
         else:
-            log("INIT", "WARNING: Webcam device 0 failed to open. Streaming without video.")
+            log("INIT", "WARNING: no working webcam found on /dev/video0-3. Streaming without video.")
     except Exception as e:
         log("INIT", f"WARNING: Video initialization failed ({e}).")
 
@@ -259,10 +307,14 @@ async def run_whip_publisher(server_url, stream_id):
     monitor_task = asyncio.create_task(monitor(pc, MEDIAMTX_API_URL, path_name))
 
     try:
-        while True:
+        # Idle until interrupted — or until ICE fails/closes, in which case
+        # exit with an error instead of idling forever printing 0-packet
+        # stats.
+        while not ice_failed.is_set():
             await asyncio.sleep(1)
+        log("LIVE", "ICE connection lost — exiting (restart to retry).")
     except (KeyboardInterrupt, asyncio.CancelledError):
-        pass
+        interrupted = True
     finally:
         monitor_task.cancel()
         await pc.close()
@@ -276,6 +328,9 @@ async def run_whip_publisher(server_url, stream_id):
             log("CLEANUP", "Audio player stopped.")
 
         log("LIVE", "Stream shutdown complete.")
+
+    if ice_failed.is_set() and not interrupted:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

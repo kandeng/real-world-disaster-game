@@ -89,6 +89,15 @@ drone-navigation.com {
 
 			# Ensure internal MediaMTX redirects maintain the /live/ subpath
 			header_down Location ^/ /live/
+
+			# MediaMTX <= v1.11 ties a WHIP/WHEP WebRTC session to the lifetime
+			# of this proxied HTTP connection: when the idle upstream connection
+			# is reaped (~90 s default), the WebRTC session dies with it. Keep
+			# upstream connections alive far longer; dead sessions are still
+			# reaped by MediaMTX's own PeerConnection monitoring, so no leak.
+			transport http {
+				keepalive 24h
+			}
 		}
 	}
 
