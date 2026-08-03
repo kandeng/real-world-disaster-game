@@ -33,7 +33,7 @@ motorPowerSet params are missing from this firmware, all four motors
 are spun together during the hover instead.
 
 After the individual check the script performs a short hover at
-~10 cm.  This catches the one fault a spin-direction check cannot:
+~20 cm.  This catches the one fault a spin-direction check cannot:
 a propeller mounted upside-down (correct rotation, but no lift).
 """
 import logging
@@ -42,12 +42,52 @@ import warnings
 
 import cflib.crtp
 from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
 URI = 'radio://0/80/2M/E7E7E7E7E7'
 POWER = 20000          # ~30 % — clearly visible spin, safe on the ground
 SPIN_TIME = 2.5        # seconds per motor — long enough to see direction
 PAUSE = 1.5            # between motors
+
+LOCKED_BIT = 0x40      # supervisor.info bit 6 — "must be restarted"
+
+# Live supervisor flags, refreshed by the log callback below.
+_state = {'flying': 1, 'sup': 0}
+
+
+def _state_cb(ts, data, conf):
+    _state['flying'] = data.get('sys.isFlying', 1)
+    _state['sup'] = data.get('supervisor.info', 0)
+
+
+def _start_state_log(cf):
+    lg = LogConfig(name='PropState', period_in_ms=100)
+    lg.add_variable('sys.isFlying', 'uint8_t')
+    lg.add_variable('supervisor.info', 'uint16_t')
+    cf.log.add_config(lg)
+    lg.data_received_cb.add_callback(_state_cb)
+    lg.start()
+    return lg
+
+
+def _locked():
+    return bool(_state['sup'] & LOCKED_BIT)
+
+
+def _settle(cf, duration=2.5):
+    """Keep feeding z=0 altitude hold after the descent ramp.
+
+    Cutting the motors abruptly the instant the setpoint reaches zero
+    (the drone still airborne) latches the LOCKED state, which needs a
+    power cycle to clear — see 04_flying.py.  The supervisor's
+    sys.isFlying flag never clears on this firmware, so the settle is
+    time-based rather than flag-based.
+    """
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        cf.commander.send_hover_setpoint(0, 0, 0, 0)
+        time.sleep(0.05)
 
 logging.basicConfig(level=logging.ERROR)
 
@@ -120,15 +160,19 @@ def _spin_each_motor(cf):
 # ── hover check (all four motors at once) ───────────────────────────
 #
 # Uses send_hover_setpoint() which goes to COMMANDER_GENERIC with
-# TYPE_HOVER_LEGACY on this CRTP v6 firmware — the same packet type
-# MotionCommander uses successfully in 04_flying.py.
+# TYPE_HOVER_LEGACY on this CRTP v6 firmware.  The motors are driven
+# by the flight controller, so the drone must be armed (system.arm=1)
+# and motorPowerSet.enable must be 0 (otherwise the motorPowerSet
+# params override the controller output).
 #
-# The trade-off: the drone must actually hover (~10 cm) for the
+# The trade-off: the drone must actually hover (~20 cm) for the
 # controller to spool up all four motors.  A brief low hover is the
 # most reliable integration check available on this firmware.
 
-HOVER_HEIGHT = 0.10      # metres — low enough that a wrong prop causes
-                         # immediate visible tilt, not a fly-away
+HOVER_HEIGHT = 0.20      # metres — clear of ground effect (important
+                         # on soft surfaces), yet low enough that a
+                         # wrong prop causes visible tilt, not a
+                         # fly-away
 HOVER_TIME = 4.0         # seconds of hover — time to check all four
 
 
@@ -142,9 +186,6 @@ def _pump_hover(cf, vx, vy, yaw_rate, zdistance, duration):
     while time.monotonic() < deadline:
         cf.commander.send_hover_setpoint(vx, vy, yaw_rate, zdistance)
         time.sleep(0.05)  # ~20 Hz
-    # Land: zero height target, then stop
-    cf.commander.send_hover_setpoint(0, 0, 0, 0)
-    time.sleep(0.05)
 
 
 def _hover_check(cf):
@@ -156,7 +197,7 @@ def _hover_check(cf):
     immediately at this low height, making the error obvious.
     """
     print()
-    print('Final check — brief hover at ~10 cm')
+    print('Final check — brief hover at ~20 cm')
     print('-' * 50)
     print()
     print('  ⚠️  The drone will lift off briefly.')
@@ -171,6 +212,16 @@ def _hover_check(cf):
     print(f'  Hovering at ~{HOVER_HEIGHT * 100:.0f} cm for '
           f'{HOVER_TIME:.0f} s ...')
     _pump_hover(cf, 0, 0, 0, HOVER_HEIGHT, HOVER_TIME)
+    print('  Touching down gently ...')
+    # Ramp the altitude setpoint down over 2 s, then keep feeding z=0
+    # while the drone physically settles.  Cutting the motors while the
+    # drone is still airborne latches the LOCKED state — see 04_flying.py.
+    steps = 40                        # 2.0 s descent at 20 Hz
+    for i in range(1, steps + 1):
+        cf.commander.send_hover_setpoint(
+            0, 0, 0, HOVER_HEIGHT * (1 - i / steps))
+        time.sleep(0.05)
+    _settle(cf)
     print()
     print('-' * 50)
     print('Tip: if the propellers are too fast to see, film them with')
@@ -185,39 +236,78 @@ if __name__ == '__main__':
     with SyncCrazyflie(URI, cf=Crazyflie(rw_cache='./cache')) as scf:
         time.sleep(2)
 
+        _start_state_log(scf.cf)
+        time.sleep(0.5)
+
         toc = scf.cf.param.toc.toc
         use_motor_power = ('motorPowerSet' in toc
                            and 'm1' in toc['motorPowerSet'])
 
+        # Arm via this firmware's arming switch — the system.arm
+        # PARAMETER.  The CRTP arming packet sent by
+        # platform.send_arming_request() is silently IGNORED by this
+        # firmware; without system.arm=1 the hover check below cannot
+        # spin the motors.  (The individual motorPowerSet spins work
+        # disarmed too — they bypass the flight controller.)
+        if _locked():
+            print('NOTE: the drone is in the LOCKED supervisor state —')
+            print('a previous flight ended with the motors cut while it')
+            print('was airborne.  The individual spins still work, but')
+            print('the hover is skipped.  Power-cycle the drone to clear.')
+            armed = False
+        else:
+            scf.cf.param.set_value('system.arm', 1)
+            time.sleep(0.3)
+            armed = str(scf.cf.param.get_value('system.arm')) == '1'
+            if not armed:
+                print('WARNING: the drone did not accept arming — the')
+                print('individual spins still work, but the hover will not.')
+
         if use_motor_power:
-            # Some firmware versions gate individual motor control
-            # behind the enable flag.  Harmless if absent.
+            # Individual motor control is gated behind the enable flag:
+            # enable=1 overrides the motors with motorPowerSet.m1..m4.
             try:
                 scf.cf.param.set_value('motorPowerSet.enable', 1)
             except Exception:
                 pass
 
-        scf.cf.platform.send_arming_request(True)
-        time.sleep(0.5)
-
-        if use_motor_power:
-            _spin_each_motor(scf.cf)
-            # Hand motor control back to the flight controller so the
-            # hover check can use the normal commander pipeline.
-            try:
+        try:
+            if use_motor_power:
+                _spin_each_motor(scf.cf)
+                # Hand the motors back to the flight controller so the
+                # hover setpoints below can drive them.
                 scf.cf.param.set_value('motorPowerSet.enable', 0)
+                time.sleep(0.2)
+            else:
+                print('NOTE: motorPowerSet params not found — all four')
+                print('motors will spin together during the hover check.')
+
+            if armed:
+                _hover_check(scf.cf)
+            else:
+                print('Skipping the hover check (drone not armed).')
+        except KeyboardInterrupt:
+            print('\n[Ctrl+C] — aborting the check.')
+        finally:
+            # Always hand motor control back to the flight controller,
+            # cut the motors and disarm, so leftover state (enable=1,
+            # armed) can never block a later flight.
+            if use_motor_power:
+                try:
+                    scf.cf.param.set_value('motorPowerSet.enable', 0)
+                except Exception:
+                    pass
+            scf.cf.commander.send_stop_setpoint()
+            scf.cf.commander.send_notify_setpoint_stop()
+            time.sleep(0.1)
+            try:
+                scf.cf.param.set_value('system.arm', 0)
             except Exception:
                 pass
-            time.sleep(0.2)
-        else:
-            print('NOTE: motorPowerSet params not found — all four')
-            print('motors will spin together during the hover check.')
-
-        _hover_check(scf.cf)
-
-        scf.cf.commander.send_stop_setpoint()
-        time.sleep(0.1)
-        scf.cf.platform.send_arming_request(False)
+            time.sleep(0.3)
+            if _locked():
+                print('NOTE: the drone latched into the LOCKED state.')
+                print('Power-cycle it before the next flight.')
 
     print('\nDone.')
     print('Remember: correct propeller TYPES (CW/CCW) are just as '

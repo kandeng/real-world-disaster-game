@@ -9,8 +9,8 @@ ready-made scripts, run in this order:
 
 1. `01_connect.py` — prove the radio link works
 2. `02_telemetry.py` — stream live sensor data from the drone
-3. `03_propellers.py` — verify each propeller's direction with the gyro
-4. `04_flying.py` — arm, take off, and hold position
+3. `03_propellers.py` — verify each propeller's direction
+4. `04_flying.py` — arm, take off, hover, and land
 
 Once all three behave as described below, graduate to the full website
 pipeline in [`../crazyflie_bridge`](../crazyflie_bridge).
@@ -107,15 +107,19 @@ Notes:
 **Do this before every first flight** — a wrong propeller or reversed
 motor direction makes the drone flip on takeoff.
 
-The script spins each motor individually at ~30% power and reads the
-on-board gyroscope's z-axis (yaw). A CW motor creates a CCW reaction
-torque on the body → the gyro registers a positive yaw-rate bias; a
-CCW motor gives a negative bias. The script reports PASS/FAIL for each
-motor — no guessing by eye.
+The script spins each motor individually for ~2.5 s via the
+`motorPowerSet` params while you watch each propeller against the
+diagram below — eye verification is the reliable method here, because
+the yaw reaction torque of one small propeller is far below the
+gyro's vibration-noise floor (automated gyro verdicts were tried and
+proved unreliable on this firmware).
 
-If the firmware does not expose the `motorPowerSet` params or the gyro
-log, the script falls back to the visual-only method (watch the
-propellers yourself).
+After the individual spins, the script performs a brief ~20 cm hover.
+This catches the one fault a spin check cannot: a propeller mounted
+upside-down (spins the right way but produces no lift).
+
+If the firmware does not expose the `motorPowerSet` params, the
+script skips the individual spins and goes straight to the hover.
 
 **Motor layout (X-configuration, top-down view):**
 
@@ -137,22 +141,15 @@ Also verify that M2 and M4 use clockwise (CW) propellers, and M1 and M3 use coun
 
 
 
-**Expect to see:**
+**Expect to see:** each motor spins one at a time (the console prints
+which motor is next and which direction to expect), followed by a
+brief low hover.
 
-```
-Gyro-based check  (threshold=0.3 rad/s)
---------------------------------------------------
-  ✅ M1 — front-left  (CW): PASS
-  ✅ M2 — front-right (CCW): PASS
-  ✅ M3 — rear-left  (CCW): PASS
-  ✅ M4 — rear-right  (CW): PASS
---------------------------------------------------
-All four motors spin in the correct direction.
-```
-
-If a motor shows ❌, power off the drone and swap that propeller (or
-check the propeller type — CW and CCW blades are different). Re-run
-until all four pass.
+If a motor spins the wrong way, power off the drone and swap that
+propeller (or check the propeller type — CW and CCW blades are
+different). If a motor does not spin at all, check its wiring — a
+kinked or pinched wire is a common cause. Re-run until all four are
+correct.
 
 ---
 
@@ -165,20 +162,25 @@ until all four pass.
 - Fly **on battery** — unplug any USB cable (a tether yanks the drone down)
 - Keep your fingers near `Ctrl+C` and know where the drone's power switch is
 
-**What the script does:** checks that a Flow positioning deck is attached,
-arms the drone, takes off to 0.5 m, then holds position inside a 0.5 m box —
-it reads the estimated x/y position 100 times per second and steers back
-towards the centre whenever it drifts past the box edge.
+**What the script does:** arms the drone, takes off to 0.3 m (a 3 s
+ramp), hovers for 5 s, then lands and disarms. It sends hover setpoints
+at 20 Hz through the full flight-controller pipeline — the same
+mechanism the propeller check's hover uses.
+
+> **Note:** this demo does not fly laterally. The hover setpoints command
+> zero lateral velocity but provide no position feedback, so the drone may
+> drift slowly sideways — keep the area clear. Altitude hold itself works
+> well: the flow deck's distance sensor (`range.zrange`) is healthy and
+> drives the height controller.
 
 **Expect to see:**
 
-- Console: `Deck is attached!`, then a continuous stream of position
-  readings (`{'stateEstimate.x': ..., 'stateEstimate.y': ...}`).
-- Drone: a smooth takeoff, then a steady hover that gently self-corrects
-  when nudged by air currents.
+- Console: `Arming ...`, `Taking off ...`, `Hovering ...`, `Landing ...`.
+- Drone: a smooth ramp up to ~30 cm, a steady 5-second hover, then a
+  gentle descent.
 
-**Stopping:** press `Ctrl+C` — the script's context manager lands the drone
-automatically before exiting.
+**Stopping:** press `Ctrl+C` at any time — the script cuts the motors
+immediately and disarms.
 
 **Emergency stop — motors off immediately, even mid-air:**
 
@@ -221,11 +223,15 @@ options first — unplugging the radio, `send_stop_setpoint()`, or
 `platform_power_down()` is the point of no return: only use it on a drone
 you can walk to.
 
-**If it prints `No flow deck detected!` and exits:** the drone has no Flow
-deck, so it cannot measure its own drift — this script *requires* one. That
-is a hardware limitation, not a bug. (The production bridge flies without
-the deck, but then position-hold is not possible either; relative moves will
-drift.)
+**If it says the drone is in the LOCKED supervisor state:** a previous
+flight ended badly — the motors were cut while the drone was still
+airborne, or it crashed or tumbled. The firmware then latches a safety
+lock (`supervisor.info` bit 6) that nothing over the radio can clear:
+power-cycle the drone, then run the script again. The flight scripts
+descend on a long ramp and keep feeding a z=0 altitude-hold setpoint
+before stopping precisely to avoid latching this lock. After any crash,
+inspect the propellers (seating, cracks, bent blades) before flying
+again — a damaged prop makes the drone flip on takeoff.
 
 ---
 
