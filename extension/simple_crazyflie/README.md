@@ -4,12 +4,13 @@ English | [中文](README-zh.md)
 
 The scripts in this folder are modified from the official Bitcraze tutorial
 [Step-by-Step: Connecting, logging and parameters](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/),
-using **cflib directly** — no server, no MediaMTX, no browser. Three
+using **cflib directly** — no server, no MediaMTX, no browser. Four
 ready-made scripts, run in this order:
 
 1. `01_connect.py` — prove the radio link works
 2. `02_telemetry.py` — stream live sensor data from the drone
-3. `03_flying.py` — arm, take off, and hold position
+3. `03_propellers.py` — verify each propeller's direction with the gyro
+4. `04_flying.py` — arm, take off, and hold position
 
 Once all three behave as described below, graduate to the full website
 pipeline in [`../crazyflie_bridge`](../crazyflie_bridge).
@@ -101,7 +102,61 @@ Notes:
 
 ---
 
-## 3. Fly — `python 03_flying.py`
+## 3. Check propellers — `python 03_propellers.py`
+
+**Do this before every first flight** — a wrong propeller or reversed
+motor direction makes the drone flip on takeoff.
+
+The script spins each motor individually at ~30% power and reads the
+on-board gyroscope's z-axis (yaw). A CW motor creates a CCW reaction
+torque on the body → the gyro registers a positive yaw-rate bias; a
+CCW motor gives a negative bias. The script reports PASS/FAIL for each
+motor — no guessing by eye.
+
+If the firmware does not expose the `motorPowerSet` params or the gyro
+log, the script falls back to the visual-only method (watch the
+propellers yourself).
+
+**Motor layout (X-configuration, top-down view):**
+
+```
+             Front
+        M4 (CW)    M1 (CCW)
+             \    /
+              \  /
+              /  \
+             /    \
+        M3 (CCW)   M2 (CW)
+             Back
+```
+
+Also verify that M2 and M4 use clockwise (CW) propellers, and M1 and M3 use counter-clockwise (CCW) propellers — see the reference image below:
+
+![Crazyflie propeller types](../assets/crazyflie_propellers.png)
+![Crazyflie structure diagram](../assets/crazyflie_diagram.png)
+
+
+
+**Expect to see:**
+
+```
+Gyro-based check  (threshold=0.3 rad/s)
+--------------------------------------------------
+  ✅ M1 — front-left  (CW): PASS
+  ✅ M2 — front-right (CCW): PASS
+  ✅ M3 — rear-left  (CCW): PASS
+  ✅ M4 — rear-right  (CW): PASS
+--------------------------------------------------
+All four motors spin in the correct direction.
+```
+
+If a motor shows ❌, power off the drone and swap that propeller (or
+check the propeller type — CW and CCW blades are different). Re-run
+until all four pass.
+
+---
+
+## 4. Fly — `python 04_flying.py`
 
 **Safety checklist first:**
 
@@ -152,7 +207,7 @@ requires physical access. For a
 *recoverable* kill, use `stm_power_down()` instead (flight MCU and decks
 off, radio MCU stays alive), then bring it back with `stm_power_up()` or
 `stm_power_cycle()` — no physical access needed. Note: the Crazyradio can
-only serve one program at a time, so **stop `03_flying.py` (or the bridge)
+only serve one program at a time, so **stop `04_flying.py` (or the bridge)
 first** — `Ctrl+C` releases the radio — and only then run the power-off
 command from a free terminal. 
 
@@ -174,7 +229,7 @@ drift.)
 
 ---
 
-## 4. Next steps
+## 5. Next steps
 
 - **Full website pipeline** — [`../crazyflie_bridge`](../crazyflie_bridge):
   `./start_bridge.sh` streams this same telemetry to the Livestream Host HUD,

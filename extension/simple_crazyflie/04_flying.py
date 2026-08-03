@@ -36,7 +36,7 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings(
     'ignore',
-    message=r'supervisor subsystem requires CRTP protocol version 12 or later',
+    message=r'The supervisor subsystem requires CRTP protocol version 12 or later',
     category=UserWarning,
 )
 
@@ -52,24 +52,42 @@ def move_box_limit(scf):
         # Exit if the radio link drops (e.g. the Crazyradio was unplugged as
         # an emergency stop) — cflib silently drops packets on a dead link,
         # so without this check the loop would spin forever doing nothing.
-        while scf.is_link_open():
-            #if position_estimate[0] > BOX_LIMIT:
-            #    mc.start_back()
-            #elif position_estimate[0] < -BOX_LIMIT:
-            #    mc.start_forward()
+        try:
+            while scf.is_link_open():
+                if position_estimate[0] > BOX_LIMIT:
+                    body_x_cmd = -max_vel
+                elif position_estimate[0] < -BOX_LIMIT:
+                    body_x_cmd = max_vel
+                if position_estimate[1] > BOX_LIMIT:
+                    body_y_cmd = -max_vel
+                elif position_estimate[1] < -BOX_LIMIT:
+                    body_y_cmd = max_vel
 
-            if position_estimate[0] > BOX_LIMIT:
-                body_x_cmd = -max_vel
-            elif position_estimate[0] < -BOX_LIMIT:
-                body_x_cmd = max_vel
-            if position_estimate[1] > BOX_LIMIT:
-                body_y_cmd = -max_vel
-            elif position_estimate[1] < -BOX_LIMIT:
-                body_y_cmd = max_vel
-
-            mc.start_linear_motion(body_x_cmd, body_y_cmd, 0)
-
+                mc.start_linear_motion(body_x_cmd, body_y_cmd, 0)
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            print('\n[Ctrl+C]   stopping motors ...')
+            # The _SetPointThread keeps pumping hover setpoints at ~10 Hz;
+            # if we send send_stop_setpoint() while it is still running the
+            # next hover frame re-enables the motors.  Kill the thread
+            # FIRST, then cut the motors — the two steps must be in this
+            # order.
+            if mc._thread is not None:
+                mc._thread.stop()
+                mc._thread = None
+            scf.cf.commander.send_stop_setpoint()
+            scf.cf.commander.send_notify_setpoint_stop()
             time.sleep(0.1)
+            # Disarm so an accidental re-arm cannot re-spin the propellers.
+            try:
+                scf.cf.platform.send_arming_request(False)
+            except Exception:
+                pass
+            # Prevent __exit__ from calling land() again (the motors are
+            # already off and the thread is dead — land() would error on
+            # get_height() with a None thread).
+            mc._is_flying = False
+            print('          motors off — drone disarmed.')
 
     print('Radio link lost — script exiting.')
 

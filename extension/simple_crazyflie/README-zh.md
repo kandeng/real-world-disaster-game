@@ -4,11 +4,12 @@
 
 本目录中的脚本修改自 Bitcraze 官方教程
 [《Step-by-Step: Connecting, logging and parameters》](https://www.bitcraze.io/documentation/repository/crazyflie-lib-python/master/user-guides/sbs_connect_log_param/)，
-**直接使用 cflib** —— 无需服务器、无需 MediaMTX、无需浏览器。三个现成脚本，按以下顺序运行：
+**直接使用 cflib** —— 无需服务器、无需 MediaMTX、无需浏览器。四个现成脚本，按以下顺序运行：
 
 1. `01_connect.py` —— 验证无线链路可用
 2. `02_telemetry.py` —— 实时读取无人机的传感器数据
-3. `03_flying.py` —— 解锁、起飞并保持位置
+3. `03_propellers.py` —— 用陀螺仪验证每个螺旋桨的方向
+4. `04_flying.py` —— 解锁、起飞并保持位置
 
 当三个脚本都按下文描述正常工作后，即可进阶到
 [`../crazyflie_bridge`](../crazyflie_bridge) 的完整网站流水线。
@@ -97,7 +98,55 @@ The crazyflie has parameter stabilizer.estimator set at number: 1
 
 ---
 
-## 3. 飞行 —— `python 03_flying.py`
+## 3. 检查螺旋桨 —— `python 03_propellers.py`
+
+**每次飞行前都要做** —— 螺旋桨装反或电机转向错误会导致无人机起飞即翻覆。
+
+脚本逐个以约 30% 功率驱动每个电机，同时读取机载陀螺仪的 z 轴（偏航）
+数据。CW 电机对机身产生 CCW 反作用力矩 → 陀螺仪检测到正的偏航速率
+偏置；CCW 电机则产生负偏置。脚本对每个电机报告 PASS/FAIL，无需肉眼
+判断。
+
+如果固件未暴露 `motorPowerSet` 参数或陀螺仪日志，脚本会回退到纯视觉
+检查模式（需自行观察螺旋桨）。
+
+**电机布局（X 型配置，俯视图）：**
+
+```
+             前
+        M4 (CW)    M1 (CCW)
+             \    /
+              \  /
+              /  \
+             /    \
+        M3 (CCW)   M2 (CW)
+             后
+```
+
+同时确认 M2 和 M4 使用的是顺时针（CW）桨叶，M1 和 M3 使用的是逆时针（CCW）桨叶，参考下图：
+
+![Crazyflie 螺旋桨类型](../assets/crazyflie_propellers.png)
+![Crazyflie 结构示意图](../assets/crazyflie_diagram.png)
+
+**预期输出：**
+
+```
+Gyro-based check  (threshold=0.3 rad/s)
+--------------------------------------------------
+  ✅ M1 — front-left  (CW): PASS
+  ✅ M2 — front-right (CCW): PASS
+  ✅ M3 — rear-left  (CCW): PASS
+  ✅ M4 — rear-right  (CW): PASS
+--------------------------------------------------
+All four motors spin in the correct direction.
+```
+
+若某电机显示 ❌，断开电源并更换该螺旋桨（或检查桨叶类型 —— CW 和
+CCW 桨叶形状不同）。反复运行直到全部通过。
+
+---
+
+## 4. 飞行 —— `python 04_flying.py`
 
 **先做安全检查：**
 
@@ -141,7 +190,7 @@ The crazyflie has parameter stabilizer.estimator set at number: 1
 （飞行 MCU 与甲板断电，无线电 MCU 保持在线），之后用 `stm_power_up()`
 或 `stm_power_cycle()` 远程唤醒 —— 无需物理接触。注意：一个
 Crazyradio 同一时间只能服务一个程序，所以要**先停掉
-`03_flying.py`（或 bridge）** —— `Ctrl+C` 会释放无线电 ——
+`04_flying.py`（或 bridge）** —— `Ctrl+C` 会释放无线电 ——
 然后在另一个空闲终端里执行关机命令。
 
 如果无人机在空中而来不及走完上述流程，**直接拔无线电**：
@@ -159,7 +208,7 @@ Flow 甲板，无法测量自身漂移 —— 本脚本*必须*要有这块甲�
 
 ---
 
-## 4. 下一步
+## 5. 下一步
 
 - **完整网站流水线** —— [`../crazyflie_bridge`](../crazyflie_bridge)：
   `./start_bridge.sh` 会把同样的遥测数据推送到 Livestream Host HUD，

@@ -69,7 +69,7 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings(
     'ignore',
-    message=r'supervisor subsystem requires CRTP protocol version 12 or later',
+    message=r'The supervisor subsystem requires CRTP protocol version 12 or later',
     category=UserWarning,
 )
 
