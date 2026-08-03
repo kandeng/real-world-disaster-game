@@ -218,12 +218,13 @@ python provision_drone.py --channel 14 --address E7E7E7E707
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP=192.168.0.110 \
-TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
-MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
+TELEMETRY_SERVER="ws://127.0.0.1:8000/api/drone/telemetry/publish" \
+MEDIAMTX_URL="http://127.0.0.1:8889" MEDIAMTX_API="http://127.0.0.1:9997" \
   ./start_bridge.sh
 #    = video_stream_proxy.py  （在 :8082 转发 http://$CRAZYFLIE_IP/stream）
-#    + motion_control_ws.py   （ws://:8765；默认 radio://0/80/2M/E7E7E7E7E7）
+#    + motion_control_ws.py   （ws://:8765；设置 RADIO_URL 环境变量，或直接传
+#      --cf-uri 参数，即可改变电台身份）
 #    + telemetry_relay.py     （遥测 + 飞行指令，无人机 <-> FastAPI）
 #    + crazyflie_mediamtx.py  （无人机摄像头 -> MediaMTX WHIP，id 为 'crazyflie-drone'）
 #    停止：Ctrl+C（按两次强制）—— 若在飞行会先降落。

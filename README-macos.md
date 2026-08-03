@@ -218,12 +218,13 @@ Start the whole bridge with one script (it self-activates the `drone-navigation`
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP=192.168.0.110 \
-TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
-MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
+TELEMETRY_SERVER="ws://127.0.0.1:8000/api/drone/telemetry/publish" \
+MEDIAMTX_URL="http://127.0.0.1:8889" MEDIAMTX_API="http://127.0.0.1:9997" \
   ./start_bridge.sh
 #    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
-#    + motion_control_ws.py   (ws://:8765; radio://0/80/2M/E7E7E7E7E7 by default)
+#    + motion_control_ws.py   (ws://:8765; set RADIO_URL env var, or pass
+#      --cf-uri to the script, to change the radio identity)
 #    + telemetry_relay.py     (telemetry + flight commands, drone <-> FastAPI)
 #    + crazyflie_mediamtx.py  (drone camera -> MediaMTX WHIP, id 'crazyflie-drone')
 #    Stop: Ctrl+C (press twice to force) — lands the drone first if flying.

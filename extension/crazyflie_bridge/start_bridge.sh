@@ -14,6 +14,9 @@
 #
 # Environment variables (all optional):
 #   CRAZYFLIE_IP         — drone IP (default: 192.168.0.106)
+#   RADIO_URL            — radio URI, e.g. radio://0/80/2M/E7E7E7E7E7
+#                          (equivalent to --cf-uri on the command line;
+#                           if both are given the CLI --cf-uri wins)
 #   CF_NO_FLY=1          — dry-run: refuse every takeoff (bench safety)
 #   TELEMETRY_SERVER     — e.g. ws://127.0.0.1:8000/api/drone/telemetry/publish
 #                          (default: PRODUCTION wss://drone-navigation.com/...)
@@ -24,14 +27,24 @@
 #   CRAZYFLIE_STREAM_URL — MJPEG source override (default: :8082/stream)
 #
 # Example (full local demo):
-#   CRAZYFLIE_IP=192.168.0.110 \
-#   TELEMETRY_SERVER=ws://127.0.0.1:8000/api/drone/telemetry/publish \
-#   MEDIAMTX_URL=http://127.0.0.1:8889 MEDIAMTX_API=http://127.0.0.1:9997 \
+#   CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
+#   TELEMETRY_SERVER="ws://127.0.0.1:8000/api/drone/telemetry/publish" \
+#   MEDIAMTX_URL="http://127.0.0.1:8889" MEDIAMTX_API="http://127.0.0.1:9997" \
+#     ./start_bridge.sh
+#
+# Production (telemetry + video default to drone-navigation.com):
+#   CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" \
 #     ./start_bridge.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export CRAZYFLIE_IP="${CRAZYFLIE_IP:-192.168.0.106}"
+
+# RADIO_URL env var is a convenience alias for --cf-uri (the CLI arg
+# still wins if both are provided — argparse keeps the last occurrence).
+if [ -n "${RADIO_URL:-}" ]; then
+    set -- --cf-uri "$RADIO_URL" "$@"
+fi
 
 # Activate the drone-navigation conda environment
 eval "$(conda shell.bash hook)"
@@ -42,6 +55,7 @@ echo "[Launcher] Drone IP:      $CRAZYFLIE_IP"
 echo "[Launcher] Video proxy:   http://localhost:8082/stream"
 echo "[Launcher] WebSocket:     ws://localhost:8765"
 echo "[Launcher] Telemetry ->   ${TELEMETRY_SERVER:-wss://drone-navigation.com/api/drone/telemetry/publish}"
+echo "[Launcher] Radio URI:    ${RADIO_URL:-radio://0/80/2M/E7E7E7E7E7 (default)}"
 echo "[Launcher] WHIP ingest -> ${MEDIAMTX_URL:-https://drone-navigation.com/live} (id ${LIVESTREAM_ID:-crazyflie-drone})"
 
 PIDS=()

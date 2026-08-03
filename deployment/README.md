@@ -1009,9 +1009,10 @@ Plug in the Crazyradio PA and power the drone, then launch all four processes wi
 
 ```bash
 cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP=192.168.0.110 ./start_bridge.sh
+CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" ./start_bridge.sh
 #    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
-#    + motion_control_ws.py   (ws://:8765; radio://0/80/2M/E7E7E7E7E7 by default)
+#    + motion_control_ws.py   (ws://:8765; set RADIO_URL env var, or pass
+#      --cf-uri to the script, to change the radio identity)
 #    + telemetry_relay.py     (telemetry + flight commands, drone <-> FastAPI)
 #    + crazyflie_mediamtx.py  (drone camera -> MediaMTX WHIP, id 'crazyflie-drone')
 #    Stop: Ctrl+C (press twice to force) — lands the drone first if flying.
@@ -1022,6 +1023,7 @@ Environment variables (defaults target production):
 | Variable | Default | Meaning |
 |---|---|---|
 | `CRAZYFLIE_IP` | `192.168.0.106` (script default) | drone AI-Deck IP — override as shown above |
+| `RADIO_URL` | — | convenience alias for `--cf-uri`; pass a different radio URI, e.g. `radio://0/14/2M/E7E7E7E707`, to connect to a specific drone (the CLI `--cf-uri` still wins if both are given) |
 | `TELEMETRY_SERVER` | `wss://drone-navigation.com/api/drone/telemetry/publish` | FastAPI ingest WebSocket; the command downlink derives from it (`.../command/downlink`) |
 | `TELEMETRY_TOKEN` | empty | must match `"drone": { "telemetry_token" }` in the deployed `server/config.json` if set there (empty = open) |
 | `MEDIAMTX_URL` / `MEDIAMTX_API` | production `/live` + `/control-api` | same meaning as in 5.2 |
@@ -1030,6 +1032,6 @@ Environment variables (defaults target production):
 
 Smoke test without flying: `python e2e_command_check.py` validates the full command chain. Then the website's `Livestream Host` HUD shows `Link live | ~20 Hz` with real position / attitude / battery, and the Takeoff/Stop/Landing button + Flight disk fly the drone. Safety rule that is always in effect: takeoff is **refused on a USB cable** (`usb://*`) — flight goes over the Crazyradio only.
 
-Multi-drone note: the default radio URI is for SOLO use — same channel + same address = cross-control. To fly several drones in one room, provision each drone's EEPROM identity once over its USB cable (`python provision_drone.py --channel 14 --address E7E7E7E707` writes the identity, then verifies it over the radio after a power-cycle) and connect with `./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707`. Give each drone a distinct channel, >=2 MHz apart at 2M datarate; `--read-only` prints the current identity without writing.
+Multi-drone note: the default radio URI is for SOLO use — same channel + same address = cross-control. To fly several drones in one room, provision each drone's EEPROM identity once over its USB cable (`python provision_drone.py --channel 14 --address E7E7E7E707` writes the identity, then verifies it over the radio after a power-cycle) and connect with `RADIO_URL="radio://0/14/2M/E7E7E7E707" ./start_bridge.sh` (or `./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707`). Give each drone a distinct channel, >=2 MHz apart at 2M datarate; `--read-only` prints the current identity without writing.
 
 
