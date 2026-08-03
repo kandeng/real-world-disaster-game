@@ -1,6 +1,7 @@
 import logging
 import sys
 import time
+import warnings
 from threading import Event
 
 import cflib.crtp
@@ -19,6 +20,25 @@ BOX_LIMIT = 0.5
 deck_attached_event = Event()
 
 logging.basicConfig(level=logging.ERROR)
+
+# This drone runs a custom firmware build (CRTP protocol v6). cflib emits three
+# harmless compatibility warnings — the legacy codepaths it falls back to are
+# exactly what this firmware needs. Suppress them all.
+warnings.filterwarnings(
+    'ignore',
+    message=r'Using legacy TYPE_.*_LEGACY',  # hover/zdistance packet types
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    'ignore',
+    message=r'platform\.send_arming_request is deprecated',
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    'ignore',
+    message=r'supervisor subsystem requires CRTP protocol version 12 or later',
+    category=UserWarning,
+)
 
 position_estimate = [0, 0]
 
@@ -55,7 +75,9 @@ def move_box_limit(scf):
 
 
 def log_pos_callback(timestamp, data, logconf):
-    print(data)
+    print(f'{{"x": {data["stateEstimate.x"]:.4e},'
+          f' "y": {data["stateEstimate.y"]:.4e},'
+          f' "z": {data["stateEstimate.z"]:.4e}}}')
     global position_estimate
     position_estimate[0] = data['stateEstimate.x']
     position_estimate[1] = data['stateEstimate.y']
@@ -83,6 +105,7 @@ if __name__ == '__main__':
         logconf = LogConfig(name='Position', period_in_ms=10)
         logconf.add_variable('stateEstimate.x', 'float')
         logconf.add_variable('stateEstimate.y', 'float')
+        logconf.add_variable('stateEstimate.z', 'float')
         scf.cf.log.add_config(logconf)
         logconf.data_received_cb.add_callback(log_pos_callback)
 

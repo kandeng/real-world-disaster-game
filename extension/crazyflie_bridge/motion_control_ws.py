@@ -52,6 +52,27 @@ from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from cflib.positioning.motion_commander import MotionCommander
 
+import warnings
+
+# The drone runs a custom firmware (CRTP protocol v6). cflib emits three
+# harmless compatibility warnings — the legacy paths it falls back to are
+# exactly what this firmware needs. Suppress them all.
+warnings.filterwarnings(
+    'ignore',
+    message=r'Using legacy TYPE_.*_LEGACY',  # hover/zdistance packet types
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    'ignore',
+    message=r'platform\.send_arming_request is deprecated',
+    category=DeprecationWarning,
+)
+warnings.filterwarnings(
+    'ignore',
+    message=r'supervisor subsystem requires CRTP protocol version 12 or later',
+    category=UserWarning,
+)
+
 try:
     import websockets
 except ImportError:
