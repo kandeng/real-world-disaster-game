@@ -22,6 +22,10 @@ const { settings, setFontFamily, setFontSize, setTakeoffAltitude, setSafetyBuffe
 const LEFT_MIN = 180;
 const LEFT_MAX = 400;
 const LEFT_DEFAULT = 220;
+// Dock strip from the screen edge: 24px _ViewComposer padding + 72px AppDock
+// = 96px. The page clears it via padding (see .settings-page), so divider
+// drags must subtract it from the pointer's page-relative x.
+const PAGE_PAD = 96;
 const leftWidth = ref(LEFT_DEFAULT);
 const isDragging = ref(false);
 
@@ -37,7 +41,7 @@ function onDividerPointerMove(e) {
   const panel = document.querySelector('.settings-page');
   if (!panel) return;
   const rect = panel.getBoundingClientRect();
-  const x = e.clientX - rect.left;
+  const x = e.clientX - rect.left - PAGE_PAD;
   leftWidth.value = Math.min(LEFT_MAX, Math.max(LEFT_MIN, x));
 }
 
@@ -440,6 +444,12 @@ onUnmounted(() => {
   background: #ffffff;
   user-select: none;
   z-index: 6;
+  /* Clear the dock strips on both sides: 24px _ViewComposer padding + 72px
+     AppDock = 96px. The docks (z-index 10, pointer-events auto) overlay the
+     page, so content in the outer 96px would be covered (and its clicks
+     eaten) by the dock container. */
+  padding: 0 96px;
+  box-sizing: border-box;
 }
 
 /* ─── Left sidebar ─── */

@@ -26,9 +26,10 @@ const {
 const LEFT_MIN = 280;
 const LEFT_MAX = 600;
 const LEFT_DEFAULT = 40; // percentage
-// The 72px AppDock strips overlay the page on both sides (see .community-page
-// padding) — the draggable area is the content box between them.
-const DOCK_W = 72;
+// The dock strips overlay the page on both sides (see .community-page
+// padding): 24px _ViewComposer padding + 72px AppDock = 96px from each
+// screen edge. The draggable area is the content box between them.
+const DOCK_STRIP = 96;
 const leftWidthPct = ref(LEFT_DEFAULT);
 const isDragging = ref(false);
 
@@ -44,8 +45,8 @@ function onDividerPointerMove(e) {
   const panel = document.querySelector('.community-page');
   if (!panel) return;
   const rect = panel.getBoundingClientRect();
-  const usable = rect.width - DOCK_W * 2;
-  const x = e.clientX - rect.left - DOCK_W;
+  const usable = rect.width - DOCK_STRIP * 2;
+  const x = e.clientX - rect.left - DOCK_STRIP;
   const pct = (x / usable) * 100;
   const minPct = (LEFT_MIN / usable) * 100;
   const maxPct = (LEFT_MAX / usable) * 100;
@@ -490,10 +491,11 @@ onUnmounted(() => {
   background: #ffffff;
   user-select: none;
   z-index: 6;
-  /* Clear the 72px AppDock strips on both sides: the docks (z-index 10,
-     pointer-events auto) overlay the page, so any interactive content in the
-     outer 72px would have its clicks eaten by the dock container. */
-  padding: 0 72px;
+  /* Clear the dock strips on both sides: 24px _ViewComposer padding + 72px
+     AppDock = 96px. The docks (z-index 10, pointer-events auto) overlay the
+     page, so any interactive content in the outer 96px would have its clicks
+     eaten by the dock container. */
+  padding: 0 96px;
   box-sizing: border-box;
 }
 
