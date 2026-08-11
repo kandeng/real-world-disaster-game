@@ -1,4 +1,5 @@
 import { reactive, readonly } from 'vue';
+import { sameOriginWsUrl } from './wsUrl.js';
 
 /**
  * Real-drone flight commands — the separated module for the frequently used
@@ -25,9 +26,12 @@ import { reactive, readonly } from 'vue';
  * refuse it, e.g. the USB interlock — its refusal appears in the bridge log).
  */
 
+// Prod URL goes through sameOriginWsUrl(): the Alibaba CDN edge domains
+// (www./cdn.) cannot proxy WebSocket upgrades, so the socket is pinned to
+// the apex origin (see wsUrl.js).
 const WS_URL = import.meta.env.DEV
   ? 'ws://localhost:8000/api/drone/command'
-  : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/drone/command`;
+  : sameOriginWsUrl('/api/drone/command');
 
 const RECONNECT_MS = 2000;
 const CONNECT_TIMEOUT_MS = 10000; // initial page load can starve the handshake

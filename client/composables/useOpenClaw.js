@@ -1,5 +1,6 @@
 import { ref, computed, onUnmounted } from 'vue';
 import config from '../config.json';
+import { sameOriginWsUrl } from './wsUrl.js';
 
 const DEFAULT_URL = 'ws://127.0.0.1:18789';
 const DEFAULT_SESSION_KEY = 'agent:main:main';
@@ -11,14 +12,16 @@ const MAX_RECONNECT_DELAY_MS = 30000;
 //   1. An explicitly configured non-loopback URL always wins (custom gateway).
 //   2. Pages served over HTTPS must use wss:// (browsers block ws:// as mixed
 //      content), and 127.0.0.1 in a visitor's browser means THEIR machine —
-//      so go through Caddy's /ws reverse proxy on the same origin instead.
+//      so go through Caddy's /ws reverse proxy instead. sameOriginWsUrl()
+//      additionally pins CDN edge domains (www./cdn.) to the apex, because
+//      Alibaba's base CDN cannot proxy WebSocket upgrades.
 //   3. Otherwise (local dev) keep the loopback gateway on this machine.
 function resolveGatewayUrl() {
   const configured = config.openclaw?.url || '';
   const isLoopback = /^wss?:\/\/(127\.0\.0\.1|localhost)([:/]|$)/.test(configured);
   if (configured && !isLoopback) return configured;
   if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
-    return `wss://${window.location.host}/ws`;
+    return sameOriginWsUrl('/ws');
   }
   return configured || DEFAULT_URL;
 }

@@ -8,10 +8,14 @@
 // Singleton, module-level state (like useStreamConfig): the link stays up
 // across subpage switches and view re-mounts. Reconnects every 2 s.
 import { reactive, readonly } from 'vue';
+import { sameOriginWsUrl } from './wsUrl.js';
 
+// Prod URL goes through sameOriginWsUrl(): the Alibaba CDN edge domains
+// (www./cdn.) cannot proxy WebSocket upgrades, so the socket is pinned to
+// the apex origin (see wsUrl.js).
 const WS_URL = import.meta.env.DEV
   ? 'ws://localhost:8000/api/drone/telemetry'
-  : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/drone/telemetry`;
+  : sameOriginWsUrl('/api/drone/telemetry');
 
 const RECONNECT_MS = 2000;
 // A socket stuck in CONNECTING longer than this is force-closed and
