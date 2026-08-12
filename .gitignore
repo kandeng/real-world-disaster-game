@@ -8,6 +8,7 @@ deployment/tls/
 
 # Runtime/generated files
 deployment/acert
+server/local_dev.db
 
 # Temporary bug-reproduction screen recordings (kept locally, not source)
 /*.webm
