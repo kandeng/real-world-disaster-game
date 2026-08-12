@@ -33,6 +33,10 @@ export function createWhepPlayer({
   logTag = 'whep',
   retryMs = 5000,
   onProgress = null,
+  // Fired whenever an attempt fails (WHEP handshake error or ICE failure).
+  // The player still schedules its automatic retry — the callback is purely
+  // informational, e.g. to show a deployment hint in the UI.
+  onError = null,
   // No STUN by default: MediaMTX is an ICE-lite server, so host candidates
   // suffice (the client initiates the connectivity checks) — exactly like
   // MediaMTX's own web player. An unreachable STUN server otherwise stalls
@@ -65,6 +69,16 @@ export function createWhepPlayer({
         onProgress(phase);
       } catch {
         /* progress callbacks must never break playback */
+      }
+    }
+  }
+
+  function reportError(message) {
+    if (onError) {
+      try {
+        onError(message);
+      } catch {
+        /* error callbacks must never break playback */
       }
     }
   }
@@ -175,7 +189,10 @@ export function createWhepPlayer({
     };
     conn.oniceconnectionstatechange = () => {
       log(`${since()} ICE connection state -> ${conn.iceConnectionState}`);
-      if (conn.iceConnectionState === 'failed' && pc === conn) scheduleRetry();
+      if (conn.iceConnectionState === 'failed' && pc === conn) {
+        reportError('ICE connection failed');
+        scheduleRetry();
+      }
     };
     conn.onconnectionstatechange = () => {
       log(`${since()} connection state -> ${conn.connectionState}`);
@@ -214,6 +231,7 @@ export function createWhepPlayer({
       report('handshake');
     } catch (err) {
       warn(`${since()} WHEP handshake FAILED:`, err.message);
+      reportError(err.message || 'WHEP handshake failed');
       if (pc === conn) scheduleRetry(); // no retry if stop() was called meanwhile
     }
   }

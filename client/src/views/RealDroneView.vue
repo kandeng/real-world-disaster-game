@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import VolumeDockButton from '@shared/VolumeDockButton.vue';
+import FpvSplash from '@shared/FpvSplash.vue';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
@@ -171,7 +172,7 @@ function guardedToggleRecorder() {
   flashCaptureAuth('recording');
 }
 
-// Real Drone (真机接入) page — UI shell only.
+// Real Drone (无人机本体) page — UI shell only.
 //
 // Single subpage: 'host' (Livestream Host / 机主直播) — mirrors the 3D Aerial
 // outlook: HUD dashboard (REAL drone telemetry, relayed drone -> server ->
@@ -238,6 +239,10 @@ const hostVideoEl = ref(null);
 // (same look as the 3D Aerial/Mesh asset-loading bar).
 const liveLoading = ref(false);
 const liveProgress = ref(0); // 0..1
+// Set when a connection attempt fails; shows a second line in the pill
+// pointing at the Crazyflie Bridge deployment guide. The player keeps
+// retrying, so the hint stays until playback succeeds.
+const liveConnectFailed = ref(false);
 
 function onLiveProgress(phase) {
   if (phase === 'start') {
@@ -256,10 +261,14 @@ const livePlayer = createWhepPlayer({
   url: () => targetUrl.value,
   logTag: 'live',
   onProgress: onLiveProgress,
+  onError: () => {
+    liveConnectFailed.value = true;
+  },
 });
 
 // The video element actually rendered a frame — finish the progress bar.
 function onLivePlaying() {
+  liveConnectFailed.value = false;
   liveProgress.value = 1;
   setTimeout(() => {
     liveLoading.value = false;
@@ -288,6 +297,7 @@ function attachLiveStream(el) {
 function syncLiveStream() {
   if (!targetUrl.value || targetUrl.value === playingUrl) return;
   playingUrl = targetUrl.value;
+  liveConnectFailed.value = false; // fresh stream = fresh attempt
   livePlayer.stop();
   attachLiveStream(activeVideoEl());
   livePlayer.start();
@@ -518,6 +528,9 @@ onUnmounted(() => {
     </template>
 
     <template #top-overlay>
+      <!-- FPV clip splash while the bridge connection is failing (mirrors
+           the initial 3D-tiles splash); fades out once the stream plays -->
+      <FpvSplash :visible="liveConnectFailed" />
       <!-- Login reminder for Screenshot / Recorder (same gate as the 3D pages) -->
       <div
         v-if="captureAuthNotice"
@@ -527,7 +540,15 @@ onUnmounted(() => {
       </div>
       <!-- Green progress pill while the livestream connection is set up -->
       <div v-if="liveLoading" class="top-center-message asset-loading">
-        <span>{{ t('aerialview.loading_livestream') }}</span>
+        <span>{{ t('aerialview.loading_realdrone') }}</span>
+        <router-link
+          v-if="liveConnectFailed"
+          class="asset-loading__fail"
+          :to="{ path: '/extensions', query: { cat: 'real_drone', ext: 'crazyflie-bridge' } }"
+        >
+          <span>{{ t('aerialview.livestream_connect_failed') }}</span>
+          <span>{{ t('aerialview.livestream_connect_failed_path') }}</span>
+        </router-link>
         <div class="asset-loading__track">
           <div class="asset-loading__fill" :style="{ width: (liveProgress * 100).toFixed(1) + '%' }" />
         </div>
@@ -598,6 +619,25 @@ onUnmounted(() => {
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.3);
   overflow: hidden;
+}
+
+/* Second line shown when the livestream connection fails: a clickable hint
+   pointing at the Crazyflie Bridge deployment guide. Overrides the pill's
+   pointer-events:none so the link works. Two lines: message + menu path. */
+.asset-loading__fail {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  white-space: normal;
+  max-width: 440px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #ffffff;
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .asset-loading__fill {
