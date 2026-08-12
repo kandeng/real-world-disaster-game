@@ -1,15 +1,14 @@
-// Runtime MediaMTX stream catalog, fetched ONCE from the backend
+// Runtime MediaMTX stream catalog, fetched from the backend
 // (server/config.json "mediamtx" section -> GET /api/stream/config).
 //
 // This lets the SAME frontend build play the desktop MediaMTX in local dev
 // and the ECS MediaMTX in production — the deployed server config decides,
 // no hardcoded environment URLs in views and no rebuild.
 //
-// Catalog entry shape: { id, hostname, description, whep_url, live }.
-// `live` marks a stream with an active publisher on MediaMTX (set by the
-// backend merge of active paths, and for the browser's own broadcast).
-// The FIRST entry is the PRIMARY stream — the one the Livestream Host
-// subpage monitors (our own broadcast, 'crazyflie-drone').
+// The catalog is LIVE-ONLY: the backend lists exactly the streams with an
+// active publisher on MediaMTX (drone bridges, browser 发起直播, ...).
+// No static fallback entries — with nobody broadcasting the panel is
+// empty. Entry shape: { id, hostname, description, whep_url, live }.
 //
 // registerLocalStream()/unregisterLocalStream() let the in-browser
 // broadcaster inject its own entry at the top of the catalog; local
@@ -24,22 +23,9 @@ const WHEP_BASE = import.meta.env.DEV
   ? 'http://127.0.0.1:8889'
   : 'https://drone-navigation.com/live';
 
-const FALLBACK_STREAMS = [
-  {
-    id: 'crazyflie-drone',
-    hostname: 'crazyflie-drone',
-    description: 'Live video from the Crazyflie drone (ESP32 AI-Deck)',
-    whep_url: `${WHEP_BASE}/crazyflie-drone/whep`,
-  },
-  {
-    id: 'ubuntu-webcam',
-    hostname: 'ubuntu-webcam',
-    description: "A webcam stream from Kan's Ubuntu desktop",
-    whep_url: `${WHEP_BASE}/ubuntu-webcam/whep`,
-  },
-];
-
-const streams = ref(FALLBACK_STREAMS);
+// Live-only catalog: nobody broadcasting = empty panel. The broadcaster's
+// own entry is injected via registerLocalStream() once WHIP goes live.
+const streams = ref([]);
 // Primary stream's WHEP URL (first catalog entry), kept for backward
 // compatibility with single-stream consumers.
 const whepUrl = computed(() => streams.value[0]?.whep_url || '');
@@ -105,9 +91,10 @@ export function refreshStreams() {
     .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
       if (!data) return;
-      if (Array.isArray(data.streams) && data.streams.length) {
-        const list = normalize(data.streams);
-        if (list.length) streams.value = mergeWithLocal(list);
+      if (Array.isArray(data.streams)) {
+        // An empty server list is meaningful (nobody is live) — clear
+        // everything except locally registered broadcasts.
+        streams.value = mergeWithLocal(normalize(data.streams));
       } else if (data.whep_url) {
         streams.value = mergeWithLocal(legacyStream(data.whep_url));
       }

@@ -29,19 +29,6 @@
   "mediamtx": {
     "whep_url": "http://127.0.0.1:8889/crazyflie-drone/whep",
     "control_api_url": "http://127.0.0.1:9997",
-    "streams": [
-      {
-        "id": "crazyflie-drone",
-        "hostname": "crazyflie-drone",
-        "description": "Live video from the Crazyflie drone (ESP32 AI-Deck)",
-        "whep_url": "http://127.0.0.1:8889/crazyflie-drone/whep"
-      },
-      {
-        "id": "ubuntu-webcam",
-        "hostname": "ubuntu-webcam",
-        "description": "A webcam stream from Kan's Ubuntu desktop",
-        "whep_url": "http://127.0.0.1:8889/ubuntu-webcam/whep"
-      }
-    ]
+    "streams": []
   }
 }

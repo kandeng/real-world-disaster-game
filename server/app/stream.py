@@ -1,28 +1,24 @@
 """Livestream runtime configuration for the SPA.
 
-The playable stream catalog lives in ``server/config.json`` (``mediamtx``
-section) so the SAME frontend build plays the desktop MediaMTX in local
-dev and the ECS MediaMTX in production — only the deployed config differs:
+The catalog is LIVE-ONLY: the left panel lists exactly the streams that
+have an active publisher on MediaMTX (drone bridges, browser 发起直播,
+...) — nothing static. The backend asks the MediaMTX Control API for its
+READY paths on every request and serves them as catalog entries; static
+``mediamtx.streams`` entries (usually none) are merged in first and get
+``live: true`` while their path is ready.
 
-    local:       "streams": [ { ..., "whep_url": "http://127.0.0.1:8889/<id>/whep" }, ... ]
-    production:  "streams": [ { ..., "whep_url": "https://drone-navigation.com/live/<id>/whep" }, ... ]
+The WHEP base URL every entry is built from comes from the top-level
+``mediamtx.whep_url`` (legacy single-stream pointer, kept precisely as
+the base source) or any static entry:
 
-Each ``streams`` entry: ``{id, hostname, description, whep_url, live}`` —
-the first entry is the PRIMARY stream (the one the Livestream Host subpage
-monitors; default: ``crazyflie-drone``, the real drone's broadcast
-published by ``extension/crazyflie_bridge/crazyflie_mediamtx.py``).
-``whep_url`` (singular) is the legacy single-stream form — still returned
-for backward compatibility.
+    local:       "whep_url": "http://127.0.0.1:8889/<id>/whep"
+    production:  "whep_url": "https://drone-navigation.com/live/<id>/whep"
 
-Dynamic merge: on every request we also ask the MediaMTX Control API for
-its list of READY paths and merge any path that is not already in the
-static catalog (e.g. ``web-<user>`` browser broadcasts started from the
-Community page). Static entries get ``live: true`` while their path is
-ready. The Control API base is taken from ``mediamtx.control_api_url``
-when set, otherwise derived from the production Caddy layout
-(``https://<host>/live/...`` -> ``https://<host>/control-api``), falling
-back to a local MediaMTX (``http://127.0.0.1:9997``). Any failure degrades
-to the static catalog — this endpoint must never break the Livestream page.
+The Control API base is taken from ``mediamtx.control_api_url`` when set,
+otherwise derived from the production Caddy layout (``.../live/...`` ->
+``.../control-api``), falling back to a local MediaMTX
+(``http://127.0.0.1:9997``). Any failure degrades to the static catalog —
+this endpoint must never break the Livestream page.
 
 The endpoint is public: the URLs are not secrets (they are reachable from
 the browser anyway) and the Livestream page must work for logged-out
@@ -41,6 +37,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["stream"])
 
 
+def _candidate_urls(mt: dict, streams_cfg: list) -> list:
+    """Every configured WHEP URL (top-level legacy pointer first)."""
+    urls = [mt.get("whep_url") or ""]
+    urls += [s.get("whep_url") or "" for s in streams_cfg]
+    return [u for u in urls if u]
+
+
 def _control_api_url(mt: dict, streams_cfg: list) -> str:
     """MediaMTX Control API base URL (no trailing slash)."""
     configured = (mt.get("control_api_url") or "").strip()
@@ -48,18 +51,17 @@ def _control_api_url(mt: dict, streams_cfg: list) -> str:
         return configured.rstrip("/")
     # Production Caddy layout: https://<host>/live/<id>/whep proxies to
     # MediaMTX :8889, and /control-api/* proxies to :9997.
-    for s in streams_cfg:
-        url = s.get("whep_url") or ""
+    for url in _candidate_urls(mt, streams_cfg):
         if "/live/" in url:
             return url.split("/live/", 1)[0] + "/control-api"
     # Local dev default: MediaMTX next to the backend.
     return "http://127.0.0.1:9997"
 
 
-def _whep_base(streams_cfg: list) -> str:
+def _whep_base(mt: dict, streams_cfg: list) -> str:
     """WHEP base shared by all catalog entries (empty when unconfigured)."""
-    for s in streams_cfg:
-        url = (s.get("whep_url") or "").rstrip("/")
+    for url in _candidate_urls(mt, streams_cfg):
+        url = url.rstrip("/")
         if url.endswith("/whep"):
             return url[: -len("/whep")].rsplit("/", 1)[0]
     return ""
@@ -88,7 +90,7 @@ async def stream_config() -> dict:
         # MediaMTX unreachable — serve the static catalog unchanged.
         streams_out = static
     else:
-        base = _whep_base(static)
+        base = _whep_base(mt, static)
         known = set()
         streams_out = []
         for s in static:

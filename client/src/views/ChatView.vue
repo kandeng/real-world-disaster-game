@@ -523,6 +523,20 @@ onMounted(() => {
     }),
   });
   registerLeft({
+    id: 'livestream_viewer',
+    icon: 'MENU_LIVESTREAM_VIEWER',
+    titleKey: 'chatview.nav_livestream',
+    active: computed(() => selectedNav.value === 'livestream'),
+    onClick: () => { selectedNav.value = 'livestream'; },
+  });
+  registerLeft({
+    id: 'gallery',
+    icon: 'MENU_GALLARY',
+    titleKey: 'chatview.nav_gallery',
+    active: computed(() => selectedNav.value === 'gallery'),
+    onClick: () => { selectedNav.value = 'gallery'; },
+  });
+  registerLeft({
     id: 'chat',
     icon: 'MENU_CHAT',
     titleKey: 'chatview.nav_chat',
@@ -535,20 +549,6 @@ onMounted(() => {
     titleKey: 'chatview.nav_contacts',
     active: computed(() => selectedNav.value === 'contacts'),
     onClick: () => { selectedNav.value = 'contacts'; },
-  });
-  registerLeft({
-    id: 'gallery',
-    icon: 'MENU_GALLARY',
-    titleKey: 'chatview.nav_gallery',
-    active: computed(() => selectedNav.value === 'gallery'),
-    onClick: () => { selectedNav.value = 'gallery'; },
-  });
-  registerLeft({
-    id: 'livestream_viewer',
-    icon: 'MENU_LIVESTREAM_VIEWER',
-    titleKey: 'aerialview.subpage_livestream_viewer',
-    active: computed(() => selectedNav.value === 'livestream'),
-    onClick: () => { selectedNav.value = 'livestream'; },
   });
   registerLeft({
     id: 'customer_service',
