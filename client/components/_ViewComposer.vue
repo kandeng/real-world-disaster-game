@@ -39,6 +39,7 @@ defineEmits([
     <slot name="top-overlay" />
 
     <AppDock
+      v-if="leftItems.length"
       position="left"
       :items="leftItems"
       @itemClick="$emit('dockItemClick', $event)"
@@ -80,7 +81,11 @@ defineEmits([
       </div>
     </main>
 
+    <!-- An empty dock must not reserve/overlay its 72px strip: pages with
+         no right buttons (Extensions, Settings, ...) extend their content
+         to the right screen edge. -->
     <AppDock
+      v-if="rightItems.length"
       position="right"
       :items="rightItems"
       @itemClick="$emit('dockItemClick', $event)"

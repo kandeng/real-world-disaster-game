@@ -107,8 +107,8 @@
   "extensions_scenic": "Scenic Tour",
   "extensions_swarm": "Swarm Coordination",
   "extensions_real_drone": "Real Drone",
-  "extensions_hardware": "Hardware",
-  "extensions_software": "Software",
+  "extensions_hardware": "Hardware Plugin",
+  "extensions_software": "Software Tool",
   "extensions_search_placeholder": "Search extensions...",
   "extensions_sub_network": "Network",
   "extensions_simple_squid_proxy": "Simple Squid Proxy"

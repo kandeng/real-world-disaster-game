@@ -48,7 +48,7 @@ function onDividerPointerUp() {
 }
 
 /* ─── Selected category ─── */
-const selectedId = ref('scenic');
+const selectedId = ref('real_drone');
 const searchQuery = ref('');
 
 /* ─── Extension registry ─── */
@@ -202,8 +202,6 @@ function selectCategory(id) {
 
 /* ─── Breadcrumb ─── */
 const EXTENSIONS_LIST = [
-  { id: 'scenic', labelKey: 'aerialview.extensions_scenic' },
-  { id: 'swarm', labelKey: 'aerialview.extensions_swarm' },
   { id: 'real_drone', labelKey: 'aerialview.extensions_real_drone' },
   { id: 'hardware', labelKey: 'aerialview.extensions_hardware' },
   { id: 'software', labelKey: 'aerialview.extensions_software' },
@@ -418,11 +416,11 @@ onUnmounted(() => {
   background: #ffffff;
   user-select: none;
   z-index: 6;
-  /* Clear the dock strips on both sides: 24px _ViewComposer padding + 72px
-     AppDock = 96px. The docks (z-index 10, pointer-events auto) overlay the
-     page, so content in the outer 96px would be covered (and its clicks
-     eaten) by the dock container. */
-  padding: 0 96px;
+  /* Clear the LEFT dock strip only: 24px _ViewComposer padding + 72px
+     AppDock = 96px. The page registers no right dock buttons, and the
+     ViewComposer skips rendering an empty right dock, so the content
+     (and its scrollbar) runs to the right screen edge. */
+  padding: 0 0 0 96px;
   box-sizing: border-box;
 }
 
