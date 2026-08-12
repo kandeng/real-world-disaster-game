@@ -275,6 +275,23 @@ function onLivePlaying() {
   }, 400);
 }
 
+// ── Flight disk visibility during the FPV splash ──
+// While the bridge connection is failing, the Flight disk MUST be visible
+// but locked (the composer's `disabled` prop greys it out and ignores all
+// pointer input — same locked look as the right sidebar buttons). Force it
+// visible for the whole splash, then restore whatever state the user had
+// before (they may have hidden it via the steer toggle / Pages menu).
+let showFlightBeforeSplash = null;
+watch(liveConnectFailed, (failed) => {
+  if (failed) {
+    showFlightBeforeSplash = showFlight.value;
+    showFlight.value = true;
+  } else if (showFlightBeforeSplash !== null) {
+    showFlight.value = showFlightBeforeSplash;
+    showFlightBeforeSplash = null;
+  }
+});
+
 // Point the shared connection at a freshly mounted <video> element.
 // Diagnostic: log how long the first frame takes to appear after attach,
 // so view-side delay is separable from connection-side delay.
@@ -502,7 +519,7 @@ onUnmounted(() => {
 
 <template>
   <ViewComposer
-    :class="{ 'live-fullscreen-active': liveFullscreen }"
+    :class="{ 'live-fullscreen-active': liveFullscreen, 'fpv-locked': liveConnectFailed }"
     :left-items="leftItems"
     :right-items="rightItems"
     :show-flight="showFlight"
@@ -510,6 +527,7 @@ onUnmounted(() => {
     :show-hud="true"
     :flight="flight"
     :real-telemetry="droneTelemetry"
+    :disabled="liveConnectFailed"
     @flightMove="onRealFlightMove"
     @flightStop="onRealFlightStop"
     @flightModeChange="onFlightModeChange"
@@ -579,6 +597,19 @@ onUnmounted(() => {
    is 100; the docks are normally 10) so the toggle can switch back. */
 .live-fullscreen-active :deep(.app-dock) {
   z-index: 101;
+}
+
+/* ─── FPV splash control lock ───
+   While the bridge connection is failing (FPV splash playing), lock the
+   ENTIRE right sidebar — every button, including estop and the volume
+   pill — and the Flight disk (via the composer's `disabled` prop, which
+   greys out the disk and ignores all pointer input). With no reachable
+   drone these controls are meaningless and must not invite interaction.
+   The lock lifts automatically once the stream plays. */
+.fpv-locked :deep(.app-dock--right) {
+  pointer-events: none;
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* ─── Livestream connection progress pill (mirrors AerialView asset-loading) ─── */
