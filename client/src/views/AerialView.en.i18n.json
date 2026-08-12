@@ -111,5 +111,10 @@
   "extensions_software": "Software Tool",
   "extensions_search_placeholder": "Search extensions...",
   "extensions_sub_network": "Network",
-  "extensions_simple_squid_proxy": "Simple Squid Proxy"
+  "extensions_squid_proxy": "Squid Proxy",
+  "extensions_sub_single_drone": "Single Drone",
+  "extensions_sub_drone_swarm": "Drone Swarm",
+  "extensions_simple_crazyflie": "Simple Crazyflie",
+  "extensions_crazyflie_bridge": "Crazyflie Bridge",
+  "extensions_crazyswarm": "Crazyswarm"
 }

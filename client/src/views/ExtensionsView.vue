@@ -8,7 +8,7 @@ import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useProxyConfig } from '@shared-composables/useProxyConfig.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const { leftItems, registerLeft, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 const { proxyConfig, OS_OPTIONS } = useProxyConfig();
@@ -52,9 +52,52 @@ const selectedId = ref('real_drone');
 const searchQuery = ref('');
 
 /* ─── Extension registry ─── */
-const manifestModules = import.meta.glob('/extensions/**/manifest.md', { eager: true, query: '?raw', import: 'default' });
+// Picks up both `manifest.md` (English) and `manifest.zh.md` (Chinese).
+const manifestModules = import.meta.glob('/extensions/**/manifest*.md', { eager: true, query: '?raw', import: 'default' });
+
+// Locale-aware manifest selection: when the app language (My Space → Settings
+// → Language) is Chinese, prefer `manifest.zh.md`; otherwise fall back to
+// the English `manifest.md`. Documents are never mixed.
+function resolveManifestPath(ext) {
+  if (locale.value === 'zh') {
+    const zhPath = ext.manifestPath.replace(/\.md$/, '.zh.md');
+    if (manifestModules[zhPath]) return zhPath;
+  }
+  return ext.manifestPath;
+}
 
 const EXTENSIONS_DATA = {
+  real_drone: {
+subcategories: [
+      {
+        id: 'single_drone',
+        labelKey: 'aerialview.extensions_sub_single_drone',
+        items: [
+          {
+            id: 'simple-crazyflie',
+            labelKey: 'aerialview.extensions_simple_crazyflie',
+manifestPath: '/extensions/real_drone/single_drone/simple-crazyflie/manifest.md',
+          },
+          {
+            id: 'crazyflie-bridge',
+            labelKey: 'aerialview.extensions_crazyflie_bridge',
+manifestPath: '/extensions/real_drone/single_drone/crazyflie-bridge/manifest.md',
+          },
+        ],
+      },
+      {
+        id: 'drone_swarm',
+        labelKey: 'aerialview.extensions_sub_drone_swarm',
+        items: [
+          {
+            id: 'crazyswarm',
+            labelKey: 'aerialview.extensions_crazyswarm',
+manifestPath: '/extensions/real_drone/drone_swarm/crazyswarm/manifest.md',
+          },
+        ],
+      },
+    ],
+  },
   software: {
     subcategories: [
       {
@@ -63,7 +106,7 @@ const EXTENSIONS_DATA = {
         items: [
           {
             id: 'simple-squid-proxy',
-            labelKey: 'aerialview.extensions_simple_squid_proxy',
+            labelKey: 'aerialview.extensions_squid_proxy',
             manifestPath: '/extensions/software/network/simple-squid-proxy/manifest.md',
           },
         ],
@@ -74,7 +117,7 @@ const EXTENSIONS_DATA = {
 
 /* ─── Parse manifest markdown ─── */
 function parseManifest(ext) {
-  const raw = manifestModules[ext.manifestPath] || '';
+  const raw = manifestModules[resolveManifestPath(ext)] || '';
   const lines = raw.split('\n');
   let title = '';
   let content = '';
@@ -89,7 +132,7 @@ function parseManifest(ext) {
 
 /* ─── Render full manifest as HTML ─── */
 function renderManifestHtml(ext) {
-  const raw = manifestModules[ext.manifestPath] || '';
+  const raw = manifestModules[resolveManifestPath(ext)] || '';
   // Skip the first H1 title line
   const lines = raw.split('\n');
   const body = lines[0]?.startsWith('# ') ? lines.slice(1).join('\n') : raw;

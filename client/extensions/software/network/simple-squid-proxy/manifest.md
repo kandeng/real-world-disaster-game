@@ -1,31 +1,31 @@
-# A Simple Squid Proxy
+# Squid Proxy
 
-跨平台配置 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 环境变量操作指南
+A cross-platform guide to configuring the HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables
 
-## 文档说明
-- 适配系统：Windows 10/11、macOS Ventura及以上、Ubuntu 22.04/24.04、iOS 16+、Android 13+
-- 示例代理网关地址：`http://10.0.0.5:3128`
-- 示例免代理白名单：`localhost,127.0.0.1,10.*,192.168.*,*.local`
-- 重要概念区分：
-  1. **操作系统环境变量**：仅命令行工具生效（curl、npm、git、Python、Docker等），和系统图形界面代理相互独立。
-  2. **系统图形界面网络代理**：仅浏览器、桌面软件走代理，终端程序不会读取该配置。
-- 业务提示：全局持久化代理环境变量会劫持整机所有软件网络流量，企业终端用户场景应尽量避免。
+## About this document
+- Supported systems: Windows 10/11, macOS Ventura and later, Ubuntu 22.04/24.04, iOS 16+, Android 13+
+- Example proxy gateway address: `http://10.0.0.5:3128`
+- Example proxy-bypass whitelist: `localhost,127.0.0.1,10.*,192.168.*,*.local`
+- Important concept distinction:
+  1. **OS environment variables**: only command-line tools honor them (curl, npm, git, Python, Docker, etc.); they are independent of the system GUI proxy.
+  2. **System GUI network proxy**: only browsers and desktop apps use it; terminal programs never read this setting.
+- Business note: globally persisting proxy environment variables hijacks all network traffic on the machine — enterprise endpoint users should generally avoid this.
 
 ---
 
-## 一、Windows 10 / Windows 11
-### 1.1 临时会话变量（关闭终端自动失效）
-#### CMD 命令行
+## 1. Windows 10 / Windows 11
+### 1.1 Temporary session variables (expire when the terminal closes)
+#### CMD
 ```cmd
 set HTTP_PROXY=http://10.0.0.5:3128
 set HTTPS_PROXY=http://10.0.0.5:3128
 set NO_PROXY=localhost,127.0.0.1,10.*,192.168.*,*.local
 
-# 校验变量是否生效
+# Verify the variables are in effect
 echo %HTTP_PROXY%
 echo %NO_PROXY%
 
-# 清空临时代理配置
+# Clear the temporary proxy configuration
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=
@@ -33,105 +33,105 @@ set NO_PROXY=
 
 #### PowerShell
 ```powershell
-# 设置代理
+# Set the proxy
 $env:HTTP_PROXY="http://10.0.0.5:3128"
 $env:HTTPS_PROXY="http://10.0.0.5:3128"
 $env:NO_PROXY="localhost,127.0.0.1,10.*,192.168.*,*.local"
 
-# 校验
+# Verify
 $env:HTTP_PROXY
 
-# 清空代理
+# Clear the proxy
 Remove-Item Env:HTTP_PROXY
 Remove-Item Env:HTTPS_PROXY
 Remove-Item Env:NO_PROXY
 ```
 
-### 1.2 永久环境变量配置
-#### 图形界面操作步骤
-1. 快捷键 `Win + R`，输入 `sysdm.cpl` 回车
-2. 切换到「高级」选项卡 → 点击底部「环境变量」
-3. 分为两个配置区域：
-   - 用户变量：仅当前登录用户生效（推荐，无需管理员权限）
-   - 系统变量：整机所有用户、后台服务全部生效（会污染整机网络，企业用户不推荐）
-4. 点击「新建」，依次添加以下3个变量：
+### 1.2 Permanent environment variables
+#### GUI steps
+1. Press `Win + R`, type `sysdm.cpl` and hit Enter
+2. Switch to the "Advanced" tab → click "Environment Variables" at the bottom
+3. There are two configuration areas:
+   - User variables: apply only to the currently logged-in user (recommended, no admin rights needed)
+   - System variables: apply to all users and background services on the machine (pollutes all network traffic, not recommended for enterprise users)
+4. Click "New" and add the following 3 variables one by one:
 
-| 变量名 | 变量值 |
+| Variable name | Variable value |
 | ---- | ---- |
 | `HTTP_PROXY` | `http://10.0.0.5:3128` |
 | `HTTPS_PROXY` | `http://10.0.0.5:3128` |
 | `NO_PROXY` | `localhost,127.0.0.1,10.*,192.168.*,*.local` |
 
-5. 全部弹窗保存，重启所有终端窗口配置才能生效。
+5. Save all dialogs, then restart every terminal window for the configuration to take effect.
 
-#### PowerShell 脚本（仅当前用户永久生效）
+#### PowerShell script (permanent, current user only)
 ```powershell
 [Environment]::SetEnvironmentVariable("HTTP_PROXY", "http://10.0.0.5:3128", "User")
 [Environment]::SetEnvironmentVariable("HTTPS_PROXY", "http://10.0.0.5:3128", "User")
 [Environment]::SetEnvironmentVariable("NO_PROXY", "localhost,127.0.0.1,10.*,192.168.*,*.local", "User")
 ```
 
-### 1.3 Windows 系统图形代理（仅浏览器生效）
-1. `Win + I` 打开设置 → 网络和 Internet → 代理
-2. 关闭「自动检测设置」
-3. 在手动设置代理区域，点击「设置」
-4. 开启「使用代理服务器」，填写代理地址和端口
-5. 将免代理域名填入「对于以下地址不使用代理」输入框
-6. 保存配置
+### 1.3 Windows system GUI proxy (browsers only)
+1. `Win + I` to open Settings → Network & Internet → Proxy
+2. Turn off "Automatically detect settings"
+3. In the manual proxy setup area, click "Set up"
+4. Enable "Use a proxy server" and fill in the proxy address and port
+5. Enter the bypass domains in the "Don't use the proxy server for" field
+6. Save the configuration
 
 ---
 
-## 二、macOS（Ventura 13 / Sonoma 14 / Sequoia 15）
-新版macOS默认Shell为Zsh，旧系统使用Bash。
+## 2. macOS (Ventura 13 / Sonoma 14 / Sequoia 15)
+Recent macOS uses Zsh as the default shell; older systems use Bash.
 
-### 2.1 终端临时会话变量
+### 2.1 Temporary terminal session variables
 ```bash
 export HTTP_PROXY=http://10.0.0.5:3128
 export HTTPS_PROXY=http://10.0.0.5:3128
 export NO_PROXY=localhost,127.0.0.1,10.*,192.168.*,*.local
 
-# 校验
+# Verify
 echo $HTTP_PROXY
 
-# 清空代理
+# Clear the proxy
 unset HTTP_PROXY HTTPS_PROXY NO_PROXY
 ```
 
-### 2.2 永久Shell环境变量
-#### Zsh（新款macOS默认）
-1. 打开终端，编辑配置文件
+### 2.2 Permanent shell environment variables
+#### Zsh (default on recent macOS)
+1. Open Terminal and edit the configuration file
 ```bash
 nano ~/.zshrc
 ```
-2. 在文件末尾追加以下内容
+2. Append the following content at the end of the file
 ```bash
-# 标准大写代理变量
+# Standard uppercase proxy variables
 export HTTP_PROXY=http://10.0.0.5:3128
 export HTTPS_PROXY=http://10.0.0.5:3128
 export NO_PROXY=localhost,127.0.0.1,10.*,192.168.*,*.local
-# 小写兼容变量，适配curl/wget工具
+# Lowercase compatibility variables for curl/wget
 export http_proxy=http://10.0.0.5:3128
 export https_proxy=http://10.0.0.5:3128
 export no_proxy=localhost,127.0.0.1,10.*,192.168.*,*.local
 ```
-3. 保存退出：`Ctrl+O` → 回车 → `Ctrl+X`
-4. 立即重载配置
+3. Save and exit: `Ctrl+O` → Enter → `Ctrl+X`
+4. Reload the configuration immediately
 ```bash
 source ~/.zshrc
 ```
 
-#### Bash（老旧macOS系统）
-编辑 `~/.bash_profile`，粘贴上述相同代理配置内容即可。
+#### Bash (older macOS systems)
+Edit `~/.bash_profile` and paste the same proxy configuration content shown above.
 
-### 2.3 macOS 图形界面网络代理（仅浏览器生效）
-1. 点击左上角苹果图标 → 系统设置 → 网络
-2. 选中当前Wi-Fi/以太网 → 点击「详细信息」
-3. 左侧栏选择「代理」
-4. 勾选「网页代理(HTTP)」、「安全网页代理(HTTPS)」
-5. 填写代理IP与端口，免代理域名填入「对这些主机忽略代理设置」
-6. 点击好 → 应用保存
+### 2.3 macOS GUI network proxy (browsers only)
+1. Click the Apple icon at the top-left → System Settings → Network
+2. Select the current Wi-Fi/Ethernet → click "Details"
+3. Choose "Proxies" in the left sidebar
+4. Check "Web Proxy (HTTP)" and "Secure Web Proxy (HTTPS)"
+5. Fill in the proxy IP and port; enter bypass domains in "Bypass proxy settings for these hosts"
+6. Click OK → Apply to save
 
-### 2.4 一键开关代理别名（添加至 ~/.zshrc）
+### 2.4 One-command proxy toggle aliases (add to ~/.zshrc)
 ```bash
 proxy_on() {
   export HTTP_PROXY=http://10.0.0.5:3128
@@ -140,48 +140,48 @@ proxy_on() {
   export http_proxy=$HTTP_PROXY
   export https_proxy=$HTTPS_PROXY
   export no_proxy=$NO_PROXY
-  echo "代理已开启"
+  echo "Proxy enabled"
 }
 proxy_off() {
   unset HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
-  echo "代理已关闭"
+  echo "Proxy disabled"
 }
 ```
-使用方式：输入 `proxy_on` 开启代理，`proxy_off` 关闭代理。
+Usage: type `proxy_on` to enable the proxy, `proxy_off` to disable it.
 
 ---
 
-## 三、Ubuntu 22.04 / 24.04 Linux 系统
-### 3.1 临时会话变量
+## 3. Ubuntu 22.04 / 24.04 Linux
+### 3.1 Temporary session variables
 ```bash
-# 大写标准变量
+# Standard uppercase variables
 export HTTP_PROXY=http://10.0.0.5:3128
 export HTTPS_PROXY=http://10.0.0.5:3128
 export NO_PROXY=localhost,127.0.0.1,10.*,192.168.*,*.local
-# 小写兼容变量
+# Lowercase compatibility variables
 export http_proxy=http://10.0.0.5:3128
 export https_proxy=http://10.0.0.5:3128
 export no_proxy=localhost,127.0.0.1,10.*,192.168.*,*.local
 ```
 
-### 3.2 当前用户永久变量（仅登录用户生效）
-Ubuntu默认Shell为Bash
-1. 编辑用户Shell配置
+### 3.2 Permanent variables for the current user (logged-in user only)
+The default shell on Ubuntu is Bash
+1. Edit the user shell configuration
 ```bash
 nano ~/.bashrc
 ```
-2. 在文件末尾追加全部代理export语句
-3. 重载配置立即生效
+2. Append all proxy export statements at the end of the file
+3. Reload the configuration to apply immediately
 ```bash
 source ~/.bashrc
 ```
 
-### 3.3 整机全局变量（所有用户/后台服务，高风险，不推荐）
-会影响系统更新、Docker、全部后台程序，企业业务场景禁止使用。
+### 3.3 Machine-wide global variables (all users/background services, high risk, not recommended)
+Affects system updates, Docker and all background programs — prohibited in enterprise scenarios.
 ```bash
 sudo nano /etc/environment
 ```
-文件内添加以下内容：
+Add the following content to the file:
 ```ini
 HTTP_PROXY="http://10.0.0.5:3128"
 HTTPS_PROXY="http://10.0.0.5:3128"
@@ -190,78 +190,78 @@ http_proxy="http://10.0.0.5:3128"
 https_proxy="http://10.0.0.5:3128"
 no_proxy="localhost,127.0.0.1,10.*,192.168.*,*.local"
 ```
-需要重启服务器全局配置才会完全生效。
+A server reboot is required for the global configuration to take full effect.
 
-### 3.4 GNOME桌面图形代理（仅浏览器生效）
-1. 打开设置 → 网络 → 网络代理
-2. 模式切换为「手动」
-3. 填写HTTP/HTTPS代理地址和端口
-4. 免代理域名填入「忽略主机」输入框
-5. 点击应用到整机
+### 3.4 GNOME desktop GUI proxy (browsers only)
+1. Open Settings → Network → Network Proxy
+2. Switch the mode to "Manual"
+3. Fill in the HTTP/HTTPS proxy addresses and ports
+4. Enter bypass domains in the "Ignored Hosts" field
+5. Click Apply to the whole machine
 
-### 3.5 校验代理状态
+### 3.5 Verifying proxy status
 ```bash
-# 打印所有代理环境变量
+# Print all proxy environment variables
 env | grep -i proxy
-# 测试外网连通性
+# Test external connectivity
 curl -I https://github.com
 ```
 
 ---
 
-## 四、iOS（iPhone / iPad iOS 16及以上）
-### 核心限制
-iOS**不支持系统全局环境变量 `HTTP_PROXY` / `HTTPS_PROXY`**，仅能给单条Wi-Fi配置手动代理；蜂窝网络无原生代理，企业设备需MDM管理才能开启。
+## 4. iOS (iPhone / iPad iOS 16 and later)
+### Core limitations
+iOS **does not support system-wide `HTTP_PROXY` / `HTTPS_PROXY` environment variables**; you can only configure a manual proxy per Wi-Fi network. Cellular networks have no native proxy; enterprise devices require MDM management to enable it.
 
-### Wi-Fi代理分步配置
-1. 打开设置 → Wi-Fi
-2. 点击已连接Wi-Fi右侧蓝色 ⓘ 图标
-3. 滑到页面底部「HTTP代理」→ 点击「配置代理」
-4. 选择「手动」
-5. 服务器：`10.0.0.5`，端口：`3128`
-6. 代理需要账号密码时，开启鉴定并填写用户名、密码
-7. 点击存储
+### Wi-Fi proxy step-by-step
+1. Open Settings → Wi-Fi
+2. Tap the blue ⓘ icon to the right of the connected Wi-Fi
+3. Scroll to the bottom of the page to "HTTP PROXY" → tap "Configure Proxy"
+4. Choose "Manual"
+5. Server: `10.0.0.5`, Port: `3128`
+6. If the proxy requires credentials, enable Authentication and fill in the username and password
+7. Tap Save
 
-### 使用限制
-- 仅当前Wi-Fi下的Safari、Chrome等网页App生效
-- 终端、开发类软件无法读取代理环境变量
-- 手机蜂窝流量完全绕过代理规则
+### Usage limitations
+- Only web apps under the current Wi-Fi (Safari, Chrome, etc.) are affected
+- Terminal and developer tools cannot read proxy environment variables
+- Cellular traffic completely bypasses the proxy rules
 
 ---
 
-## 五、Android 13 / 14 安卓系统
-### 核心限制
-安卓无整机全局代理环境变量，代理绑定单独Wi-Fi网络；蜂窝流量原生不支持代理，需Root或第三方工具。
+## 5. Android 13 / 14
+### Core limitations
+Android has no machine-wide global proxy environment variables; the proxy is bound to a single Wi-Fi network. Cellular traffic natively does not support proxies — rooting or third-party tools are required.
 
-### 原生Pixel手机操作步骤
-1. 设置 → 网络和互联网 → 互联网（Wi-Fi列表）
-2. 点击已连接Wi-Fi右侧齿轮图标 → 修改网络
-3. 展开高级选项
-4. 代理下拉框选择「手动」
-5. 代理主机名：`10.0.0.5`，代理端口：`3128`
-6. 保存网络配置
+### Steps on stock Pixel phones
+1. Settings → Network & internet → Internet (Wi-Fi list)
+2. Tap the gear icon to the right of the connected Wi-Fi → Modify network
+3. Expand Advanced options
+4. Set the Proxy dropdown to "Manual"
+5. Proxy hostname: `10.0.0.5`, Proxy port: `3128`
+6. Save the network configuration
 
-### 国产手机通用路径（小米/三星/一加等）
-设置 → WLAN → 长按已连接Wi-Fi → 修改网络 → 显示高级选项 → 代理
+### Common path on domestic phones (Xiaomi/Samsung/OnePlus, etc.)
+Settings → WLAN → long-press the connected Wi-Fi → Modify network → Show advanced options → Proxy
 
-### 使用限制
-- 仅当前Wi-Fi下浏览器生效
-- Termux终端无法继承系统Wi-Fi代理，需单独配置Shell变量
-- 蜂窝流量完全不使用代理
+### Usage limitations
+- Only browsers under the current Wi-Fi are affected
+- The Termux terminal does not inherit the system Wi-Fi proxy; shell variables must be configured separately
+- Cellular traffic never uses the proxy
 
-### Termux终端单独配置代理
-Termux内临时会话代理：
+### Configuring the proxy separately in the Termux terminal
+Temporary session proxy inside Termux:
 ```bash
 export HTTP_PROXY=http://10.0.0.5:3128
 export HTTPS_PROXY=http://10.0.0.5:3128
 export NO_PROXY=localhost,127.0.0.1
 ```
-将上述代码写入 `~/.bashrc` 可实现Termux永久代理。
+Writing the code above into `~/.bashrc` makes the Termux proxy permanent.
 
 ---
 
-## 六、全平台代理校验命令
-### Linux / macOS 终端
+## 6. Proxy verification commands for all platforms
+### Linux / macOS terminal
 ```bash
 env | grep -E "(HTTP_PROXY|HTTPS_PROXY|NO_PROXY)"
 curl -v https://github.com

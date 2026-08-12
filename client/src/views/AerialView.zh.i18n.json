@@ -111,5 +111,10 @@
   "extensions_software": "软件工具",
   "extensions_search_placeholder": "搜索扩展...",
   "extensions_sub_network": "网络",
-  "extensions_simple_squid_proxy": "Simple Squid Proxy"
+  "extensions_squid_proxy": "Squid 代理",
+  "extensions_sub_single_drone": "单无人机",
+  "extensions_sub_drone_swarm": "无人机群",
+  "extensions_simple_crazyflie": "Simple Crazyflie",
+  "extensions_crazyflie_bridge": "Crazyflie Bridge",
+  "extensions_crazyswarm": "Crazyswarm"
 }
