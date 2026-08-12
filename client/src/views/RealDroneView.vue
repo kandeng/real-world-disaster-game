@@ -173,26 +173,20 @@ function guardedToggleRecorder() {
 
 // Real Drone (真机接入) page — UI shell only.
 //
-// Two subpages, switched via the left sidebar:
-// - 'viewer' (Livestream Viewer / 直播观看): Customer Service outlook —
-//   left panel lists the available livestreams, right panel plays the
-//   MediaMTX broadcast. Only the draggable divider is implemented for now.
-// - 'host' (Livestream Host / 机主直播): mirrors the 3D Aerial outlook —
-//   HUD dashboard (REAL drone telemetry, relayed drone -> server -> browser
-//   via extension/crazyflie_bridge/telemetry_relay.py) and the Flight disk.
-//   The Takeoff/Stop/Landing switcher AND the Flight disk are wired to the
-//   REAL drone via the separated flight-functions module
-//   @shared-composables/useDroneCommands.js (browser -> server
-//   /api/drone/command -> telemetry_relay.py -> motion_control_ws.py).
-//   Safety: the bridge REFUSES takeoff while the drone is tethered via USB,
-//   and a 0.5 s dead-man switch hovers the drone if velocity commands stop
-//   arriving (closed tab, dead relay/server).
-//   There is NO Camera/Gimbal UI: the Crazyflie has no gimbal.
+// Single subpage: 'host' (Livestream Host / 机主直播) — mirrors the 3D Aerial
+// outlook: HUD dashboard (REAL drone telemetry, relayed drone -> server ->
+// browser via extension/crazyflie_bridge/telemetry_relay.py) and the Flight
+// disk, wired to the REAL drone via the separated flight-functions module
+// @shared-composables/useDroneCommands.js (browser -> server
+// /api/drone/command -> telemetry_relay.py -> motion_control_ws.py).
+// Safety: the bridge REFUSES takeoff while the drone is tethered via USB,
+// and a 0.5 s dead-man switch hovers the drone if velocity commands stop
+// arriving (closed tab, dead relay/server).
+// There is NO Camera/Gimbal UI: the Crazyflie has no gimbal.
 //
-// Button locking: Steer (right #1) and Takeoff/Landing
-// (right #2) are only clickable while the 'host' subpage is active.
-// Switching to 'viewer' or opening the Pages menu locks them;
-// clicking 'Livestream Host' re-enables them.
+// The former 'viewer' subpage (stream catalog + player) moved to
+// Community -> Livestream Viewer (ChatView); this page always plays the
+// PRIMARY stream as the host monitor.
 
 const {
   flight,
@@ -206,72 +200,16 @@ const {
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 
-// Active subpage of the Real Drone page: 'viewer' | 'host' (default).
-const activeSubpage = ref('host');
-// 'host' uses the 3D Aerial outlook (HUD + disks);
-// 'viewer' uses the Customer Service split-panel outlook.
-const isAerialStyle = computed(() => activeSubpage.value === 'host');
-const isSplitStyle = computed(() => activeSubpage.value === 'viewer');
-
-/* ─── Split-layout subpages: left-column width drag (Customer Service pattern) ─── */
-const LEFT_MIN = 280;
-const LEFT_MAX = 600;
-const LEFT_DEFAULT = 40; // percentage
-const leftWidthPct = ref(LEFT_DEFAULT);
-const isDragging = ref(false);
-
-function onDividerPointerDown(e) {
-  e.preventDefault();
-  isDragging.value = true;
-  document.addEventListener('pointermove', onDividerPointerMove);
-  document.addEventListener('pointerup', onDividerPointerUp);
-}
-
-function onDividerPointerMove(e) {
-  if (!isDragging.value) return;
-  const panel = document.querySelector('.split-page');
-  if (!panel) return;
-  const rect = panel.getBoundingClientRect();
-  // The page keeps horizontal padding to clear the floating docks — the
-  // percentage math must use the CONTENT box, not the padding box.
-  const cs = getComputedStyle(panel);
-  const padL = parseFloat(cs.paddingLeft) || 0;
-  const padR = parseFloat(cs.paddingRight) || 0;
-  const contentW = rect.width - padL - padR;
-  const x = e.clientX - rect.left - padL;
-  const pct = (x / contentW) * 100;
-  const minPct = (LEFT_MIN / contentW) * 100;
-  const maxPct = (LEFT_MAX / contentW) * 100;
-  leftWidthPct.value = Math.min(maxPct, Math.max(minPct, pct));
-}
-
-function onDividerPointerUp() {
-  isDragging.value = false;
-  document.removeEventListener('pointermove', onDividerPointerMove);
-  document.removeEventListener('pointerup', onDividerPointerUp);
-}
-
 function hideAllDisks() {
   stopRealFlight(); // never leave a stale velocity running on the real drone
   showFlight.value = false;
 }
 
-// Lock/unlock the flight-control buttons (Steer, Takeoff/Landing).
-// Locked buttons ignore clicks and render dimmed with a not-allowed cursor.
-const LOCKABLE_BUTTON_IDS = ['steer', 'takeoff'];
-
-function setControlsLocked(locked) {
-  for (const list of [leftItems, rightItems]) {
-    for (const item of list) {
-      if (LOCKABLE_BUTTON_IDS.includes(item.id)) item.disabled = locked;
-    }
-  }
-}
-
-// Opening the Pages menu also hides the disks and locks the controls.
+// Opening the Pages menu hides the disks (safety while navigating away).
+// The Viewer subpage moved to Community, so this page IS the Host context
+// and the flight-control buttons are always unlocked.
 function onPagesBeforeOpen() {
   hideAllDisks();
-  setControlsLocked(true);
 }
 
 /* ─── Livestream: WHEP playback of the MediaMTX stream catalog ─── */
@@ -287,22 +225,14 @@ function onPagesBeforeOpen() {
 // every start()/retry — the async config fetch needs no await here.
 const { streams } = useStreamConfig();
 
-// Viewer card selection. null = follow the primary stream until the user
-// picks a card. (Static catalog for the TESTING phase; once the
-// FastAPI-users backend lands, identities come from the user database.)
-const selectedStreamId = ref(null);
-const primaryStream = computed(() => streams.value[0] || null);
-const selectedStream = computed(
-  () => streams.value.find((s) => s.id === selectedStreamId.value) || primaryStream.value,
-);
-// The stream the shared connection plays — the selected card, on BOTH
-// subpages (subpage switches must not change it).
-const targetUrl = computed(() => selectedStream.value?.whep_url || '');
+// The Viewer subpage (stream catalog + card selection) now lives in
+// Community -> Livestream Viewer; this page always plays the PRIMARY
+// stream (first catalog entry = our own broadcast).
+const targetUrl = computed(() => streams.value[0]?.whep_url || '');
 // What the player was last started with — restart only on a real change.
 let playingUrl = '';
 
 const hostVideoEl = ref(null);
-const viewerVideoEl = ref(null);
 
 // Top-center green progress pill while the connection is being set up
 // (same look as the 3D Aerial/Mesh asset-loading bar).
@@ -341,11 +271,10 @@ function onLivePlaying() {
 // so view-side delay is separable from connection-side delay.
 function attachLiveStream(el) {
   if (!el) return;
-  const which = el === hostVideoEl.value ? 'host' : 'viewer';
   const tAttach = performance.now();
-  console.log(`[live] attach -> '${which}' <video> (tracks already live: ${livePlayer.hasTracks()})`);
+  console.log(`[live] attach -> host <video> (tracks already live: ${livePlayer.hasTracks()})`);
   el.addEventListener('playing', () => {
-    console.log(`[live] first frame rendered on '${which}' <video> (${el.videoWidth}x${el.videoHeight}) — t+${((performance.now() - tAttach) / 1000).toFixed(2)}s after attach`);
+    console.log(`[live] first frame rendered on host <video> (${el.videoWidth}x${el.videoHeight}) — t+${((performance.now() - tAttach) / 1000).toFixed(2)}s after attach`);
     onLivePlaying();
   }, { once: true });
   livePlayer.attach(el);
@@ -368,64 +297,16 @@ function syncLiveStream() {
 // targetUrl — a single watcher restarts the connection on any change.
 watch(targetUrl, syncLiveStream);
 
-/* ─── Livestream Viewer: fit the video into the adjustable right panel ─── */
-// Policy: NEVER upscale past the stream's natural resolution; downscale to
-// fit when the panel is smaller; always centered (flex stage). Panel size
-// changes (divider drag / window resize) are tracked via ResizeObserver,
-// stream size changes via the video element's own events. The fullscreen
-// toggle (right sidebar) is the deliberate override: fill the whole page
-// proportionally. It works on the Host subpage too (covers the HUD).
-// Sound state is shared by the Host monitor and the Viewer (both play the
-// same stream). Default muted: autoplay-friendly, and on the Host's own
-// machine it avoids a mic -> stream -> speaker feedback loop. Resets to
-// muted on every subpage switch (see teardownViewerStage).
+/* ─── Livestream sound / fullscreen state (Host monitor) ─── */
+// Default muted: autoplay-friendly, and on the Host's own machine it avoids
+// a mic -> stream -> speaker feedback loop.
 const liveMuted = ref(true);
 const liveFullscreen = ref(false);
-let stageObserver = null;
-
-function fitViewerVideo() {
-  if (liveFullscreen.value) return; // CSS owns the size in fullscreen
-  const el = viewerVideoEl.value;
-  if (!el || !el.parentElement) return;
-  const vw = el.videoWidth;
-  const vh = el.videoHeight;
-  if (!vw || !vh) return; // stream metadata not available yet
-  const rect = el.parentElement.getBoundingClientRect();
-  const scale = Math.min(rect.width / vw, rect.height / vh, 1); // cap at 1 = never upscale
-  el.style.width = `${Math.floor(vw * scale)}px`;
-  el.style.height = `${Math.floor(vh * scale)}px`;
-}
-
-function setupViewerStage() {
-  teardownViewerStage();
-  const el = viewerVideoEl.value;
-  if (!el) return;
-  el.addEventListener('loadedmetadata', fitViewerVideo);
-  el.addEventListener('resize', fitViewerVideo); // intrinsic size changes
-  stageObserver = new ResizeObserver(fitViewerVideo);
-  stageObserver.observe(el.parentElement);
-}
-
-function teardownViewerStage() {
-  if (stageObserver) {
-    stageObserver.disconnect();
-    stageObserver = null;
-  }
-  const el = viewerVideoEl.value;
-  if (el) {
-    el.removeEventListener('loadedmetadata', fitViewerVideo);
-    el.removeEventListener('resize', fitViewerVideo);
-  }
-  document.removeEventListener('keydown', onLiveEsc);
-  liveFullscreen.value = false; // switching subpages exits fullscreen
-  liveMuted.value = true; // sound resets when the subpage is reopened
-}
 
 /* ─── Livestream sound: splash-style volume pill driving the app-wide setting ─── */
-// The pill sits at the same bottom-right spot on BOTH subpages and always
-// drives whichever <video> is currently on screen.
+// The volume pill always drives the Host monitor <video>.
 function activeVideoEl() {
-  return activeSubpage.value === 'host' ? hostVideoEl.value : viewerVideoEl.value;
+  return hostVideoEl.value;
 }
 
 function applyLiveVolume() {
@@ -451,10 +332,10 @@ function toggleLiveMute() {
   liveMuted.value = el.muted;
 }
 
-/* ─── Fullscreen toggle (right sidebar, both subpages) ─── */
-// Viewer: page-fill <-> raw size. Host: covers the HUD for a clean monitor.
-// The docks stay clickable above the fullscreen video (z-index bump), and
-// Esc exits as well.
+/* ─── Fullscreen toggle (right sidebar) ─── */
+// Page-fill <-> raw size; covers the HUD for a clean monitoring view. The
+// docks stay clickable above the fullscreen video (z-index bump), and Esc
+// exits as well.
 function toggleLiveFullscreen() {
   liveFullscreen.value = !liveFullscreen.value;
 }
@@ -466,7 +347,7 @@ function onLiveEsc(e) {
 // Entering fullscreen lets CSS (object-fit: contain) size the video;
 // leaving it restores the Viewer's raw-size fit.
 watch(liveFullscreen, (fs) => {
-  const el = viewerVideoEl.value;
+  const el = hostVideoEl.value;
   if (fs) {
     if (el) {
       el.style.width = '';
@@ -475,7 +356,6 @@ watch(liveFullscreen, (fs) => {
     document.addEventListener('keydown', onLiveEsc);
   } else {
     document.removeEventListener('keydown', onLiveEsc);
-    fitViewerVideo();
   }
   // Reflect the state on the dock button (highlight + tooltip swap).
   const item = rightItems.find((i) => i.id === 'fullscreen');
@@ -487,21 +367,6 @@ watch(liveFullscreen, (fs) => {
 
 // Keep the video volume in sync with the app-wide Media setting.
 watch(() => settings.audioVolume, applyLiveVolume);
-
-// Render the shared stream on whichever subpage is on screen. The
-// connection itself is NOT restarted — attach() is instant once live.
-watch(activeSubpage, async (val) => {
-  teardownViewerStage();
-  await nextTick(); // wait for the target subpage's <video> to mount
-  if (val === 'host') {
-    attachLiveStream(hostVideoEl.value);
-  } else if (val === 'viewer') {
-    setupViewerStage();
-    attachLiveStream(viewerVideoEl.value);
-  }
-  // NOTE: the stream itself is intentionally NOT re-synced here —
-  // subpage switches never change the selection, only the render target.
-});
 
 onMounted(() => {
   // Register pages for the router menu
@@ -522,22 +387,11 @@ onMounted(() => {
     }),
   });
   registerLeft({
-    id: 'subpage_viewer',
-    icon: 'MENU_LIVESTREAM_VIEWER',
-    titleKey: 'aerialview.subpage_livestream_viewer',
-    active: activeSubpage.value === 'viewer',
-    onClick: () => {
-      activeSubpage.value = 'viewer';
-    },
-  });
-  registerLeft({
     id: 'subpage_host',
     icon: 'MENU_REMOTE_CONTROLLER',
     titleKey: 'aerialview.subpage_livestream_host',
-    active: activeSubpage.value === 'host',
-    onClick: () => {
-      activeSubpage.value = 'host';
-    },
+    active: true,
+    onClick: () => {},
   });
   // NOTE: no 'camera' button here — the Crazyflie has no gimbal, so the
   // Gimbal disk and its toggle are deliberately absent on this page.
@@ -608,33 +462,16 @@ onMounted(() => {
     const item = rightItems.find((i) => i.id === 'steer');
     if (item) item.active = val;
   });
-  // Keep the subpage selector buttons in sync with the active subpage.
-  watch(activeSubpage, (val) => {
-    const pairs = [
-      ['subpage_viewer', 'viewer'],
-      ['subpage_host', 'host'],
-    ];
-    for (const [id, sub] of pairs) {
-      const btn = leftItems.find((i) => i.id === id);
-      if (btn) btn.active = val === sub;
-    }
-    // Flight-control buttons are only clickable on the 'host' subpage.
-    setControlsLocked(val !== 'host');
-    // Yielding the Host subpage must never leave a stale velocity running.
-    if (val !== 'host') stopRealFlight();
-  });
 
-  // Default subpage is 'host' — connect the livestream right away; the SAME
-  // connection is re-attached to the Viewer's <video> on later switches.
+  // Connect the livestream right away.
   nextTick(() => {
-    if (activeSubpage.value === 'host') attachLiveStream(hostVideoEl.value);
+    attachLiveStream(hostVideoEl.value);
     playingUrl = targetUrl.value;
     livePlayer.start();
   });
 });
 
 onUnmounted(() => {
-  onDividerPointerUp();
   stopRealFlight();
   stopRecorder(); // an active clip still downloads via the recorder's onstop
   clearTimeout(captureAuthTimer);
@@ -643,7 +480,6 @@ onUnmounted(() => {
     moveKeepAlive = null;
   }
   livePlayer.stop();
-  teardownViewerStage();
   clear();
   unregisterPage('aerial');
   unregisterPage('realdrone');
@@ -659,9 +495,9 @@ onUnmounted(() => {
     :class="{ 'live-fullscreen-active': liveFullscreen }"
     :left-items="leftItems"
     :right-items="rightItems"
-    :show-flight="isAerialStyle && showFlight"
+    :show-flight="showFlight"
     :show-camera="false"
-    :show-hud="isAerialStyle"
+    :show-hud="true"
     :flight="flight"
     :real-telemetry="droneTelemetry"
     @flightMove="onRealFlightMove"
@@ -669,11 +505,9 @@ onUnmounted(() => {
     @flightModeChange="onFlightModeChange"
   >
     <template #background>
-      <!-- Livestream Host subpage: fullscreen monitor of the currently
-           selected stream (same shared connection as the Viewer).
+      <!-- Livestream Host monitor: fullscreen view of the PRIMARY stream.
            Muted so autoplay is allowed and to avoid audio feedback. -->
       <video
-        v-if="activeSubpage === 'host'"
         ref="hostVideoEl"
         class="host-live"
         :class="{ 'host-live--fullscreen': liveFullscreen }"
@@ -681,54 +515,6 @@ onUnmounted(() => {
         muted
         playsinline
       />
-
-      <!-- Split-layout subpage (Livestream Viewer): two panels
-           split by a vertical draggable divider; panel content comes later -->
-      <div v-if="isSplitStyle" class="split-page">
-        <!-- Left panel: stream catalog from /api/stream/config
-             (testing-phase identities; will come from the FastAPI-users
-             backend later). Clicking a card switches the right panel. -->
-        <aside
-          class="split-sidebar"
-          :style="{ flexBasis: leftWidthPct + '%' }"
-        >
-          <div class="stream-list">
-            <div
-              v-for="s in streams"
-              :key="s.id"
-              class="stream-card"
-              :class="{ 'stream-card--active': s.id === selectedStream?.id }"
-              @click="selectedStreamId = s.id"
-            >
-              <div class="stream-card__head">
-                <span class="stream-card__title">{{ s.hostname }}</span>
-              </div>
-              <p class="stream-card__desc">{{ s.description }}</p>
-            </div>
-          </div>
-        </aside>
-
-        <!-- Divider (draggable) -->
-        <div
-          class="split-divider"
-          @pointerdown="onDividerPointerDown"
-        />
-
-        <!-- Right content area: the MediaMTX livestream, centered and
-             never upscaled past its natural resolution -->
-        <main class="split-content">
-          <div class="viewer-stage">
-            <video
-              ref="viewerVideoEl"
-              class="viewer-live"
-              :class="{ 'viewer-live--fullscreen': liveFullscreen }"
-              autoplay
-              muted
-              playsinline
-            />
-          </div>
-        </main>
-      </div>
     </template>
 
     <template #top-overlay>
@@ -751,110 +537,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.split-page {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  pointer-events: auto;
-  background: #ffffff;
-  user-select: none;
-  z-index: 6;
-  box-sizing: border-box;
-  /* Clear the floating docks (72px wide; 56px below 768px, mirroring
-     AppDock) — docked areas otherwise swallow clicks meant for the
-     stream cards / stage (the white background still spans full width). */
-  padding: 0 72px;
-}
-
-@media (max-width: 768px) {
-  .split-page {
-    padding: 0 56px;
-  }
-}
-
-/* ─── Left panel ─── */
-.split-sidebar {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: #f5f5f7;
-  overflow-y: auto;
-}
-
-/* ─── Stream list (left panel content) ─── */
-.stream-list {
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.stream-card {
-  background: #ffffff;
-  border: 1px solid #e5e5ea;
-  border-radius: 10px;
-  padding: 12px 14px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.stream-card:hover {
-  border-color: #007aff;
-}
-
-/* The card whose stream is playing in the right panel. */
-.stream-card--active {
-  border-color: #007aff;
-  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
-}
-
-.stream-card__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.stream-card__title {
-  font-weight: 700;
-  font-size: 0.95rem;
-  color: #1c1c1e;
-  word-break: break-all;
-}
-
-.stream-card__desc {
-  margin: 6px 0 0;
-  font-weight: 300;
-  font-size: 0.8rem;
-  color: #8e8e93;
-  line-height: 1.4;
-}
-
-/* ─── Divider ─── */
-.split-divider {
-  width: 4px;
-  flex-shrink: 0;
-  background: #e5e5ea;
-  cursor: col-resize;
-  transition: background 0.15s ease;
-}
-
-.split-divider:hover,
-.split-divider:active {
-  background: #007aff;
-}
-
-/* ─── Right content area ─── */
-.split-content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: #ffffff;
-  overflow: hidden;
-}
-
 /* ─── Livestream Host monitor ─── */
 .host-live {
   position: absolute;
@@ -864,32 +546,6 @@ onUnmounted(() => {
   object-fit: contain; /* keep the webcam's 4:3 aspect, letterbox the rest */
   background: #000;
   pointer-events: none; /* docks / HUD stay interactive above the video */
-}
-
-/* ─── Livestream Viewer stage ─── */
-.viewer-stage {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.viewer-live {
-  display: block; /* pixel width/height set by fitViewerVideo() */
-}
-
-/* Fullscreen: fill the whole page proportionally (like the Host subpage). */
-.viewer-live--fullscreen {
-  position: fixed;
-  inset: 0;
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: contain;
-  background: #000;
-  z-index: 100;
 }
 
 /* Fullscreen Host monitor: cover the HUD for a clean monitoring view. */

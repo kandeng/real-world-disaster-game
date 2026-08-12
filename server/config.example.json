@@ -28,6 +28,7 @@
   },
   "mediamtx": {
     "whep_url": "http://127.0.0.1:8889/crazyflie-drone/whep",
+    "control_api_url": "http://127.0.0.1:9997",
     "streams": [
       {
         "id": "crazyflie-drone",
