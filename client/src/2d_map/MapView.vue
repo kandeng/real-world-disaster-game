@@ -259,18 +259,54 @@ async function searchNearbyPois(latLng) {
       fields: ['id', 'displayName', 'location'],
     };
     const response = await mapsApi.places.Place.searchNearby(request);
-    const places = (response?.places || []).slice(0, 10).map((place) => ({
-      place_id: place.id,
-      name: displayNameOf(place),
-      geometry: {
-        location: place.location,
-      },
-    }));
-    emit('poisFound', places);
+    emit('poisFound', (response?.places || []).slice(0, 10).map(toPoi));
   } catch (err) {
     console.error('[MapView] Place.searchNearby error:', err);
     emit('poisError', `Places API request failed: ${err?.message || err}`);
   }
+}
+
+// Map a new-Places-API Place onto the legacy POI shape consumed by
+// WaypointPanel.vue (place_id / name / geometry.location).
+function toPoi(place) {
+  return {
+    place_id: place.id,
+    name: displayNameOf(place),
+    geometry: {
+      location: place.location,
+    },
+  };
+}
+
+// Text-query twin of searchNearbyPois: free-form place / address strings
+// ("Carnegie Mellon University") instead of proximity around a point.
+async function searchPoisByText(text) {
+  if (!mapsApi?.places?.Place?.searchByText) {
+    emit('poisError', 'Places API is not available. Please enable the Places API for your Google Maps API key.');
+    return;
+  }
+  try {
+    const request = {
+      textQuery: text,
+      fields: ['id', 'displayName', 'location'],
+      maxResultCount: 10,
+    };
+    const response = await mapsApi.places.Place.searchByText(request);
+    emit('poisFound', (response?.places || []).slice(0, 10).map(toPoi));
+  } catch (err) {
+    console.error('[MapView] Place.searchByText error:', err);
+    emit('poisError', `Places API request failed: ${err?.message || err}`);
+  }
+}
+
+// Recenter the map on a search result. Intentionally UNGUARDED (unlike
+// updateMapCenter / updateMapZoom): the resulting center/zoom events must
+// reach the parent view so the simulated drone follows the map to the
+// searched place.
+function panTo(lat, lng, alt = 320) {
+  if (!map.value) return;
+  map.value.setZoom(altToZoom(alt)); // z16 — campus/street level
+  map.value.setCenter({ lat, lng });
 }
 
 function searchNearbyPoisAt(lat, lng) {
@@ -449,6 +485,8 @@ function attachMapClickListener() {
 
 defineExpose({
   searchNearbyPoisAt,
+  searchPoisByText,
+  panTo,
   searchRoutes,
 });
 

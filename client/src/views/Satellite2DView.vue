@@ -62,6 +62,14 @@ function onMapClick({ lat, lng }) {
 
 function onPoisFound(pois) {
   setNearbyPois(pois);
+  if (!panToTopResult) return;
+  panToTopResult = false;
+  // Text search: recenter the map on the best match (the simulated
+  // drone follows the map center via onMapCenterChange).
+  const loc = pois?.[0]?.geometry?.location;
+  if (loc && mapViewRef.value) {
+    mapViewRef.value.panTo(loc.lat(), loc.lng());
+  }
 }
 
 function onPoisError(message) {
@@ -127,11 +135,40 @@ function resolveSearchLocation() {
   return null;
 }
 
+// Text of the currently focused input (origin draft or the active
+// waypoint row) — the user's search intent for `Search waypoints`.
+function activeInputText() {
+  const id = activeWaypointId.value;
+  if (id === null) return originDraft.value.trim();
+  const wp = waypoints.value.find((w) => w.id === id);
+  return (wp?.name || '').trim();
+}
+
+// True while a text-query search is in flight; on success the map pans
+// to the top result (see onPoisFound).
+let panToTopResult = false;
+
 function onSearchWaypoints() {
   clearRouteResult();
   clearRouteError();
+  if (!mapViewRef.value) return;
+  const text = activeInputText();
+  const coordLoc = parseCoordinateText(text);
+  if (coordLoc) {
+    // Coordinates in the active input (typed or map-picked): proximity POIs.
+    panToTopResult = false;
+    mapViewRef.value.searchNearbyPoisAt(coordLoc.lat, coordLoc.lon);
+    return;
+  }
+  if (text) {
+    // Free-text place / address: text search + pan to the best match.
+    panToTopResult = true;
+    mapViewRef.value.searchPoisByText(text);
+    return;
+  }
   const loc = resolveSearchLocation();
-  if (loc && mapViewRef.value) {
+  if (loc) {
+    panToTopResult = false;
     mapViewRef.value.searchNearbyPoisAt(loc.lat, loc.lon);
   } else {
     console.warn('[Search waypoints] no usable location');
