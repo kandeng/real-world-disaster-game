@@ -160,9 +160,10 @@ npm install
 # Edit client/config.json with your Google Maps API key and Cesium Ion token.
 vim config.json
 
-# 5. Populate the video clips for splashing.
-cp ~/drone-navigation/client/assets/media/*.mp4 ~/drone-navigation/client/public/splash/.
-rm ~/drone-navigation/client/public/splash/drone_earth*.mp4
+# 5. Splash video clips need NO manual copy: `npm run build` syncs them
+#    automatically from client/assets/media (tracked in git) into
+#    client/public/splash (renaming drone_earth_milkway.mp4 -> video_00.mp4)
+#    and regenerates playlist.json, so dist/splash/ ships complete.
 
 # 6. Re-build after configuration changes
 npm run build
