@@ -4,7 +4,13 @@ import { useI18n } from 'vue-i18n';
 import { loadGoogleMaps } from './googleMaps.js';
 import droneIconUrl from '../../icons/drone.svg';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
+
+// Google Places / Routes results must follow the app language
+// (My Space -> Settings -> Language), NOT the browser locale that
+// Google would otherwise default to (a zh browser would otherwise
+// render every displayName in Chinese while the UI is English).
+const gmapsLanguageCode = computed(() => (locale.value === 'zh' ? 'zh-CN' : 'en-US'));
 
 const props = defineProps({
   lat: { type: Number, required: true },
@@ -257,6 +263,10 @@ async function searchNearbyPois(latLng) {
     const request = {
       locationRestriction: circle,
       fields: ['id', 'displayName', 'location'],
+      // New Places API: the request property is `language` (NOT
+      // `languageCode` — that one only exists on the Routes API and
+      // throws InvalidValueError here).
+      language: gmapsLanguageCode.value,
     };
     const response = await mapsApi.places.Place.searchNearby(request);
     emit('poisFound', (response?.places || []).slice(0, 10).map(toPoi));
@@ -290,6 +300,7 @@ async function searchPoisByText(text) {
       textQuery: text,
       fields: ['id', 'displayName', 'location'],
       maxResultCount: 10,
+      language: gmapsLanguageCode.value,
     };
     const response = await mapsApi.places.Place.searchByText(request);
     emit('poisFound', (response?.places || []).slice(0, 10).map(toPoi));
@@ -437,7 +448,7 @@ async function searchRoutes(waypoints) {
       intermediates,
       travelMode: 'DRIVE',
       computeAlternativeRoutes: true,
-      languageCode: 'en-US',
+      languageCode: gmapsLanguageCode.value,
       units: 'METRIC',
     });
 
