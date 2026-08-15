@@ -20,9 +20,10 @@ const props = defineProps({
   mapTypeId: { type: String, default: 'roadmap' },
   isPicking: { type: Boolean, default: false },
   isPanelOpen: { type: Boolean, default: false },
+  showDroneMarker: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError']);
+const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady']);
 
 const containerRef = ref(null);
 const map = ref(null);
@@ -58,6 +59,11 @@ let listeners = [];
 let wheelHandler = null;     // stored so we can removeEventListener on unmount
 let clickListener = null;    // Google Maps click listener for picking mode
 let mapsApi = null;          // loaded Google Maps API namespace
+let cursorLatLng = null;     // last mouse position on the map (LatLng)
+let selectionMarker = null;  // default Google pin dropped on a picked address
+let waypointMarkers = [];    // numbered blue-bordered circles (waypoints)
+let waypointPaths = [];      // spline segments linking the waypoints in order
+let waypointPathEntries = []; // last waypoint list, for zoom re-trims
 
 function altToZoom(alt) {
   const clamped = Math.max(MIN_ALT, Math.min(MAX_ALT, alt));
@@ -166,6 +172,9 @@ function handleCenterChanged() {
 
 function handleZoomChanged() {
   if (!map.value) return;
+  // The waypoint circles are screen-sized (28px): re-trim the spline gaps
+  // whenever the zoom — and thus the circles' ground radius — changes.
+  if (waypointPathEntries.length >= 2) redrawWaypointPath(waypointPathEntries);
   const zoom = map.value.getZoom();
   if (lastProgrammaticZoom !== null && Math.abs(zoom - lastProgrammaticZoom) < 0.5) {
     lastProgrammaticZoom = null;
@@ -207,12 +216,21 @@ onMounted(async () => {
 
     listeners.push(mapsApi.event.addListener(map.value, 'center_changed', handleCenterChanged));
     listeners.push(mapsApi.event.addListener(map.value, 'zoom_changed', handleZoomChanged));
+    // Track the cursor's geographic position so parents can e.g. sort
+    // search results by distance to the cursor.
+    listeners.push(mapsApi.event.addListener(map.value, 'mousemove', (e) => {
+      cursorLatLng = e.latLng;
+    }));
     attachMapClickListener();
 
     // Capture-phase wheel listener: fires before any Google Maps listener.
     // passive: false avoids Chrome's passive-listener console warning.
     wheelHandler = onWheel;
     containerRef.value.addEventListener('wheel', wheelHandler, { capture: true, passive: false });
+
+    // Let the parent redraw maintained overlays (waypoint markers) whenever
+    // the underlying Google Map is (re)created — e.g. returning from 3D.
+    emit('mapReady');
   } catch (e) {
     console.error('[2D Map]', e);
     error.value = e?.message || String(e);
@@ -226,6 +244,14 @@ onUnmounted(() => {
     clickListener.remove();
     clickListener = null;
   }
+  if (selectionMarker) {
+    selectionMarker.setMap(null);
+    selectionMarker = null;
+  }
+  waypointMarkers.forEach((m) => m.setMap(null));
+  waypointMarkers = [];
+  waypointPaths.forEach((p) => p.setMap(null));
+  waypointPaths = [];
   if (wheelHandler && containerRef.value) {
     containerRef.value.removeEventListener('wheel', wheelHandler, { capture: true });
   }
@@ -262,7 +288,7 @@ async function searchNearbyPois(latLng) {
     });
     const request = {
       locationRestriction: circle,
-      fields: ['id', 'displayName', 'location'],
+      fields: ['id', 'displayName', 'shortFormattedAddress', 'location'],
       // New Places API: the request property is `language` (NOT
       // `languageCode` — that one only exists on the Routes API and
       // throws InvalidValueError here).
@@ -282,6 +308,7 @@ function toPoi(place) {
   return {
     place_id: place.id,
     name: displayNameOf(place),
+    address: typeof place.shortFormattedAddress === 'string' ? place.shortFormattedAddress : '',
     geometry: {
       location: place.location,
     },
@@ -290,6 +317,35 @@ function toPoi(place) {
 
 // Text-query twin of searchNearbyPois: free-form place / address strings
 // ("Carnegie Mellon University") instead of proximity around a point.
+//
+// BUG-FIX: without a locationBias, Place.searchByText ranks matches
+// GLOBALLY — a brand query like "starbucks" came back with stores in
+// Japan even though the map sat on Sunnyvale, CA. Biasing the request
+// to the cursor (fallback: map center) with a viewport-sized circle
+// makes Google return nearby candidates first; the parent view's
+// cursor-distance sort then fine-tunes the order.
+function currentBiasCircle() {
+  if (!mapsApi || !map.value) return null;
+  const anchor = cursorLatLng || map.value.getCenter();
+  if (!anchor) return null;
+  // Radius ≈ half the viewport diagonal in meters (equirectangular
+  // approximation — good enough for a *bias*).
+  let radius = 1000;
+  const bounds = map.value.getBounds();
+  if (bounds) {
+    const center = bounds.getCenter();
+    const ne = bounds.getNorthEast();
+    const dLat = (ne.lat() - center.lat()) * 111320;
+    const dLng = (ne.lng() - center.lng()) * 111320 * Math.cos((center.lat() * Math.PI) / 180);
+    radius = Math.sqrt(dLat * dLat + dLng * dLng);
+  }
+  radius = Math.max(500, Math.min(50000, radius));
+  return new mapsApi.Circle({
+    center: { lat: anchor.lat(), lng: anchor.lng() },
+    radius,
+  });
+}
+
 async function searchPoisByText(text) {
   if (!mapsApi?.places?.Place?.searchByText) {
     emit('poisError', 'Places API is not available. Please enable the Places API for your Google Maps API key.');
@@ -298,9 +354,10 @@ async function searchPoisByText(text) {
   try {
     const request = {
       textQuery: text,
-      fields: ['id', 'displayName', 'location'],
+      fields: ['id', 'displayName', 'shortFormattedAddress', 'location'],
       maxResultCount: 10,
       language: gmapsLanguageCode.value,
+      locationBias: currentBiasCircle(),
     };
     const response = await mapsApi.places.Place.searchByText(request);
     emit('poisFound', (response?.places || []).slice(0, 10).map(toPoi));
@@ -494,11 +551,149 @@ function attachMapClickListener() {
   }
 }
 
+// Drop (or move) a marker at the given address, marking the selected search
+// result. Uses Google Maps' default pin icon.
+function setSelectionMarker(lat, lng) {
+  if (!mapsApi || !map.value) return;
+  const position = new mapsApi.LatLng(lat, lng);
+  if (selectionMarker) {
+    selectionMarker.setPosition(position);
+  } else {
+    selectionMarker = new mapsApi.Marker({ position, map: map.value });
+  }
+}
+
+function getCursorLatLng() {
+  return cursorLatLng;
+}
+
+// Add a numbered waypoint marker: a transparent circle with a blue border
+// (28px diameter) with the waypoint index drawn inside in DengXian (等线体)
+// blue.
+function addWaypointMarker(lat, lng, label) {
+  if (!mapsApi || !map.value) return;
+  const D = 28;
+  const stroke = 2;
+  const r = (D - stroke) / 2;
+  const c = D / 2;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${D}" height="${D}">` +
+    `<circle cx="${c}" cy="${c}" r="${r}" ` +
+    `fill="none" stroke="#2563eb" stroke-width="${stroke}"/>` +
+    `<text x="${c}" y="${c}" font-family="DengXian, 等线, sans-serif" ` +
+    `font-size="14" fill="#2563eb" text-anchor="middle" dominant-baseline="central">${label}</text>` +
+    `</svg>`;
+  const icon = {
+    url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+    scaledSize: new mapsApi.Size(D, D),
+    anchor: new mapsApi.Point(c, c),
+  };
+  waypointMarkers.push(
+    new mapsApi.Marker({ position: new mapsApi.LatLng(lat, lng), map: map.value, icon, clickable: false })
+  );
+}
+
+// Catmull-Rom (interpolating cubic B-spline) sample at parameter t.
+function crSpline(a, b, c, d, t) {
+  return 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (-a + 3 * b - 3 * c + d) * t * t * t);
+}
+
+// Dense polyline path of a smooth spline passing through every waypoint
+// in order, so the drawn link actually touches each circle.
+function splinePath(points, samplesPerSeg = 16) {
+  if (points.length < 2) return [];
+  const pts = [points[0], ...points, points[points.length - 1]];
+  const out = [];
+  for (let i = 0; i < pts.length - 3; i++) {
+    const p0 = pts[i];
+    const p1 = pts[i + 1];
+    const p2 = pts[i + 2];
+    const p3 = pts[i + 3];
+    for (let s = 0; s < samplesPerSeg; s++) {
+      const t = s / samplesPerSeg;
+      out.push({
+        lat: crSpline(p0.lat, p1.lat, p2.lat, p3.lat, t),
+        lng: crSpline(p0.lng, p1.lng, p2.lng, p3.lng, t),
+      });
+    }
+  }
+  out.push({ lat: points[points.length - 1].lat, lng: points[points.length - 1].lng });
+  return out;
+}
+
+// Equirectangular distance approximation (meters) — cheap, and only used
+// to trim the spline out of the waypoint circles.
+function distMeters(aLat, aLng, bLat, bLng) {
+  const mPerDegLat = 111320;
+  const mPerDegLng = 111320 * Math.cos((aLat * Math.PI) / 180);
+  const dy = (aLat - bLat) * mPerDegLat;
+  const dx = (aLng - bLng) * mPerDegLng;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Ground meters covered by one screen pixel at the current zoom/latitude.
+function metersPerPixel() {
+  if (!map.value) return 1;
+  const zoom = map.value.getZoom() || 0;
+  const lat = map.value.getCenter()?.lat() || 0;
+  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+}
+
+// Draw the spline as one polyline per gap-free segment, skipping every
+// sample that falls inside a waypoint circle (14px radius + 2px margin)
+// so the link visually stops at each circle's border.
+function redrawWaypointPath(entries) {
+  waypointPaths.forEach((p) => p.setMap(null));
+  waypointPaths = [];
+  waypointPathEntries = entries || [];
+  if (!mapsApi || !map.value || waypointPathEntries.length < 2) return;
+  const samples = splinePath(waypointPathEntries);
+  const trim = 16 * metersPerPixel();
+  const segments = [];
+  let current = [];
+  for (const s of samples) {
+    const inside = waypointPathEntries.some((e) => distMeters(s.lat, s.lng, e.lat, e.lng) < trim);
+    if (inside) {
+      if (current.length > 1) segments.push(current);
+      current = [];
+    } else {
+      current.push(s);
+    }
+  }
+  if (current.length > 1) segments.push(current);
+  for (const seg of segments) {
+    waypointPaths.push(
+      new mapsApi.Polyline({
+        path: seg,
+        map: map.value,
+        strokeColor: '#2563eb',
+        strokeOpacity: 0.8,
+        strokeWeight: 2,
+        clickable: false,
+      })
+    );
+  }
+}
+
+// Replace all waypoint markers AND the spline link (used after the waypoint
+// list changes — add or reorder — and the indices drawn inside the circles
+// shift).
+function redrawWaypointMarkers(entries) {
+  waypointMarkers.forEach((m) => m.setMap(null));
+  waypointMarkers = [];
+  (entries || []).forEach((e) => addWaypointMarker(e.lat, e.lng, e.index));
+  redrawWaypointPath(entries || []);
+}
+
 defineExpose({
   searchNearbyPoisAt,
   searchPoisByText,
   panTo,
   searchRoutes,
+  setSelectionMarker,
+  getCursorLatLng,
+  addWaypointMarker,
+  redrawWaypointMarkers,
 });
 
 watch(() => [props.isPicking, props.isPanelOpen], () => {
@@ -512,6 +707,7 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
   <div class="map-view">
     <div ref="containerRef" class="map-container"></div>
     <img
+      v-if="showDroneMarker"
       class="drone-marker"
       :src="droneIconUrl"
       alt="Drone"

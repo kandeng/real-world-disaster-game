@@ -1,0 +1,11 @@
+{
+  "mode_2d": "2D",
+  "mode_3d": "3D",
+  "route": "路线",
+  "panel_title": "航程规划",
+  "search": "寻址",
+  "search_placeholder": "搜索地址或地点",
+  "no_results": "未找到结果",
+  "waypoint_hint": "请点击鼠标左键添加新航点",
+  "no_waypoints": "暂无航点"
+}

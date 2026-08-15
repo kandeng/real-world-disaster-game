@@ -48,6 +48,7 @@ function handleItemClick(item) {
           :active="item.active"
           :danger="item.danger"
           :disabled="item.disabled"
+          :size="item.size"
           @click="handleItemClick(item)"
         />
       </template>

@@ -4,6 +4,7 @@ import RealDroneView from '@/views/RealDroneView.vue';
 import MeshView from '@/views/MeshView.vue';
 import Map2DView from '@/views/Map2DView.vue';
 import Satellite2DView from '@/views/Satellite2DView.vue';
+import RoutePlanningView from '@/views/RoutePlanningView.vue';
 import ChatView from '@/views/ChatView.vue';
 import SettingsView from '@/views/SettingsView.vue';
 import MySpaceView from '@/views/MySpaceView.vue';
@@ -34,6 +35,11 @@ const routes = [
     path: '/satellite',
     name: 'Satellite2D',
     component: Satellite2DView,
+  },
+  {
+    path: '/route-planning',
+    name: 'RoutePlanning',
+    component: RoutePlanningView,
   },
   {
     path: '/chat',

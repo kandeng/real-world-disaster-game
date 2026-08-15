@@ -49,6 +49,7 @@ function handlePanelClose() {
       icon="MENU_LOCATION"
       title-key="aerialview.waypoint"
       :active="isPanelOpen"
+      :size="35"
       @click="toggle"
     />
     <Transition name="waypoint-fade">

@@ -1,0 +1,11 @@
+{
+  "mode_2d": "2D",
+  "mode_3d": "3D",
+  "route": "Route",
+  "panel_title": "Route Planning",
+  "search": "Search",
+  "search_placeholder": "Search address or place",
+  "no_results": "No results found.",
+  "waypoint_hint": "Please click the left button of mouse to add a new waypoint",
+  "no_waypoints": "No waypoints yet."
+}
