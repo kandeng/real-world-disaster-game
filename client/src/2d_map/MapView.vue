@@ -61,9 +61,8 @@ let clickListener = null;    // Google Maps click listener for picking mode
 let mapsApi = null;          // loaded Google Maps API namespace
 let cursorLatLng = null;     // last mouse position on the map (LatLng)
 let selectionMarker = null;  // default Google pin dropped on a picked address
-let waypointMarkers = [];    // numbered blue-bordered circles (waypoints)
-let waypointPaths = [];      // spline segments linking the waypoints in order
-let waypointPathEntries = []; // last waypoint list, for zoom re-trims
+let waypointMarkers = [];    // solid blue circles with white bold indices
+let waypointPath = null;     // spline polyline linking the waypoints in order
 
 function altToZoom(alt) {
   const clamped = Math.max(MIN_ALT, Math.min(MAX_ALT, alt));
@@ -172,9 +171,6 @@ function handleCenterChanged() {
 
 function handleZoomChanged() {
   if (!map.value) return;
-  // The waypoint circles are screen-sized (28px): re-trim the spline gaps
-  // whenever the zoom — and thus the circles' ground radius — changes.
-  if (waypointPathEntries.length >= 2) redrawWaypointPath(waypointPathEntries);
   const zoom = map.value.getZoom();
   if (lastProgrammaticZoom !== null && Math.abs(zoom - lastProgrammaticZoom) < 0.5) {
     lastProgrammaticZoom = null;
@@ -250,8 +246,10 @@ onUnmounted(() => {
   }
   waypointMarkers.forEach((m) => m.setMap(null));
   waypointMarkers = [];
-  waypointPaths.forEach((p) => p.setMap(null));
-  waypointPaths = [];
+  if (waypointPath) {
+    waypointPath.setMap(null);
+    waypointPath = null;
+  }
   if (wheelHandler && containerRef.value) {
     containerRef.value.removeEventListener('wheel', wheelHandler, { capture: true });
   }
@@ -567,21 +565,18 @@ function getCursorLatLng() {
   return cursorLatLng;
 }
 
-// Add a numbered waypoint marker: a transparent circle with a blue border
-// (28px diameter) with the waypoint index drawn inside in DengXian (等线体)
-// blue.
+// Add a numbered waypoint marker: a solid blue circle (28px diameter) with
+// the waypoint index inside in bold white DengXian (等线体).
 function addWaypointMarker(lat, lng, label) {
   if (!mapsApi || !map.value) return;
   const D = 28;
-  const stroke = 2;
-  const r = (D - stroke) / 2;
   const c = D / 2;
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${D}" height="${D}">` +
-    `<circle cx="${c}" cy="${c}" r="${r}" ` +
-    `fill="none" stroke="#2563eb" stroke-width="${stroke}"/>` +
+    `<circle cx="${c}" cy="${c}" r="${c}" fill="#2563eb"/>` +
     `<text x="${c}" y="${c}" font-family="DengXian, 等线, sans-serif" ` +
-    `font-size="14" fill="#2563eb" text-anchor="middle" dominant-baseline="central">${label}</text>` +
+    `font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle" ` +
+    `dominant-baseline="central">${label}</text>` +
     `</svg>`;
   const icon = {
     url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
@@ -621,58 +616,24 @@ function splinePath(points, samplesPerSeg = 16) {
   return out;
 }
 
-// Equirectangular distance approximation (meters) — cheap, and only used
-// to trim the spline out of the waypoint circles.
-function distMeters(aLat, aLng, bLat, bLng) {
-  const mPerDegLat = 111320;
-  const mPerDegLng = 111320 * Math.cos((aLat * Math.PI) / 180);
-  const dy = (aLat - bLat) * mPerDegLat;
-  const dx = (aLng - bLng) * mPerDegLng;
-  return Math.sqrt(dx * dx + dy * dy);
-}
-
-// Ground meters covered by one screen pixel at the current zoom/latitude.
-function metersPerPixel() {
-  if (!map.value) return 1;
-  const zoom = map.value.getZoom() || 0;
-  const lat = map.value.getCenter()?.lat() || 0;
-  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
-}
-
-// Draw the spline as one polyline per gap-free segment, skipping every
-// sample that falls inside a waypoint circle (14px radius + 2px margin)
-// so the link visually stops at each circle's border.
+// Draw the spline as a single polyline UNDER the waypoint markers (Google
+// Maps renders polylines in a layer below markers): the link really passes
+// through every waypoint, but the opaque blue circles cover it, so it looks
+// as if the spline stops at each circle's border.
 function redrawWaypointPath(entries) {
-  waypointPaths.forEach((p) => p.setMap(null));
-  waypointPaths = [];
-  waypointPathEntries = entries || [];
-  if (!mapsApi || !map.value || waypointPathEntries.length < 2) return;
-  const samples = splinePath(waypointPathEntries);
-  const trim = 16 * metersPerPixel();
-  const segments = [];
-  let current = [];
-  for (const s of samples) {
-    const inside = waypointPathEntries.some((e) => distMeters(s.lat, s.lng, e.lat, e.lng) < trim);
-    if (inside) {
-      if (current.length > 1) segments.push(current);
-      current = [];
-    } else {
-      current.push(s);
-    }
+  if (waypointPath) {
+    waypointPath.setMap(null);
+    waypointPath = null;
   }
-  if (current.length > 1) segments.push(current);
-  for (const seg of segments) {
-    waypointPaths.push(
-      new mapsApi.Polyline({
-        path: seg,
-        map: map.value,
-        strokeColor: '#2563eb',
-        strokeOpacity: 0.8,
-        strokeWeight: 2,
-        clickable: false,
-      })
-    );
-  }
+  if (!mapsApi || !map.value || (entries || []).length < 2) return;
+  waypointPath = new mapsApi.Polyline({
+    path: splinePath(entries),
+    map: map.value,
+    strokeColor: '#2563eb',
+    strokeOpacity: 0.8,
+    strokeWeight: 2,
+    clickable: false,
+  });
 }
 
 // Replace all waypoint markers AND the spline link (used after the waypoint

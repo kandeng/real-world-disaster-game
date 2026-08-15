@@ -499,6 +499,11 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Reserve the scrollbar gutter up front so the shrink-wrapped panel
+     is wide enough to contain the vertical scrollbar without squeezing
+     the waypoint rows. */
+  scrollbar-gutter: stable;
+  padding-right: 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
