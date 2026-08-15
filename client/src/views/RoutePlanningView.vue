@@ -12,6 +12,7 @@ import DockMenuButton from '@shared/DockMenuButton.vue';
 import DockButton from '@shared/DockButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
+import cancelIcon from '../../icons/cancel.svg';
 
 const Cesium = window.Cesium;
 const { t } = useI18n();
@@ -103,7 +104,8 @@ function onMapClick({ lat, lng }) {
   const index = waypoints.value.length + 1;
   waypoints.value.push({ id: ++wpSeq, index, lat, lng });
   // Redraw circles + the spline link so both always match the list.
-  mapViewRef.value?.redrawWaypointMarkers(waypoints.value);
+  // Always blue here: red is reserved for an active press.
+  mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
   // One reminder per waypoint: hide it once the user has clicked.
   showWaypointHint.value = false;
 }
@@ -111,7 +113,7 @@ function onMapClick({ lat, lng }) {
 // The MapView is recreated when leaving 3D and coming back — redraw all
 // maintained waypoint circles and the spline link.
 function onMapReady() {
-  mapViewRef.value?.redrawWaypointMarkers(waypoints.value);
+  mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
 }
 
 // ── Route panel: draggable waypoint list ──────────────────────────────────
@@ -122,14 +124,37 @@ function fmtCoord(v) {
   return isNaN(n) ? '' : n.toFixed(4);
 }
 
+// Edit a waypoint's lat/lon directly in the Route list: commit on blur or
+// Enter, move the blue circle to the new position and redraw the spline.
+function onEditCoord(event, pos, field) {
+  const wp = waypoints.value[pos];
+  if (!wp) return;
+  let v = parseFloat(event.target.value);
+  if (isNaN(v)) {
+    event.target.value = fmtCoord(wp[field]);
+    return;
+  }
+  if (field === 'lat') v = Math.max(-90, Math.min(90, v));
+  else v = Math.max(-180, Math.min(180, v));
+  wp[field] = v;
+  event.target.value = fmtCoord(v);
+  mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+}
+
 // Row height (34px) + list gap (6px) — keep in sync with the CSS below so
 // the pointer delta maps 1:1 onto row positions while dragging.
 const WP_ROW_HEIGHT = 40;
 const drag = ref(null); // { startPos, curPos, startY, offset }
 
+// Waypoint row whose cancel icon is currently visible (clicked row).
+const selectedWpId = ref(null);
+
 function onRowPointerDown(event, pos) {
   if (event.button !== 0) return;
   event.preventDefault();
+  selectedWpId.value = waypoints.value[pos] ? waypoints.value[pos].id : null;
+  // The clicked row's waypoint turns red on the map.
+  mapViewRef.value?.redrawWaypointMarkers(waypoints.value, selectedWpId.value);
   drag.value = { startPos: pos, curPos: pos, startY: event.clientY, offset: 0 };
   window.addEventListener('pointermove', onRowPointerMove);
   window.addEventListener('pointerup', onRowPointerUp);
@@ -157,7 +182,44 @@ function onRowPointerUp() {
   waypoints.value.forEach((wp, i) => {
     wp.index = i + 1;
   });
-  mapViewRef.value?.redrawWaypointMarkers(waypoints.value);
+  // Release: circles back to blue; the spline matches the final order.
+  mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+}
+
+// Remove the waypoint whose cancel icon was clicked; renumber 1..N and
+// redraw the map circles + B-spline link.
+function onRemoveWaypoint(id) {
+  const at = waypoints.value.findIndex((w) => w.id === id);
+  if (at === -1) return;
+  waypoints.value.splice(at, 1);
+  waypoints.value.forEach((w, i) => {
+    w.index = i + 1;
+  });
+  selectedWpId.value = null;
+  mapViewRef.value?.redrawWaypointMarkers(waypoints.value, selectedWpId.value);
+}
+
+// Pressing a waypoint circle on the map selects it (the cancel icon shows
+// on its Route list row); the MapView turns the circle red itself.
+function onWaypointPress(id) {
+  selectedWpId.value = id;
+}
+
+// Releasing the left mouse button: the MapView turned the circle back to
+// blue; redraw the B-spline link to match the final positions.
+function onWaypointRelease() {
+  mapViewRef.value?.redrawWaypointPath(waypoints.value);
+}
+
+// Live drag of the selected (red) circle on the map: update the stored
+// coordinates (the Route list row follows reactively) and re-shape the
+// B-spline link without recreating the marker being dragged.
+function onWaypointMove({ id, lat, lng }) {
+  const wp = waypoints.value.find((w) => w.id === id);
+  if (!wp) return;
+  wp.lat = lat;
+  wp.lng = lng;
+  mapViewRef.value?.redrawWaypointPath(waypoints.value);
 }
 
 // ── Search popup (address finding) ────────────────────────────────────────
@@ -427,8 +489,33 @@ onUnmounted(() => {
               :class="{ 'route-panel__wp--dragging': drag && drag.curPos === pos }"
               @pointerdown="onRowPointerDown($event, pos)"
             >
-              {{ fmtCoord(wp.lat) }}, {{ fmtCoord(wp.lng) }}
+              <!-- Editable coordinates: editing moves the blue circle. The
+                   stop keeps text selection/caret clicks from starting a
+                   row drag. -->
+              <input
+                class="route-panel__coord"
+                :value="fmtCoord(wp.lat)"
+                @pointerdown.stop
+                @keyup.enter="$event.target.blur()"
+                @change="onEditCoord($event, pos, 'lat')"
+              />
+              <span class="route-panel__sep">,</span>
+              <input
+                class="route-panel__coord"
+                :value="fmtCoord(wp.lng)"
+                @pointerdown.stop
+                @keyup.enter="$event.target.blur()"
+                @change="onEditCoord($event, pos, 'lng')"
+              />
             </div>
+            <button
+              class="route-panel__cancel"
+              :class="{ 'route-panel__cancel--visible': selectedWpId === wp.id }"
+              :title="t('routeplanningview.remove_waypoint')"
+              @click="onRemoveWaypoint(wp.id)"
+            >
+              <img :src="cancelIcon" alt="" draggable="false" />
+            </button>
           </div>
         </div>
         <div v-else class="route-panel__empty">{{ t('routeplanningview.no_waypoints') }}</div>
@@ -450,6 +537,9 @@ onUnmounted(() => {
         @centerChange="onMapCenterChange"
         @zoomChange="onMapZoomChange"
         @mapClick="onMapClick"
+        @waypointPress="onWaypointPress"
+        @waypointMove="onWaypointMove"
+        @waypointRelease="onWaypointRelease"
         @poisFound="onPoisFound"
         @poisError="onPoisError"
       />
@@ -525,6 +615,49 @@ onUnmounted(() => {
   font-size: 0.85rem;
   color: rgba(30, 40, 60, 0.95);
   text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+/* Reserved 20px slot between the row and the scrollbar so the panel width
+   never jumps; the icon only shows for the clicked (selected) row. */
+.route-panel__cancel {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.route-panel__cancel--visible {
+  visibility: visible;
+}
+
+.route-panel__cancel img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Editable lat/lon fields inside each draggable row. */
+.route-panel__coord {
+  width: 9ch;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: right;
+}
+
+.route-panel__coord:focus {
+  outline: 1px solid rgba(37, 99, 235, 0.5);
+  border-radius: 3px;
+}
+
+.route-panel__sep {
+  margin: 0 2px;
 }
 
 .route-panel__wp {

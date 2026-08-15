@@ -23,7 +23,7 @@ const props = defineProps({
   showDroneMarker: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady']);
+const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease']);
 
 const containerRef = ref(null);
 const map = ref(null);
@@ -63,6 +63,9 @@ let cursorLatLng = null;     // last mouse position on the map (LatLng)
 let selectionMarker = null;  // default Google pin dropped on a picked address
 let waypointMarkers = [];    // solid blue circles with white bold indices
 let waypointPath = null;     // spline polyline linking the waypoints in order
+let selectedWaypointId = null; // id of the red (selected) waypoint circle
+let wpDrag = null;           // active waypoint drag: { id, marker, moveL, upL }
+let lastWpDragEnd = 0;       // swallow the map click right after a drag
 
 function altToZoom(alt) {
   const clamped = Math.max(MIN_ALT, Math.min(MAX_ALT, alt));
@@ -246,6 +249,11 @@ onUnmounted(() => {
   }
   waypointMarkers.forEach((m) => m.setMap(null));
   waypointMarkers = [];
+  if (wpDrag) {
+    mapsApi.event.removeListener(wpDrag.moveL);
+    window.removeEventListener('mouseup', wpDrag.endDrag);
+    wpDrag = null;
+  }
   if (waypointPath) {
     waypointPath.setMap(null);
     waypointPath = null;
@@ -542,6 +550,8 @@ function attachMapClickListener() {
   }
   if (props.isPicking || props.isPanelOpen) {
     clickListener = map.value.addListener('click', (e) => {
+      // Swallow the click that fires right after a waypoint drag ends.
+      if (Date.now() - lastWpDragEnd < 300) return;
       const lat = e.latLng.lat();
       const lng = e.latLng.lng();
       emit('mapClick', { lat, lng });
@@ -565,27 +575,74 @@ function getCursorLatLng() {
   return cursorLatLng;
 }
 
-// Add a numbered waypoint marker: a solid blue circle (28px diameter) with
-// the waypoint index inside in bold white DengXian (等线体).
-function addWaypointMarker(lat, lng, label) {
-  if (!mapsApi || !map.value) return;
+// Build the numbered-circle icon: solid blue, or red while the left mouse
+// button is held on the circle (28px, bold white DengXian / 等线体 index).
+function waypointIcon(label, selected) {
   const D = 28;
   const c = D / 2;
+  const fill = selected ? '#dc2626' : '#2563eb';
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${D}" height="${D}">` +
-    `<circle cx="${c}" cy="${c}" r="${c}" fill="#2563eb"/>` +
+    `<circle cx="${c}" cy="${c}" r="${c}" fill="${fill}"/>` +
     `<text x="${c}" y="${c}" font-family="DengXian, 等线, sans-serif" ` +
     `font-size="14" font-weight="bold" fill="#ffffff" text-anchor="middle" ` +
     `dominant-baseline="central">${label}</text>` +
     `</svg>`;
-  const icon = {
+  return {
     url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
     scaledSize: new mapsApi.Size(D, D),
     anchor: new mapsApi.Point(c, c),
   };
-  waypointMarkers.push(
-    new mapsApi.Marker({ position: new mapsApi.LatLng(lat, lng), map: map.value, icon, clickable: false })
-  );
+}
+
+// Add a numbered waypoint marker. Pressing it turns it red and makes it
+// draggable; releasing turns it back to blue.
+function addWaypointMarker(lat, lng, label, selected, id) {
+  if (!mapsApi || !map.value) return;
+  const marker = new mapsApi.Marker({
+    position: new mapsApi.LatLng(lat, lng),
+    map: map.value,
+    icon: waypointIcon(label, selected),
+    clickable: true,
+    cursor: 'pointer',
+  });
+  marker.wpId = id;
+  marker.wpLabel = label;
+  marker.addListener('mousedown', () => {
+    selectedWaypointId = id;
+    marker.setIcon(waypointIcon(label, true));
+    emit('waypointPress', id);
+    startWaypointDrag(marker, id);
+  });
+  waypointMarkers.push(marker);
+}
+
+// Press-and-drag on the selected (red) waypoint circle: move the marker and
+// stream the new position to the parent so the Route list follows live.
+// The map's own panning is suspended for the duration of the drag.
+function startWaypointDrag(marker, id) {
+  if (wpDrag || !map.value) return;
+  map.value.setOptions({ draggable: false });
+  const moveL = map.value.addListener('mousemove', (e) => {
+    if (!wpDrag) return;
+    marker.setPosition(e.latLng);
+    emit('waypointMove', { id, lat: e.latLng.lat(), lng: e.latLng.lng() });
+  });
+  // The map's own 'mouseup' does NOT fire when the pointer is released over
+  // a marker, so end the drag on the DOM-level mouseup instead — it fires
+  // no matter where the release happens.
+  const endDrag = () => {
+    mapsApi.event.removeListener(moveL);
+    if (map.value) map.value.setOptions({ draggable: true });
+    wpDrag = null;
+    lastWpDragEnd = Date.now();
+    // Release: back to the original blue.
+    marker.setIcon(waypointIcon(marker.wpLabel, false));
+    selectedWaypointId = null;
+    emit('waypointRelease', id);
+  };
+  window.addEventListener('mouseup', endDrag, { once: true });
+  wpDrag = { id, marker, moveL, endDrag };
 }
 
 // Catmull-Rom (interpolating cubic B-spline) sample at parameter t.
@@ -639,10 +696,13 @@ function redrawWaypointPath(entries) {
 // Replace all waypoint markers AND the spline link (used after the waypoint
 // list changes — add or reorder — and the indices drawn inside the circles
 // shift).
-function redrawWaypointMarkers(entries) {
+function redrawWaypointMarkers(entries, selectedId) {
+  selectedWaypointId = selectedId ?? null;
   waypointMarkers.forEach((m) => m.setMap(null));
   waypointMarkers = [];
-  (entries || []).forEach((e) => addWaypointMarker(e.lat, e.lng, e.index));
+  (entries || []).forEach((e) =>
+    addWaypointMarker(e.lat, e.lng, e.index, e.id === selectedWaypointId, e.id)
+  );
   redrawWaypointPath(entries || []);
 }
 
@@ -655,6 +715,7 @@ defineExpose({
   getCursorLatLng,
   addWaypointMarker,
   redrawWaypointMarkers,
+  redrawWaypointPath,
 });
 
 watch(() => [props.isPicking, props.isPanelOpen], () => {
