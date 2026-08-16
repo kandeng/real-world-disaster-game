@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { loadGoogleMaps } from './googleMaps.js';
+import { splinePath } from './spline.js';
 import droneIconUrl from '../../icons/drone.svg';
 
 const { t, locale } = useI18n();
@@ -643,34 +644,6 @@ function startWaypointDrag(marker, id) {
   };
   window.addEventListener('mouseup', endDrag, { once: true });
   wpDrag = { id, marker, moveL, endDrag };
-}
-
-// Catmull-Rom (interpolating cubic B-spline) sample at parameter t.
-function crSpline(a, b, c, d, t) {
-  return 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (-a + 3 * b - 3 * c + d) * t * t * t);
-}
-
-// Dense polyline path of a smooth spline passing through every waypoint
-// in order, so the drawn link actually touches each circle.
-function splinePath(points, samplesPerSeg = 16) {
-  if (points.length < 2) return [];
-  const pts = [points[0], ...points, points[points.length - 1]];
-  const out = [];
-  for (let i = 0; i < pts.length - 3; i++) {
-    const p0 = pts[i];
-    const p1 = pts[i + 1];
-    const p2 = pts[i + 2];
-    const p3 = pts[i + 3];
-    for (let s = 0; s < samplesPerSeg; s++) {
-      const t = s / samplesPerSeg;
-      out.push({
-        lat: crSpline(p0.lat, p1.lat, p2.lat, p3.lat, t),
-        lng: crSpline(p0.lng, p1.lng, p2.lng, p3.lng, t),
-      });
-    }
-  }
-  out.push({ lat: points[points.length - 1].lat, lng: points[points.length - 1].lng });
-  return out;
 }
 
 // Draw the spline as a single polyline UNDER the waypoint markers (Google

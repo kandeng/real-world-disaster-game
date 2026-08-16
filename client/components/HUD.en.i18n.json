@@ -2,6 +2,7 @@
   "flight": "Flight",
   "camera": "Camera",
   "position": "Position",
+  "speed": "Speed",
   "direction": "Direction",
   "gimbal": "Gimbal",
   "mode": "Mode:",

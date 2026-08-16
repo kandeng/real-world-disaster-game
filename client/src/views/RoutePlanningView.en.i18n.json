@@ -8,5 +8,12 @@
   "no_results": "No results found.",
   "waypoint_hint": "Please click the left button of mouse to add a new waypoint",
   "no_waypoints": "No waypoints yet.",
-  "remove_waypoint": "Remove waypoint"
+  "remove_waypoint": "Remove waypoint",
+  "camera": "Camera",
+  "position": "Position",
+  "speed": "Speed",
+  "steer": "Steer",
+  "preview": "Preview",
+  "save": "Save",
+  "preview_need_waypoints": "Add at least two waypoints before preview."
 }

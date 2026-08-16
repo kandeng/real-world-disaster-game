@@ -8,6 +8,9 @@ const drone = reactive({
   lon: settings.defaultLon,
   alt: settings.defaultAlt,
   heading: settings.defaultYaw,
+  // Scalar speed along the flying trajectory (m/s); updated by the sim
+  // loop each frame, displayed in the HUD.
+  speed: 0,
 });
 
 const gimbal = reactive({

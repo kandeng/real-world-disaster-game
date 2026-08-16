@@ -4,6 +4,9 @@ import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { MapView } from '@/2d_map/index.js';
 import { useDrone } from '@shared-composables/useDrone.js';
+import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
+import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
+import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
@@ -16,8 +19,27 @@ import cancelIcon from '../../icons/cancel.svg';
 
 const Cesium = window.Cesium;
 const { t } = useI18n();
-const { drone } = useDrone();
+const { drone, gimbal } = useDrone();
 const { settings } = useAppSettings();
+
+// 3D subpage scene controller: sim loop, Flight/Gimbal disk state and the
+// first-person preview flight + recording (singleton composable).
+const routeScene = useRouteScene3D();
+const { flight, onFlightMove, onFlightStop, onFlightModeChange } = useFlightCommands();
+const { camera, onCameraMove, onCameraStop, onCameraModeChange } = useCameraCommands();
+const is3d = computed(() => viewMode.value === '3d');
+const previewActive = routeScene.previewActive; // template binding (auto-unwrapped)
+// The disks mirror the 3D Aerial positions; they are hidden while a preview
+// is running AND while the Route list box is open (no overlap).
+const showFlightDisk = computed(
+  () => is3d.value && routeScene.showFlight.value && !routeScene.previewActive.value && !showRoutePanel.value
+);
+const showCameraDisk = computed(
+  () => is3d.value && routeScene.showCamera.value && !routeScene.previewActive.value && !showRoutePanel.value
+);
+// HUD dashboard as in 3D Aerial — hidden only while the preview flight is
+// playing or while Save is settling/downloading the clip.
+const showHudDashboard = computed(() => is3d.value && !routeScene.previewActive.value && !routeScene.saving.value);
 const { leftItems, rightItems, registerLeft, registerRight, unregisterRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 
@@ -102,7 +124,18 @@ function onWaypointClick() {
 function onMapClick({ lat, lng }) {
   if (!showWaypointHint.value) return;
   const index = waypoints.value.length + 1;
-  waypoints.value.push({ id: ++wpSeq, index, lat, lng });
+  // Each waypoint card carries its own position / speed / camera values.
+  waypoints.value.push({
+    id: ++wpSeq,
+    index,
+    lat,
+    lng,
+    alt: 0,
+    speed: 0,
+    camYaw: 0,
+    camPitch: 0,
+    camRoll: 0,
+  });
   // Redraw circles + the spline link so both always match the list.
   // Always blue here: red is reserved for an active press.
   mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
@@ -119,31 +152,45 @@ function onMapReady() {
 // ── Route panel: draggable waypoint list ──────────────────────────────────
 let wpSeq = 0; // stable row id (Vue :key) independent of the position index
 
-function fmtCoord(v) {
+function fmtCoord(v, digits = 4) {
   const n = Number(v);
-  return isNaN(n) ? '' : n.toFixed(4);
+  return isNaN(n) ? '' : n.toFixed(digits);
 }
 
-// Edit a waypoint's lat/lon directly in the Route list: commit on blur or
-// Enter, move the blue circle to the new position and redraw the spline.
+// Wrap an angle into (-180, 180].
+function normAngle(v) {
+  return ((((v + 180) % 360) + 360) % 360) - 180;
+}
+
+// Edit one field of a waypoint card directly in the Route list: commit on
+// blur or Enter. Position / speed keep 4 decimals, camera angles 2. For
+// lat/lon the blue circle moves to the new position and the spline redraws.
 function onEditCoord(event, pos, field) {
   const wp = waypoints.value[pos];
   if (!wp) return;
+  const digits = field.startsWith('cam') ? 2 : 4;
   let v = parseFloat(event.target.value);
   if (isNaN(v)) {
-    event.target.value = fmtCoord(wp[field]);
+    event.target.value = fmtCoord(wp[field], digits);
     return;
   }
   if (field === 'lat') v = Math.max(-90, Math.min(90, v));
-  else v = Math.max(-180, Math.min(180, v));
+  else if (field === 'lng') v = Math.max(-180, Math.min(180, v));
+  else if (field === 'alt') v = Math.max(0, Math.min(100000, v));
+  else if (field === 'speed') v = Math.max(0, Math.min(1000, v));
+  else if (field === 'camPitch') v = Math.max(-90, Math.min(90, v));
+  else v = normAngle(v); // camYaw / camRoll
   wp[field] = v;
-  event.target.value = fmtCoord(v);
-  mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+  event.target.value = fmtCoord(v, digits);
+  // Only the horizontal position affects the map circles / spline.
+  if (field === 'lat' || field === 'lng') {
+    mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+  }
 }
 
-// Row height (34px) + list gap (6px) — keep in sync with the CSS below so
+// Card height (78px) + list gap (6px) — keep in sync with the CSS below so
 // the pointer delta maps 1:1 onto row positions while dragging.
-const WP_ROW_HEIGHT = 40;
+const WP_ROW_HEIGHT = 84;
 const drag = ref(null); // { startPos, curPos, startY, offset }
 
 // Waypoint row whose cancel icon is currently visible (clicked row).
@@ -155,6 +202,17 @@ function onRowPointerDown(event, pos) {
   selectedWpId.value = waypoints.value[pos] ? waypoints.value[pos].id : null;
   // The clicked row's waypoint turns red on the map.
   mapViewRef.value?.redrawWaypointMarkers(waypoints.value, selectedWpId.value);
+  // 3D: selecting a row flies the virtual drone to that waypoint. The HUD
+  // rows read the shared drone/gimbal state, so they update immediately,
+  // and the sim loop re-slaves the Cesium camera to the new position with
+  // the current gimbal angles on the next frame.
+  if (viewMode.value === '3d') {
+    const wp = waypoints.value[pos];
+    if (wp) {
+      drone.lat = wp.lat;
+      drone.lon = wp.lng;
+    }
+  }
   drag.value = { startPos: pos, curPos: pos, startY: event.clientY, offset: 0 };
   window.addEventListener('pointermove', onRowPointerMove);
   window.addEventListener('pointerup', onRowPointerUp);
@@ -343,6 +401,100 @@ function unregisterRightDock() {
   unregisterRight('route');
 }
 
+// ── Right dock in the 3D subpage: Camera / Steer / Route / Preview / Save ──
+// The Route list box and the Flight / Gimbal disks are mutually exclusive:
+// opening one hides the other. Any of Camera / Steer / Route clicked while
+// a preview is running stops the preview first.
+function onClickCamera3D() {
+  routeScene.stopPreview();
+  const turningOn = !routeScene.showCamera.value;
+  routeScene.showCamera.value = turningOn;
+  if (turningOn) showRoutePanel.value = false; // disk shows -> list hides
+}
+
+function onClickSteer3D() {
+  routeScene.stopPreview();
+  const turningOn = !routeScene.showFlight.value;
+  routeScene.showFlight.value = turningOn;
+  if (turningOn) showRoutePanel.value = false; // disk shows -> list hides
+}
+
+function onClickRoute3D() {
+  routeScene.stopPreview();
+  const opening = !showRoutePanel.value;
+  onClickRoute();
+  if (opening) {
+    // List shows -> both disks hide.
+    routeScene.showFlight.value = false;
+    routeScene.showCamera.value = false;
+  }
+}
+
+const showPreviewHint = ref(false);
+let previewHintTimer = null;
+
+function onClickPreview() {
+  if (routeScene.previewActive.value) {
+    routeScene.stopPreview();
+    return;
+  }
+  // Preview owns the screen: disks and the Route list are hidden.
+  showRoutePanel.value = false;
+  if (!routeScene.startPreview(waypoints.value)) {
+    // Green top-center reminder: the preview needs at least two waypoints.
+    showPreviewHint.value = true;
+    clearTimeout(previewHintTimer);
+    previewHintTimer = setTimeout(() => {
+      showPreviewHint.value = false;
+    }, 2500);
+  }
+}
+
+function onClickSave() {
+  routeScene.saveClip();
+}
+
+function registerRightDock3D() {
+  registerRight({
+    id: 'camera',
+    icon: 'MENU_CAMERA',
+    titleKey: 'routeplanningview.camera',
+    active: routeScene.showCamera.value,
+    onClick: onClickCamera3D,
+  });
+  registerRight({
+    id: 'steer',
+    icon: 'MENU_CONTROL_STICK',
+    titleKey: 'routeplanningview.steer',
+    active: routeScene.showFlight.value,
+    onClick: onClickSteer3D,
+  });
+  registerRight({
+    id: 'route',
+    icon: 'MENU_LIST',
+    titleKey: 'routeplanningview.route',
+    active: showRoutePanel.value,
+    onClick: onClickRoute3D,
+  });
+  registerRight({
+    id: 'preview',
+    icon: 'MENU_PREVIEW',
+    titleKey: 'routeplanningview.preview',
+    active: routeScene.previewActive.value,
+    onClick: onClickPreview,
+  });
+  registerRight({
+    id: 'save',
+    icon: 'MENU_SAVE',
+    titleKey: 'routeplanningview.save',
+    onClick: onClickSave,
+  });
+}
+
+function unregisterRightDock3D() {
+  ['camera', 'steer', 'route', 'preview', 'save'].forEach((id) => unregisterRight(id));
+}
+
 onMounted(() => {
   checkGoogleConnection();
   checkCesiumConnection();
@@ -391,29 +543,72 @@ onMounted(() => {
   // and is removed entirely while the 3D tiles are shown.
   registerRightDock();
 
-  // Keep dock buttons' active state in sync with mode / panels.
-  watch([viewMode, showRoutePanel, showSearchPanel, showWaypointHint], () => {
-    const b2 = leftItems.find((i) => i.id === 'mode_2d');
-    if (b2) b2.active = viewMode.value !== '3d';
-    const b3 = leftItems.find((i) => i.id === 'mode_3d');
-    if (b3) b3.active = viewMode.value === '3d';
-    const bs = rightItems.find((i) => i.id === 'search');
-    if (bs) bs.active = showSearchPanel.value;
-    const br = rightItems.find((i) => i.id === 'route');
-    if (br) br.active = showRoutePanel.value;
+  // Keep dock buttons' active state in sync with mode / panels, and swap
+  // the right sidebar content between the 2D and 3D subpages.
+  watch(
+    [viewMode, showRoutePanel, showSearchPanel, showWaypointHint, previewActive, routeScene.showFlight, routeScene.showCamera],
+    () => {
+      const b2 = leftItems.find((i) => i.id === 'mode_2d');
+      if (b2) b2.active = viewMode.value !== '3d';
+      const b3 = leftItems.find((i) => i.id === 'mode_3d');
+      if (b3) b3.active = viewMode.value === '3d';
 
-    if (viewMode.value === '3d') {
-      showSearchPanel.value = false;
-      showWaypointHint.value = false;
-      unregisterRightDock();
-    } else if (!rightItems.some((i) => i.id === 'search')) {
-      registerRightDock();
+      if (viewMode.value === '3d') {
+        showSearchPanel.value = false;
+        showWaypointHint.value = false;
+        if (!rightItems.some((i) => i.id === 'preview')) {
+          unregisterRightDock();
+          registerRightDock3D();
+        }
+        const bc = rightItems.find((i) => i.id === 'camera');
+        if (bc) bc.active = routeScene.showCamera.value;
+        const bs = rightItems.find((i) => i.id === 'steer');
+        if (bs) bs.active = routeScene.showFlight.value;
+        const br = rightItems.find((i) => i.id === 'route');
+        if (br) br.active = showRoutePanel.value;
+        const bp = rightItems.find((i) => i.id === 'preview');
+        if (bp) bp.active = routeScene.previewActive.value;
+      } else {
+        if (!rightItems.some((i) => i.id === 'search')) {
+          unregisterRightDock3D();
+          registerRightDock();
+        }
+        const bs = rightItems.find((i) => i.id === 'search');
+        if (bs) bs.active = showSearchPanel.value;
+        const br = rightItems.find((i) => i.id === 'route');
+        if (br) br.active = showRoutePanel.value;
+      }
+    }
+  );
+
+  // Sim loop lifecycle: runs only while the 3D subpage is shown.
+  watch(is3d, (now3d) => {
+    if (now3d) {
+      // The sim loop slaves the Cesium camera to the drone state every
+      // frame; point the virtual drone at the default view so the 3D
+      // subpage opens exactly where onClick3D recenters.
+      drone.lat = settings.defaultLat;
+      drone.lon = settings.defaultLon;
+      drone.alt = settings.defaultAlt;
+      drone.heading = settings.defaultYaw;
+      gimbal.yaw = 0;
+      gimbal.pitch = settings.defaultPitch;
+      gimbal.roll = settings.defaultRoll;
+      routeScene.startLoop();
+    } else {
+      routeScene.stopPreview();
+      routeScene.stopLoop();
+      routeScene.showFlight.value = false;
+      routeScene.showCamera.value = false;
     }
   });
 });
 
 onUnmounted(() => {
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
+  if (previewHintTimer) clearTimeout(previewHintTimer);
+  routeScene.stopPreview();
+  routeScene.stopLoop();
   clear();
   unregisterPage('aerial');
   unregisterPage('map');
@@ -429,11 +624,17 @@ onUnmounted(() => {
   <ViewComposer
     :left-items="leftItems"
     :right-items="rightItems"
-    :show-flight="false"
-    :show-camera="false"
-    :show-hud="false"
-    :flight="{ mode: '-', vx: 0, vy: 0, yaw: 0, vz: 0 }"
-    :camera="{ mode: '-', yaw: 0, pitch: 0, roll: 0 }"
+    :show-flight="showFlightDisk"
+    :show-camera="showCameraDisk"
+    :show-hud="showHudDashboard"
+    :flight="flight"
+    :camera="camera"
+    @flightMove="onFlightMove"
+    @flightStop="onFlightStop"
+    @flightModeChange="onFlightModeChange"
+    @cameraMove="onCameraMove"
+    @cameraStop="onCameraStop"
+    @cameraModeChange="onCameraModeChange"
   >
     <template #top-overlay>
       <ConnectionError :visible="showConnectionError" :message="connectionMessage" />
@@ -441,6 +642,11 @@ onUnmounted(() => {
       <!-- Green top-center reminder while waypoint picking is armed -->
       <div v-if="showWaypointHint" class="top-center-message top-center-message--success">
         {{ t('routeplanningview.waypoint_hint') }}
+      </div>
+
+      <!-- Green top-center reminder: preview needs >= 2 waypoints -->
+      <div v-if="showPreviewHint" class="top-center-message top-center-message--success">
+        {{ t('routeplanningview.preview_need_waypoints') }}
       </div>
 
       <!-- Address search popup -->
@@ -477,36 +683,92 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Route popup -->
-      <div v-if="showRoutePanel" class="route-panel">
+      <!-- Route popup (hidden while a preview flight is running) -->
+      <div v-if="showRoutePanel && !previewActive" class="route-panel">
         <div class="route-panel__title">{{ t('routeplanningview.panel_title') }}</div>
         <div v-if="waypoints.length" class="route-panel__list">
           <div v-for="(wp, pos) in waypoints" :key="wp.id" class="route-panel__row">
             <!-- Slot index: stays put while the rows are dragged. -->
             <span class="route-panel__idx">{{ pos + 1 }}</span>
             <div
-              class="route-panel__wp"
-              :class="{ 'route-panel__wp--dragging': drag && drag.curPos === pos }"
+              class="route-panel__card"
+              :class="{ 'route-panel__card--dragging': drag && drag.curPos === pos }"
               @pointerdown="onRowPointerDown($event, pos)"
             >
-              <!-- Editable coordinates: editing moves the blue circle. The
-                   stop keeps text selection/caret clicks from starting a
-                   row drag. -->
-              <input
-                class="route-panel__coord"
-                :value="fmtCoord(wp.lat)"
-                @pointerdown.stop
-                @keyup.enter="$event.target.blur()"
-                @change="onEditCoord($event, pos, 'lat')"
-              />
-              <span class="route-panel__sep">,</span>
-              <input
-                class="route-panel__coord"
-                :value="fmtCoord(wp.lng)"
-                @pointerdown.stop
-                @keyup.enter="$event.target.blur()"
-                @change="onEditCoord($event, pos, 'lng')"
-              />
+              <!-- Position: editable lat/lon/alt (editing lat/lon moves the
+                   blue circle). The stop keeps text selection/caret clicks
+                   from starting a row drag. 4 decimals. -->
+              <div class="route-panel__line">
+                <span class="route-panel__label">{{ t('routeplanningview.position') }}</span>
+                <span class="route-panel__unit">lat:</span>
+                <input
+                  class="route-panel__coord route-panel__coord--lat"
+                  :value="fmtCoord(wp.lat)"
+                  @pointerdown.stop
+                  @keyup.enter="$event.target.blur()"
+                  @change="onEditCoord($event, pos, 'lat')"
+                />
+                <span class="route-panel__sep">|</span>
+                <span class="route-panel__unit">lon:</span>
+                <input
+                  class="route-panel__coord"
+                  :value="fmtCoord(wp.lng)"
+                  @pointerdown.stop
+                  @keyup.enter="$event.target.blur()"
+                  @change="onEditCoord($event, pos, 'lng')"
+                />
+                <span class="route-panel__sep">|</span>
+                <span class="route-panel__unit">alt:</span>
+                <input
+                  class="route-panel__coord route-panel__coord--alt"
+                  :value="fmtCoord(wp.alt)"
+                  @pointerdown.stop
+                  @keyup.enter="$event.target.blur()"
+                  @change="onEditCoord($event, pos, 'alt')"
+                />
+              </div>
+              <!-- Speed along the trajectory. Editable, 4 decimals. -->
+              <div class="route-panel__line">
+                <span class="route-panel__label">{{ t('routeplanningview.speed') }}</span>
+                <span class="route-panel__unit">v:</span>
+                <input
+                  class="route-panel__coord"
+                  :value="fmtCoord(wp.speed)"
+                  @pointerdown.stop
+                  @keyup.enter="$event.target.blur()"
+                  @change="onEditCoord($event, pos, 'speed')"
+                />
+              </div>
+              <!-- Camera (gimbal) angles. Editable, 2 decimals. -->
+              <div class="route-panel__line">
+                <span class="route-panel__label">{{ t('routeplanningview.camera') }}</span>
+                <span class="route-panel__unit">yaw:</span>
+                <input
+                  class="route-panel__coord route-panel__coord--ang"
+                  :value="fmtCoord(wp.camYaw, 2)"
+                  @pointerdown.stop
+                  @keyup.enter="$event.target.blur()"
+                  @change="onEditCoord($event, pos, 'camYaw')"
+                />
+                <span class="route-panel__sep">|</span>
+                <span class="route-panel__unit">pitch:</span>
+                <input
+                  class="route-panel__coord route-panel__coord--pitch"
+                  :value="fmtCoord(wp.camPitch, 2)"
+                  @pointerdown.stop
+                  @keyup.enter="$event.target.blur()"
+                  @change="onEditCoord($event, pos, 'camPitch')"
+                />
+                <span class="route-panel__sep">|</span>
+                <span class="route-panel__unit">roll:</span>
+                <input
+                  class="route-panel__coord route-panel__coord--ang"
+                  :value="fmtCoord(wp.camRoll, 2)"
+                  @pointerdown.stop
+                  @keyup.enter="$event.target.blur()"
+                  @change="onEditCoord($event, pos, 'camRoll')"
+                />
+              </div>
             </div>
             <button
               class="route-panel__cancel"
@@ -599,8 +861,8 @@ onUnmounted(() => {
   gap: 6px;
 }
 
-/* Each waypoint row is a grabbable box; drag it up/down to reorder.
-   Height 34px + 6px gap = WP_ROW_HEIGHT (40) in the script. */
+/* Each waypoint row holds a grabbable card; drag it up/down to reorder.
+   Card height 78px + 6px gap = WP_ROW_HEIGHT (84) in the script. */
 .route-panel__row {
   flex-shrink: 0;
   display: flex;
@@ -640,15 +902,34 @@ onUnmounted(() => {
   height: 100%;
 }
 
-/* Editable lat/lon fields inside each draggable row. */
+/* Editable fields inside the card lines. Left-aligned and sized to the
+   widest value of each field so the value hugs its name (one space). */
 .route-panel__coord {
   width: 9ch;
+  height: 18px;
+  box-sizing: border-box;
   padding: 0;
   border: none;
   background: transparent;
   font: inherit;
   color: inherit;
-  text-align: right;
+  text-align: left;
+}
+
+.route-panel__coord--lat {
+  width: 8ch; /* -90.0000 */
+}
+
+.route-panel__coord--alt {
+  width: 11ch; /* 100000.0000 */
+}
+
+.route-panel__coord--ang {
+  width: 7ch; /* -180.00 */
+}
+
+.route-panel__coord--pitch {
+  width: 6ch; /* -90.00 */
 }
 
 .route-panel__coord:focus {
@@ -656,16 +937,29 @@ onUnmounted(() => {
   border-radius: 3px;
 }
 
+/* Pipe separators: two character spaces on each side (line gap 4px +
+   margin 4px per side). */
 .route-panel__sep {
-  margin: 0 2px;
+  margin: 0 4px;
 }
 
-.route-panel__wp {
+/* Small field prefixes inside a card line (lat:, lon:, alt:, v:, yaw: ...). */
+.route-panel__unit {
+  flex-shrink: 0;
+  color: rgba(30, 40, 60, 0.8);
+}
+
+/* Waypoint card: three lines — Position, Speed, Camera. Fixed height so
+   the drag math (WP_ROW_HEIGHT) stays exact. */
+.route-panel__card {
   flex: 1;
   min-width: 0;
-  height: 34px;
+  height: 78px;
+  box-sizing: border-box;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
   padding: 0 12px;
   border: 1px solid rgba(37, 99, 235, 0.5);
   border-radius: 8px;
@@ -679,14 +973,32 @@ onUnmounted(() => {
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.route-panel__wp:hover {
+.route-panel__card:hover {
   background: rgba(255, 255, 255, 0.55);
 }
 
-.route-panel__wp--dragging {
+.route-panel__card--dragging {
   border-color: #2563eb;
   background: rgba(37, 99, 235, 0.15);
   cursor: grabbing;
+}
+
+/* One line inside the card: fixed label column + values. The gap between
+   a variable name and its value is a single character space. */
+.route-panel__line {
+  height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.route-panel__label {
+  flex-shrink: 0;
+  width: 62px;
+  font-weight: 600;
+  color: rgba(30, 40, 60, 0.8);
 }
 
 .route-panel__empty {

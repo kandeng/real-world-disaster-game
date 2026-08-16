@@ -8,5 +8,12 @@
   "no_results": "未找到结果",
   "waypoint_hint": "请点击鼠标左键添加新航点",
   "no_waypoints": "暂无航点",
-  "remove_waypoint": "删除航点"
+  "remove_waypoint": "删除航点",
+  "camera": "相机",
+  "position": "位置",
+  "speed": "速度",
+  "steer": "操控",
+  "preview": "预览",
+  "save": "保存",
+  "preview_need_waypoints": "请至少添加两个航点后再预览"
 }

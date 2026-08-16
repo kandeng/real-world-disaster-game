@@ -2,6 +2,7 @@
   "flight": "飞行",
   "camera": "相机",
   "position": "位置",
+  "speed": "速度",
   "direction": "方向",
   "gimbal": "云台",
   "mode": "模式:",
