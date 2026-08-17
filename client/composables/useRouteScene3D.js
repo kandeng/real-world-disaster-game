@@ -29,12 +29,15 @@ const WP_DEFAULT_ALT_M = 150;
 const WP_DEFAULT_SPEED_MPS = 8.0;
 const WP_DEFAULT_CAM_PITCH_DEG = -90;
 
-// Preview quality gate: the flight advances only while every tile of the
-// current view is downloaded AND rendered (tileset.tilesLoaded), and only
-// after READY_HOLD consecutive ready frames — the quality of each frame
-// beats the speed of the simulation. waitingTiles drives the spinning-
-// circle overlay while the view is stuck waiting.
-const READY_HOLD = 15; // ~0.25 s at 60 fps of stable readiness before moving
+// Preview quality gate. BEFORE takeoff the view is hard-stuck until the
+// start view is fully rendered (READY_HOLD stable ready frames). Once
+// airborne the flight rides through short tile-streaming "waves" (Google's
+// tileset refines in waves — see cesium-main.js) on a GRACE_FRAMES budget
+// instead of stopping at every one, and hard-stops (view frozen, spinning
+// circle) only once the grace runs out — continuous motion, no judder.
+const READY_HOLD = 15;   // ~0.25 s at 60 fps of stable readiness before takeoff
+const GRACE_FRAMES = 30; // ~0.5 s at 60 fps of ride-through while tiles stream
+const RESUME_HOLD = 5;   // stable ready frames needed to resume after a hard stop
 
 // Virtual-drone cruise speed along the route (the HUD's v while focused).
 // Default matches the 3D Aerial Takeoff/Landing auto speed (useAltitudeGate
@@ -68,6 +71,8 @@ let captureMode = false;     // Save: record the flight into a 16:9 mp4
 let captureCompleted = false;
 let captureDoneResolve = null;
 let readyStreak = 0;         // consecutive tile-ready frames
+let graceFrames = 0;         // ride-through budget while tiles stream in
+let flightReleased = false;  // takeoff gate passed -> grace window applies
 // True while the preview/save flight is stuck waiting for the 3D tiles of
 // the current view; the view shows a spinning circle and does not advance.
 const waitingTiles = ref(false);
@@ -200,8 +205,7 @@ function stepManualFrame(dt) {
   }
 }
 
-function stepFrame() {
-  const dt = 1 / 60;
+function stepFrame(dt) {
   // Trajectory speed for the HUD: the 3D ground distance + vertical change
   // covered this frame, divided by dt.
   const pLat = drone.lat;
@@ -223,11 +227,22 @@ function stepFrame() {
   syncCesiumCamera();
 }
 
-function loop() {
+let lastLoopTs = 0; // rAF timestamp of the previous frame
+
+function loop(ts) {
   // A single bad frame must never kill the loop: if it stops, the scene
   // freezes and the disks appear dead. Log throttled and keep animating.
   try {
-    stepFrame();
+    // Real elapsed time, clamped: the flight advances at a constant rate
+    // regardless of render fps (photorealistic tiles routinely drop below
+    // 60 fps on this machine), and a slow frame / tab switch never causes
+    // a big positional jump. A fixed 1/60 s step used to make the motion
+    // speed track the frame rate and uneven frames become visible judder.
+    const dt = lastLoopTs > 0
+      ? Math.min(0.05, Math.max(1 / 240, (ts - lastLoopTs) / 1000))
+      : 1 / 60;
+    lastLoopTs = ts;
+    stepFrame(dt);
   } catch (err) {
     const now = Date.now();
     if (now - lastErrorLogTs > 2000) {
@@ -240,6 +255,7 @@ function loop() {
 
 function startLoop() {
   if (rafId) return;
+  lastLoopTs = 0;
   startFlightKeyboard();
   startCameraKeyboard();
   // The loop owns the camera while this page is in 3D: disable Cesium's
@@ -255,6 +271,7 @@ function stopLoop() {
     cancelAnimationFrame(rafId);
     rafId = null;
   }
+  lastLoopTs = 0;
   drone.speed = 0; // HUD must not show a stale speed once the loop stops.
   stopFlightKeyboard();
   stopCameraKeyboard();
@@ -383,21 +400,41 @@ function sampleAtDistance(dist) {
 }
 
 function stepPreviewFrame(dt) {
-  // Quality gate: the flight is stuck (view frozen, spinning circle up)
-  // until every tile of the current view is downloaded AND rendered, plus
-  // READY_HOLD stable frames — the best quality of each frame beats the
-  // speed of the simulation.
-  if (!sceneTilesReady()) {
+  // Quality gate. Before takeoff the view is hard-stuck until the start
+  // view is fully rendered. Once airborne the flight rides through short
+  // tile-streaming waves on the grace budget (tiles keep loading while the
+  // drone keeps moving) and only hard-stops — view frozen, spinning circle
+  // up — when the budget runs out; it resumes after RESUME_HOLD stable
+  // ready frames. Continuous motion instead of stop-and-go judder.
+  const ready = sceneTilesReady();
+  if (!flightReleased) {
+    if (!ready) {
+      readyStreak = 0;
+      waitingTiles.value = true;
+      return;
+    }
+    readyStreak += 1;
+    if (readyStreak < READY_HOLD) {
+      waitingTiles.value = true;
+      return;
+    }
+    flightReleased = true;
+    graceFrames = GRACE_FRAMES;
+    waitingTiles.value = false;
+  } else if (ready) {
+    readyStreak += 1;
+    graceFrames = GRACE_FRAMES; // refill the ride-through budget
+    if (waitingTiles.value && readyStreak < RESUME_HOLD) return; // settle after a hard stop
+    waitingTiles.value = false;
+  } else if (graceFrames > 0) {
+    graceFrames -= 1;
+    readyStreak = 0;
+    // Ride through: keep flying while the missing tiles stream in.
+  } else {
     readyStreak = 0;
     waitingTiles.value = true;
-    return;
+    return; // hard stop until the missing tiles arrive
   }
-  readyStreak += 1;
-  if (readyStreak < READY_HOLD) {
-    waitingTiles.value = true;
-    return;
-  }
-  waitingTiles.value = false;
   // Save: start the recorder only once the first view is fully rendered,
   // so the mp4 contains no blurry pre-roll frames.
   if (captureMode && !mediaRecorder) startRecording();
@@ -482,6 +519,8 @@ function startPreview(waypoints, opts = {}) {
   showCamera.value = false;
   hideRouteOverlay();
   readyStreak = 0; // stuck until the start view's tiles are fully rendered
+  graceFrames = 0;
+  flightReleased = false;
 
   // Jump to the start waypoint with its own altitude and gimbal angles.
   const wpStart = flightDir < 0 ? list[list.length - 1] : list[0];
@@ -510,6 +549,8 @@ function stopPreview() {
   previewWps = [];
   wpArcDist = [];
   readyStreak = 0;
+  graceFrames = 0;
+  flightReleased = false;
   previewHudSpeed = 0;
   // Back to the nadir, north-up overview orientation.
   drone.heading = 0;

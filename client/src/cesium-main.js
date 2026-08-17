@@ -219,6 +219,11 @@ async function loadArena() {
         googleTileset = await Cesium.createGooglePhotorealistic3DTileset({
             onlyUsingWithGoogleGeocoder: true,
         });
+        // Larger tile cache (default is 512 MB): on this machine the default
+        // evicts tiles that were just streamed, forcing them to be
+        // re-downloaded when the camera revisits the area — a major cause of
+        // repeated tile-streaming waves and choppy preview flights.
+        googleTileset.maximumMemoryUsage = 2048;
         // Explicit IBL spherical harmonics BEFORE the tileset enters the scene, so
         // every Google-tile model pipeline captures them when its shader is built —
         // otherwise scene.pickFromRay renders them with an empty vec3[9] uniform and
