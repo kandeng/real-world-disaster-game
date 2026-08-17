@@ -9,7 +9,6 @@ import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
-import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import DockButton from '@shared/DockButton.vue';
@@ -17,10 +16,8 @@ import ConnectionError from '@shared/ConnectionError.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import cancelIcon from '../../icons/cancel.svg';
 
-const Cesium = window.Cesium;
 const { t } = useI18n();
 const { drone, gimbal } = useDrone();
-const { settings } = useAppSettings();
 
 // 3D subpage scene controller: sim loop, Flight/Gimbal disk state and the
 // first-person preview flight + recording (singleton composable).
@@ -40,7 +37,7 @@ const showCameraDisk = computed(
 // HUD dashboard as in 3D Aerial — hidden only while the preview flight is
 // playing or while Save is settling/downloading the clip.
 const showHudDashboard = computed(() => is3d.value && !routeScene.previewActive.value && !routeScene.saving.value);
-const { leftItems, rightItems, registerLeft, registerRight, unregisterRight, clear } = useDockRegistry();
+const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 
 const { googleReady, cesiumReady, googleError, cesiumError } = useConnectionStatus();
@@ -56,51 +53,44 @@ const showConnectionError = computed(() => !cesiumReady.value || !googleReady.va
 let connectionCheckInterval = null;
 
 // Active background of this page:
-//   'street'    – 2D Google street map   (default)
-//   'satellite' – 2D Google satellite imagery
-//   '3d'        – Google Earth 3D tiles (the shared global Cesium viewer)
-// The `2D` dock button is a switcher between street and satellite.
+//   'street' – 2D Google street map (default; the `Waypoint` view)
+//   '3d'     – Google Earth 3D tiles (the shared global Cesium viewer)
+// The left `Map` button and the right `Waypoint` button both return to
+// the 2D street map (the entry state).
 const viewMode = ref('street');
 const showRoutePanel = ref(false);
 const showSearchPanel = ref(false);
 
-const mapTypeId = computed(() => (viewMode.value === 'satellite' ? 'satellite' : 'roadmap'));
+const mapTypeId = computed(() => 'roadmap');
 
-function onClick2D() {
-  // Switcher: street -> satellite -> street ...; from 3D enter at street.
-  viewMode.value = viewMode.value === 'street' ? 'satellite' : 'street';
-}
-
-function onClick3D() {
-  if (viewMode.value === '3d') return;
-  viewMode.value = '3d';
-  // Recenter the shared Cesium viewer on the default location (Stanford
-  // campus), exactly like the 3D Exploration page's initial view.
-  const viewer = window.cesiumViewer;
-  if (viewer && Cesium) {
-    viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(settings.defaultLon, settings.defaultLat, settings.defaultAlt),
-      orientation: {
-        heading: Cesium.Math.toRadians(settings.defaultYaw),
-        pitch: Cesium.Math.toRadians(settings.defaultPitch),
-        roll: Cesium.Math.toRadians(settings.defaultRoll),
-      },
-    });
-  }
+// The Map button returns to the 2D street map — the page's entry state.
+// Leaving 3D runs the watch(is3d) cleanup (stop loop, hide overlay, and
+// convert the camera altitude back to the 2D map model altitude).
+function onClickMap() {
+  viewMode.value = 'street';
 }
 
 // Only one of Search / Waypoint / Route may be visible at a time: opening
-// one hides the others' popups. The other buttons stay clickable —
-// clicking one simply switches which popup is shown.
+// one hides the others' popups. In 3D, opening the list stops any preview
+// and cancels the waypoint focus (disks hide); the blue overlay dots and
+// the spline stay visible in every 3D state.
 function onClickRoute() {
-  showRoutePanel.value = !showRoutePanel.value;
-  if (showRoutePanel.value) {
+  const opening = !showRoutePanel.value;
+  showRoutePanel.value = opening;
+  if (opening) {
     showSearchPanel.value = false;
     showWaypointHint.value = false;
+    ensureWaypointDefaults();
+    if (is3d.value) {
+      routeScene.stopPreview();
+      cancelFocus();
+    }
   }
 }
 
 function onClickSearch() {
+  // Address search lives on the 2D map: leave 3D first if needed.
+  if (!showSearchPanel.value && is3d.value) viewMode.value = 'street';
   showSearchPanel.value = !showSearchPanel.value;
   if (showSearchPanel.value) {
     showRoutePanel.value = false;
@@ -114,8 +104,11 @@ const showWaypointHint = ref(false);
 const waypoints = ref([]);
 
 function onWaypointClick() {
-  showWaypointHint.value = !showWaypointHint.value;
-  if (showWaypointHint.value) {
+  const arming = !showWaypointHint.value;
+  // Waypoint picking happens on the 2D map: leave 3D first if needed.
+  if (arming && is3d.value) viewMode.value = 'street';
+  showWaypointHint.value = arming;
+  if (arming) {
     showSearchPanel.value = false;
     showRoutePanel.value = false;
   }
@@ -130,10 +123,10 @@ function onMapClick({ lat, lng }) {
     index,
     lat,
     lng,
-    alt: 0,
-    speed: 0,
+    alt: WP_DEFAULT_ALT_M,
+    speed: WP_DEFAULT_SPEED_MPS,
     camYaw: 0,
-    camPitch: 0,
+    camPitch: WP_DEFAULT_CAM_PITCH_DEG,
     camRoll: 0,
   });
   // Redraw circles + the spline link so both always match the list.
@@ -147,10 +140,28 @@ function onMapClick({ lat, lng }) {
 // maintained waypoint circles and the spline link.
 function onMapReady() {
   mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+  scheduleTilePrefetch();
 }
 
 // ── Route panel: draggable waypoint list ──────────────────────────────────
 let wpSeq = 0; // stable row id (Vue :key) independent of the position index
+
+// Default waypoint values, used both when a waypoint is created and to
+// backfill any missing field when the Route list is opened.
+const WP_DEFAULT_ALT_M = 150;        // cruise altitude
+const WP_DEFAULT_SPEED_MPS = 8.0;    // same as the Takeoff/Landing auto speed
+const WP_DEFAULT_CAM_PITCH_DEG = -90; // nadir: look straight down
+
+// Fill in any missing waypoint field with its default value.
+function ensureWaypointDefaults() {
+  for (const wp of waypoints.value) {
+    if (wp.alt == null || isNaN(wp.alt)) wp.alt = WP_DEFAULT_ALT_M;
+    if (wp.speed == null || isNaN(wp.speed)) wp.speed = WP_DEFAULT_SPEED_MPS;
+    if (wp.camYaw == null || isNaN(wp.camYaw)) wp.camYaw = 0;
+    if (wp.camPitch == null || isNaN(wp.camPitch)) wp.camPitch = WP_DEFAULT_CAM_PITCH_DEG;
+    if (wp.camRoll == null || isNaN(wp.camRoll)) wp.camRoll = 0;
+  }
+}
 
 function fmtCoord(v, digits = 4) {
   const n = Number(v);
@@ -263,8 +274,8 @@ function onWaypointPress(id) {
   selectedWpId.value = id;
 }
 
-// Releasing the left mouse button: the MapView turned the circle back to
-// blue; redraw the B-spline link to match the final positions.
+// Releasing the left mouse button on a waypoint circle (with or without a
+// drag) just redraws the B-spline link to match the final positions.
 function onWaypointRelease() {
   mapViewRef.value?.redrawWaypointPath(waypoints.value);
 }
@@ -315,10 +326,26 @@ function onResultClick(poi) {
 function onMapCenterChange({ lat, lng }) {
   drone.lat = lat;
   drone.lon = lng;
+  scheduleTilePrefetch();
 }
 
 function onMapZoomChange(alt) {
   drone.alt = Math.max(0, Math.min(100000, alt));
+  scheduleTilePrefetch();
+}
+
+// ── 3D-tile prefetch while the 2D map is showing ──────────────────────────
+// The shared Cesium canvas keeps rendering (opacity 0) underneath the 2D
+// map; aiming its hidden camera at the current view streams/caches the
+// photorealistic tiles ahead of the 2D→3D hand-off. Throttled, and only
+// while in 2D (in 3D the sim loop owns the camera).
+let prefetchTimer = null;
+function scheduleTilePrefetch() {
+  if (is3d.value || prefetchTimer) return;
+  prefetchTimer = setTimeout(() => {
+    prefetchTimer = null;
+    if (!is3d.value) routeScene.prefetchTiles(drone.lat, drone.lon, drone.alt);
+  }, 250);
 }
 
 // Great-circle distance (meters) between two lat/lon pairs.
@@ -364,7 +391,7 @@ function onPoisError(message) {
   }
 }
 
-// ── Right dock: Search + Waypoint + Route, only while a 2D mode is active ──
+// ── Right dock: Search + Waypoint + Steer + Route (same in every mode) ──
 function registerRightDock() {
   registerRight({
     id: 'search',
@@ -385,7 +412,13 @@ function registerRightDock() {
       onClick: onWaypointClick,
     }),
   });
-  // Route lives in the right sidebar, third position (below Waypoint).
+  registerRight({
+    id: 'steer',
+    icon: 'MENU_CONTROL_STICK',
+    titleKey: 'routeplanningview.steer',
+    active: is3d.value,
+    onClick: onClickSteer,
+  });
   registerRight({
     id: 'route',
     icon: 'MENU_LIST',
@@ -395,39 +428,149 @@ function registerRightDock() {
   });
 }
 
-function unregisterRightDock() {
-  unregisterRight('search');
-  unregisterRight('waypoint');
-  unregisterRight('route');
-}
+// ── Steer mode: 3D nadir overview + two-stage waypoint focus ──────────────
+// Steer is a three-state cycle:
+//   2D street  -> 3D nadir overview (same center + scale as the 2D map,
+//                 blue dots + B-spline overlay)
+//   focused    -> roll back both animation stages to the nadir overview
+//   overview   -> back to the 2D street map
+// Clicking a blue dot in 3D starts the focus animation; afterwards the
+// Flight / Gimbal disks edit that waypoint (position / speed / angles).
+const focusedWpId = ref(null);
+let overviewPose = null;   // 3D nadir overview pose captured on first focus
+let steerTweenRaf = null;  // running drone-state tween (focus / rollback)
+let pickCleanup = null;    // 3D overlay waypoint click handler teardown
 
-// ── Right dock in the 3D subpage: Camera / Steer / Route / Preview / Save ──
-// The Route list box and the Flight / Gimbal disks are mutually exclusive:
-// opening one hides the other. Any of Camera / Steer / Route clicked while
-// a preview is running stops the preview first.
-function onClickCamera3D() {
+function onClickSteer() {
   routeScene.stopPreview();
-  const turningOn = !routeScene.showCamera.value;
-  routeScene.showCamera.value = turningOn;
-  if (turningOn) showRoutePanel.value = false; // disk shows -> list hides
-}
-
-function onClickSteer3D() {
-  routeScene.stopPreview();
-  const turningOn = !routeScene.showFlight.value;
-  routeScene.showFlight.value = turningOn;
-  if (turningOn) showRoutePanel.value = false; // disk shows -> list hides
-}
-
-function onClickRoute3D() {
-  routeScene.stopPreview();
-  const opening = !showRoutePanel.value;
-  onClickRoute();
-  if (opening) {
-    // List shows -> both disks hide.
-    routeScene.showFlight.value = false;
-    routeScene.showCamera.value = false;
+  if (!is3d.value) {
+    // 2D -> 3D nadir overview (the watch(is3d) entry sets center/scale).
+    showRoutePanel.value = false;
+    viewMode.value = '3d';
+    return;
   }
+  if (focusedWpId.value != null || steerTweenRaf) {
+    // Focused on a waypoint (or mid-animation): roll back both stages.
+    rollbackFocus();
+    return;
+  }
+  // Plain nadir overview: leave 3D back to the 2D street map.
+  viewMode.value = 'street';
+}
+
+function cancelSteerTween() {
+  if (steerTweenRaf) {
+    cancelAnimationFrame(steerTweenRaf);
+    steerTweenRaf = null;
+  }
+}
+
+// Animate the camera by tweening the drone state: the sim loop re-slaves
+// the Cesium camera to it every frame (cubic ease-in-out).
+function tweenDrone(to, durationMs, onDone) {
+  cancelSteerTween();
+  const from = { lat: drone.lat, lon: drone.lon, alt: drone.alt };
+  const t0 = performance.now();
+  const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const frame = (now) => {
+    const f = Math.min(1, (now - t0) / durationMs);
+    const k = ease(f);
+    drone.lat = from.lat + (to.lat - from.lat) * k;
+    drone.lon = from.lon + (to.lon - from.lon) * k;
+    drone.alt = from.alt + (to.alt - from.alt) * k;
+    if (f < 1) steerTweenRaf = requestAnimationFrame(frame);
+    else {
+      steerTweenRaf = null;
+      if (onDone) onDone();
+    }
+  };
+  steerTweenRaf = requestAnimationFrame(frame);
+}
+
+// Drop the focus state without any rollback animation (Route list opened,
+// leaving 3D, ...): disks hide, the overlay dot turns back to blue.
+function cancelFocus() {
+  cancelSteerTween();
+  routeScene.setFocusWaypoint(null);
+  routeScene.showFlight.value = false;
+  routeScene.showCamera.value = false;
+  focusedWpId.value = null;
+  selectedWpId.value = null;
+  routeScene.showRouteOverlay(waypoints.value, null);
+}
+
+// Two-stage focus animation on a blue overlay dot:
+//   stage 1 — horizontal glide at unchanged height until the waypoint is
+//             centered; stage 2 — zoom down to the waypoint's own height
+//             (150 m by default).
+// Afterwards the dots + spline hide and the Flight + Gimbal disks show,
+// editing THIS waypoint.
+function startFocus(id) {
+  if (routeScene.previewActive.value) return;
+  const wp = waypoints.value.find((w) => w.id === id);
+  if (!wp) return;
+  if (wp.alt == null || isNaN(wp.alt)) wp.alt = WP_DEFAULT_ALT_M;
+  cancelSteerTween();
+  routeScene.setFocusWaypoint(null);
+  routeScene.showFlight.value = false;
+  routeScene.showCamera.value = false;
+  // Remember the overview pose once so Steer can roll back to it.
+  if (!overviewPose) overviewPose = { lat: drone.lat, lon: drone.lon, alt: drone.alt };
+  focusedWpId.value = id;
+  selectedWpId.value = id;
+  routeScene.showRouteOverlay(waypoints.value, id);
+  // Nadir, north-up while the animation runs.
+  drone.heading = 0;
+  gimbal.yaw = 0;
+  gimbal.pitch = -90;
+  gimbal.roll = 0;
+  const cruiseAlt = drone.alt;
+  // Stage 2 ends at the waypoint's own height (default 150 m).
+  const diveAlt = Math.max(1, wp.alt);
+  const dist = haversineMeters(drone.lat, drone.lon, wp.lat, wp.lng);
+  const glideMs = Math.max(700, Math.min(2200, Math.round(dist * 3)));
+  tweenDrone({ lat: wp.lat, lon: wp.lng, alt: cruiseAlt }, glideMs, () => {
+    tweenDrone({ lat: wp.lat, lon: wp.lng, alt: diveAlt }, 1100, () => {
+      // Arrived: the dots + spline hide, the camera takes the waypoint's
+      // own gimbal angles, and the disks start editing it.
+      routeScene.hideRouteOverlay();
+      gimbal.yaw = wp.camYaw;
+      gimbal.pitch = wp.camPitch;
+      gimbal.roll = wp.camRoll;
+      routeScene.setFocusWaypoint(wp);
+      routeScene.showFlight.value = true;
+      routeScene.showCamera.value = true;
+    });
+  });
+}
+
+// Reverse of startFocus: zoom back up to the overview height, then glide
+// horizontally back to the overview center (blue dots + B-spline remain).
+function rollbackFocus() {
+  cancelSteerTween();
+  routeScene.setFocusWaypoint(null);
+  routeScene.showFlight.value = false;
+  routeScene.showCamera.value = false;
+  focusedWpId.value = null;
+  selectedWpId.value = null;
+  routeScene.showRouteOverlay(waypoints.value, null);
+  drone.heading = 0;
+  gimbal.yaw = 0;
+  gimbal.pitch = -90;
+  gimbal.roll = 0;
+  const back = overviewPose || { lat: drone.lat, lon: drone.lon, alt: drone.alt };
+  tweenDrone({ lat: drone.lat, lon: drone.lon, alt: back.alt }, 1100, () => {
+    tweenDrone(back, 1200, () => {
+      overviewPose = null;
+    });
+  });
+}
+
+// Cesium entity pick of a blue overlay dot (registered while in 3D).
+function onOverlayWpClick(id) {
+  if (!is3d.value || routeScene.previewActive.value) return;
+  if (focusedWpId.value === id && !steerTweenRaf) return; // already there
+  startFocus(id);
 }
 
 const showPreviewHint = ref(false);
@@ -438,6 +581,8 @@ function onClickPreview() {
     routeScene.stopPreview();
     return;
   }
+  // The preview flight lives in the 3D tiles: enter 3D first if needed.
+  if (!is3d.value) viewMode.value = '3d';
   // Preview owns the screen: disks and the Route list are hidden.
   showRoutePanel.value = false;
   if (!routeScene.startPreview(waypoints.value)) {
@@ -452,47 +597,6 @@ function onClickPreview() {
 
 function onClickSave() {
   routeScene.saveClip();
-}
-
-function registerRightDock3D() {
-  registerRight({
-    id: 'camera',
-    icon: 'MENU_CAMERA',
-    titleKey: 'routeplanningview.camera',
-    active: routeScene.showCamera.value,
-    onClick: onClickCamera3D,
-  });
-  registerRight({
-    id: 'steer',
-    icon: 'MENU_CONTROL_STICK',
-    titleKey: 'routeplanningview.steer',
-    active: routeScene.showFlight.value,
-    onClick: onClickSteer3D,
-  });
-  registerRight({
-    id: 'route',
-    icon: 'MENU_LIST',
-    titleKey: 'routeplanningview.route',
-    active: showRoutePanel.value,
-    onClick: onClickRoute3D,
-  });
-  registerRight({
-    id: 'preview',
-    icon: 'MENU_PREVIEW',
-    titleKey: 'routeplanningview.preview',
-    active: routeScene.previewActive.value,
-    onClick: onClickPreview,
-  });
-  registerRight({
-    id: 'save',
-    icon: 'MENU_SAVE',
-    titleKey: 'routeplanningview.save',
-    onClick: onClickSave,
-  });
-}
-
-function unregisterRightDock3D() {
-  ['camera', 'steer', 'route', 'preview', 'save'].forEach((id) => unregisterRight(id));
 }
 
 onMounted(() => {
@@ -521,92 +625,136 @@ onMounted(() => {
     }),
   });
   registerLeft({
-    id: 'mode_2d',
-    icon: 'MENU_CHAR_2D',
-    titleKey: 'routeplanningview.mode_2d',
-    // The 2D/3D character glyphs render large inside the 56px square —
-    // shrink the icon to 80% of the standard dock icon size (32px).
-    size: 26,
+    id: 'map',
+    icon: 'MENU_MAP',
+    titleKey: 'routeplanningview.map',
     active: viewMode.value !== '3d',
-    onClick: onClick2D,
+    onClick: onClickMap,
   });
   registerLeft({
-    id: 'mode_3d',
-    icon: 'MENU_CHAR_3D',
-    titleKey: 'routeplanningview.mode_3d',
-    size: 26,
-    active: viewMode.value === '3d',
-    onClick: onClick3D,
+    id: 'preview',
+    icon: 'MENU_PREVIEW',
+    titleKey: 'routeplanningview.preview',
+    active: routeScene.previewActive.value,
+    onClick: onClickPreview,
+  });
+  registerLeft({
+    id: 'save',
+    icon: 'MENU_SAVE',
+    titleKey: 'routeplanningview.save',
+    active: routeScene.saving.value,
+    onClick: onClickSave,
   });
 
-  // The right sidebar (Search + Waypoint + Route) exists in both 2D modes
-  // and is removed entirely while the 3D tiles are shown.
+  // The right sidebar (Search + Waypoint + Steer + Route) is the same in
+  // every view mode, so it is registered once and never swapped.
   registerRightDock();
 
-  // Keep dock buttons' active state in sync with mode / panels, and swap
-  // the right sidebar content between the 2D and 3D subpages.
+  // Keep dock buttons' active (green-border) state in sync. At most ONE
+  // button per sidebar may be green:
+  //   left  — Save while it settles/downloads the clip, otherwise Preview
+  //           while a preview flight runs, otherwise Map in the 2D modes;
+  //   right — Search / Waypoint / Steer / Route are mutually exclusive by
+  //           construction (each handler closes the others' panels).
   watch(
-    [viewMode, showRoutePanel, showSearchPanel, showWaypointHint, previewActive, routeScene.showFlight, routeScene.showCamera],
+    [viewMode, showRoutePanel, showSearchPanel, showWaypointHint, previewActive, routeScene.showFlight, routeScene.showCamera, routeScene.saving],
     () => {
-      const b2 = leftItems.find((i) => i.id === 'mode_2d');
-      if (b2) b2.active = viewMode.value !== '3d';
-      const b3 = leftItems.find((i) => i.id === 'mode_3d');
-      if (b3) b3.active = viewMode.value === '3d';
+      const savingNow = routeScene.saving.value;
+      const bm = leftItems.find((i) => i.id === 'map');
+      if (bm) bm.active = viewMode.value !== '3d' && !savingNow;
+      const bp = leftItems.find((i) => i.id === 'preview');
+      if (bp) bp.active = routeScene.previewActive.value && !savingNow;
+      const bsv = leftItems.find((i) => i.id === 'save');
+      if (bsv) bsv.active = savingNow;
 
-      if (viewMode.value === '3d') {
-        showSearchPanel.value = false;
-        showWaypointHint.value = false;
-        if (!rightItems.some((i) => i.id === 'preview')) {
-          unregisterRightDock();
-          registerRightDock3D();
-        }
-        const bc = rightItems.find((i) => i.id === 'camera');
-        if (bc) bc.active = routeScene.showCamera.value;
-        const bs = rightItems.find((i) => i.id === 'steer');
-        if (bs) bs.active = routeScene.showFlight.value;
-        const br = rightItems.find((i) => i.id === 'route');
-        if (br) br.active = showRoutePanel.value;
-        const bp = rightItems.find((i) => i.id === 'preview');
-        if (bp) bp.active = routeScene.previewActive.value;
-      } else {
-        if (!rightItems.some((i) => i.id === 'search')) {
-          unregisterRightDock3D();
-          registerRightDock();
-        }
-        const bs = rightItems.find((i) => i.id === 'search');
-        if (bs) bs.active = showSearchPanel.value;
-        const br = rightItems.find((i) => i.id === 'route');
-        if (br) br.active = showRoutePanel.value;
-      }
+      const bs = rightItems.find((i) => i.id === 'search');
+      if (bs) bs.active = showSearchPanel.value;
+      const bt = rightItems.find((i) => i.id === 'steer');
+      if (bt) bt.active = is3d.value;
+      const br = rightItems.find((i) => i.id === 'route');
+      if (br) br.active = showRoutePanel.value;
     }
   );
 
-  // Sim loop lifecycle: runs only while the 3D subpage is shown.
+  // Sim loop lifecycle: 3D entry is always the nadir overview at the 2D
+  // map's center and scale (drone.lat/lon/alt track the 2D map), with the
+  // blue dots + B-spline overlay; exit returns to the 2D street map at the
+  // same center and scale.
   watch(is3d, (now3d) => {
     if (now3d) {
-      // The sim loop slaves the Cesium camera to the drone state every
-      // frame; point the virtual drone at the default view so the 3D
-      // subpage opens exactly where onClick3D recenters.
-      drone.lat = settings.defaultLat;
-      drone.lon = settings.defaultLon;
-      drone.alt = settings.defaultAlt;
-      drone.heading = settings.defaultYaw;
-      gimbal.yaw = 0;
-      gimbal.pitch = settings.defaultPitch;
-      gimbal.roll = settings.defaultRoll;
       routeScene.startLoop();
+      ensureWaypointDefaults();
+      showSearchPanel.value = false;
+      showWaypointHint.value = false;
+      showRoutePanel.value = false;
+      focusedWpId.value = null;
+      overviewPose = null;
+      routeScene.setFocusWaypoint(null);
+      routeScene.showFlight.value = false; // no disks in the nadir overview
+      routeScene.showCamera.value = false;
+      routeScene.showRouteOverlay(waypoints.value, null);
+      if (pickCleanup) pickCleanup();
+      pickCleanup = routeScene.onWaypointPick(onOverlayWpClick);
+      if (routeScene.previewActive.value) return; // preview owns the camera
+      // The 2D map altitude is Google's nominal model altitude; convert
+      // it to the true camera altitude that shows the SAME ground scale
+      // in the 3D nadir view (otherwise the 3D view looks ~4-6x more
+      // zoomed in).
+      drone.alt = routeScene.trueAltForMapScale(drone.alt, drone.lat);
+      drone.heading = 0;
+      gimbal.yaw = 0;
+      gimbal.pitch = -90; // look straight down, satellite style
+      gimbal.roll = 0;
     } else {
+      const wasPreview = routeScene.previewActive.value;
+      if (pickCleanup) {
+        pickCleanup();
+        pickCleanup = null;
+      }
+      cancelSteerTween();
       routeScene.stopPreview();
       routeScene.stopLoop();
+      routeScene.hideRouteOverlay();
+      routeScene.setFocusWaypoint(null);
       routeScene.showFlight.value = false;
       routeScene.showCamera.value = false;
+      focusedWpId.value = null;
+      selectedWpId.value = null;
+      // Leaving from a focused view: reopen the 2D map at the nadir
+      // overview's center and scale (where Steer was entered).
+      if (overviewPose) {
+        drone.lat = overviewPose.lat;
+        drone.lon = overviewPose.lon;
+        drone.alt = overviewPose.alt;
+        overviewPose = null;
+      }
+      // Convert the true 3D camera altitude back to the 2D map model
+      // altitude so the 2D map reopens at the same ground scale (skipped
+      // after a preview: the altitude then is a true flight height).
+      if (!wasPreview) drone.alt = routeScene.modelAltForMapScale(drone.alt, drone.lat);
+      scheduleTilePrefetch();
     }
   });
+
+  // Keep the 3D route overlay in sync with every waypoint change (Route
+  // list card edits / reorders / removals). While a waypoint is focused
+  // the overlay is hidden, so skip updates then.
+  watch(
+    waypoints,
+    () => {
+      if (is3d.value && focusedWpId.value == null) {
+        routeScene.showRouteOverlay(waypoints.value, null);
+      }
+    },
+    { deep: true }
+  );
 });
 
 onUnmounted(() => {
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
   if (previewHintTimer) clearTimeout(previewHintTimer);
+  if (pickCleanup) pickCleanup();
+  cancelSteerTween();
   routeScene.stopPreview();
   routeScene.stopLoop();
   clear();

@@ -626,6 +626,7 @@ function startWaypointDrag(marker, id) {
   map.value.setOptions({ draggable: false });
   const moveL = map.value.addListener('mousemove', (e) => {
     if (!wpDrag) return;
+    wpDrag.moved = true;
     marker.setPosition(e.latLng);
     emit('waypointMove', { id, lat: e.latLng.lat(), lng: e.latLng.lng() });
   });
@@ -633,6 +634,7 @@ function startWaypointDrag(marker, id) {
   // a marker, so end the drag on the DOM-level mouseup instead — it fires
   // no matter where the release happens.
   const endDrag = () => {
+    const moved = !!wpDrag?.moved;
     mapsApi.event.removeListener(moveL);
     if (map.value) map.value.setOptions({ draggable: true });
     wpDrag = null;
@@ -640,10 +642,10 @@ function startWaypointDrag(marker, id) {
     // Release: back to the original blue.
     marker.setIcon(waypointIcon(marker.wpLabel, false));
     selectedWaypointId = null;
-    emit('waypointRelease', id);
+    emit('waypointRelease', id, moved);
   };
   window.addEventListener('mouseup', endDrag, { once: true });
-  wpDrag = { id, marker, moveL, endDrag };
+  wpDrag = { id, marker, moveL, endDrag, moved: false };
 }
 
 // Draw the spline as a single polyline UNDER the waypoint markers (Google

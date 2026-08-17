@@ -1,6 +1,5 @@
 {
-  "mode_2d": "2D",
-  "mode_3d": "3D",
+  "map": "地图",
   "route": "路线",
   "panel_title": "航程规划",
   "search": "寻址",

@@ -1,6 +1,5 @@
 {
-  "mode_2d": "2D",
-  "mode_3d": "3D",
+  "map": "Map",
   "route": "Route",
   "panel_title": "Route Planning",
   "search": "Search",

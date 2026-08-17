@@ -8,8 +8,11 @@ export function crSpline(a, b, c, d, t) {
 
 // Dense polyline path of a smooth spline passing through every waypoint
 // in order, so the drawn link actually touches each circle.
+// When every input point carries a numeric `alt`, the samples interpolate
+// it with the same Catmull-Rom curve (used by the 3D route overlay).
 export function splinePath(points, samplesPerSeg = 16) {
   if (points.length < 2) return [];
+  const hasAlt = points.every((p) => Number.isFinite(p.alt));
   const pts = [points[0], ...points, points[points.length - 1]];
   const out = [];
   for (let i = 0; i < pts.length - 3; i++) {
@@ -19,12 +22,16 @@ export function splinePath(points, samplesPerSeg = 16) {
     const p3 = pts[i + 3];
     for (let s = 0; s < samplesPerSeg; s++) {
       const t = s / samplesPerSeg;
-      out.push({
+      const sample = {
         lat: crSpline(p0.lat, p1.lat, p2.lat, p3.lat, t),
         lng: crSpline(p0.lng, p1.lng, p2.lng, p3.lng, t),
-      });
+      };
+      if (hasAlt) sample.alt = crSpline(p0.alt, p1.alt, p2.alt, p3.alt, t);
+      out.push(sample);
     }
   }
-  out.push({ lat: points[points.length - 1].lat, lng: points[points.length - 1].lng });
+  const last = { lat: points[points.length - 1].lat, lng: points[points.length - 1].lng };
+  if (hasAlt) last.alt = points[points.length - 1].alt;
+  out.push(last);
   return out;
 }

@@ -17,7 +17,7 @@ import { splinePath } from '../src/2d_map/spline.js';
 const { drone, gimbal } = useDrone();
 const { flightCmd, activeFlightMode, showFlight } = useFlightCommands();
 const { computeDesiredEnuMove, applyEnuMove, updateTelemetry: updateFlightTelemetry } = useFlightPhysics();
-const { showCamera } = useCameraCommands();
+const { showCamera, cameraCmd } = useCameraCommands();
 const { step: stepCameraPhysics } = useCameraPhysics();
 
 const PREVIEW_SPEED_MPS = 8; // cruise speed along the spline
@@ -76,7 +76,67 @@ function syncCesiumCamera() {
 
 // ── Simulation loop (active only while the 3D subpage is shown) ──────────
 
+// Focus mode: after the two-stage dive onto one waypoint, the disks edit
+// that waypoint instead of flying the drone. Holds the reactive waypoint
+// object (or null when not focused).
+let focusWaypoint = null;
+
+function setFocusWaypoint(wp) {
+  focusWaypoint = wp || null;
+}
+
+// Waypoint editing rates while focused.
+const FOCUS_MOVE_RATE = 0.05; // m/s per deflection unit per meter of camera altitude
+const FOCUS_SPEED_RATE = 4;   // wp.speed change (m/s) per second at full deflection
+const FOCUS_ANGLE_RATE = 45;  // camera-angle change (deg/s) per deflection unit
+
+function normDeg(v) {
+  return ((((v + 180) % 360) + 360) % 360) - 180;
+}
+
+function stepFocusFrame(dt) {
+  const wp = focusWaypoint;
+  if (!wp) return;
+  if (showFlight.value) {
+    if (activeFlightMode.value === 'M') {
+      // Slide the waypoint parallel to the screen; the camera follows it,
+      // so the dot stays centered (heading is 0 after the dive: vy=north,
+      // vx=east). Movement speed scales with the camera altitude.
+      const mps = Math.max(5, drone.alt * FOCUS_MOVE_RATE);
+      const mPerDegLat = 111320;
+      const mPerDegLon = Math.max(1e-6, 111320 * Math.cos((wp.lat * Math.PI) / 180));
+      wp.lat = Math.max(-90, Math.min(90, wp.lat + (flightCmd.vy * mps * dt) / mPerDegLat));
+      wp.lng = Math.max(-180, Math.min(180, wp.lng + (flightCmd.vx * mps * dt) / mPerDegLon));
+      drone.lat = wp.lat;
+      drone.lon = wp.lng;
+    } else if (activeFlightMode.value === 'H') {
+      // Throttle stick sets the waypoint's cruise speed along the route.
+      wp.speed = Math.max(0, Math.min(1000, wp.speed + flightCmd.vz * FOCUS_SPEED_RATE * dt));
+    } else if (activeFlightMode.value === 'R') {
+      wp.camYaw = normDeg(wp.camYaw + flightCmd.yaw * FOCUS_ANGLE_RATE * dt);
+      gimbal.yaw = wp.camYaw; // the view mirrors the waypoint camera
+    }
+  }
+  if (showCamera.value) {
+    if (activeCameraMode.value === 'Z') {
+      wp.camYaw = normDeg(wp.camYaw + cameraCmd.yaw * FOCUS_ANGLE_RATE * dt);
+      gimbal.yaw = wp.camYaw;
+    } else if (activeCameraMode.value === 'Y') {
+      wp.camPitch = Math.max(-90, Math.min(90, wp.camPitch + cameraCmd.pitch * FOCUS_ANGLE_RATE * dt));
+      gimbal.pitch = wp.camPitch;
+    } else if (activeCameraMode.value === 'X') {
+      wp.camRoll = normDeg(wp.camRoll + cameraCmd.roll * FOCUS_ANGLE_RATE * dt);
+      gimbal.roll = wp.camRoll;
+    }
+  }
+}
+
 function stepManualFrame(dt) {
+  if (focusWaypoint) {
+    // The disks edit the focused waypoint; the drone/camera only mirror it.
+    stepFocusFrame(dt);
+    return;
+  }
   if (showFlight.value) {
     // No altitude gate on this page: H-mode always changes altitude.
     const enuMove = computeDesiredEnuMove(dt, true);
@@ -129,6 +189,11 @@ function startLoop() {
   if (rafId) return;
   startFlightKeyboard();
   startCameraKeyboard();
+  // The loop owns the camera while this page is in 3D: disable Cesium's
+  // default controller so the user can neither wheel-zoom nor drag-pan
+  // the 3D nadir view (navigation lives only in the 2D street map); the
+  // camera moves solely via the focus/rollback tweens and the disks.
+  setControllerEnabled(false);
   rafId = requestAnimationFrame(loop);
 }
 
@@ -140,6 +205,13 @@ function stopLoop() {
   drone.speed = 0; // HUD must not show a stale speed once the loop stops.
   stopFlightKeyboard();
   stopCameraKeyboard();
+  setControllerEnabled(true); // other pages expect the default controller
+}
+
+function setControllerEnabled(enabled) {
+  const viewer = getViewer();
+  const c = viewer && viewer.scene && viewer.scene.screenSpaceCameraController;
+  if (c) c.enableInputs = enabled;
 }
 
 // Keyboard helpers (the composable exports the handlers; the singleton
@@ -444,6 +516,218 @@ async function saveClip() {
   }
 }
 
+// ── 3D route overlay: blue indexed circles + B-spline polyline ────────────
+// Mirrors the 2D map markers (28px #2563eb circle, bold white index) and
+// the blue spline link, drawn as Cesium entities at waypoint altitude.
+// Entities are UPDATED IN PLACE (positions / images refreshed, entities
+// added/removed only when the list changes) because the focus mode edits
+// waypoint positions every frame — recreating all entities per frame would
+// thrash the scene.
+const ROUTE_BLUE = '#2563eb';
+const ROUTE_RED = '#ef4444'; // the focused (selected) waypoint circle
+let splineEntity = null;
+const billboardByWpId = new Map();
+const circleImageCache = new Map(); // "index:selected" -> data URL
+
+// The entities live in the SHARED global viewer, but the bookkeeping above
+// is module state: after a hot-module reload the tracking resets while the
+// viewer keeps the previous instance's dots/spline, which would draw a
+// second route overlay. Tag every entity we add and purge untracked ones
+// once per module instance, on the first overlay draw.
+let staleRouteEntitiesPurged = false;
+function purgeStaleRouteEntities(viewer) {
+  if (staleRouteEntitiesPurged) return;
+  staleRouteEntitiesPurged = true;
+  // The route overlay is the ONLY feature that adds entities to the shared
+  // viewer, so anything present at the first draw of this module instance
+  // is stale leftover (e.g. from before a hot-module reload): clear it all
+  // and rebuild from the waypoint list below.
+  viewer.entities.removeAll();
+  splineEntity = null;
+  billboardByWpId.clear();
+}
+
+function circleImage(index, selected) {
+  const key = `${index}:${selected ? 1 : 0}`;
+  const cached = circleImageCache.get(key);
+  if (cached) return cached;
+  const D = 56; // 2x resolution for a crisp 28px billboard
+  const c = D / 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = D;
+  canvas.height = D;
+  const ctx = canvas.getContext('2d');
+  ctx.beginPath();
+  ctx.arc(c, c, c, 0, Math.PI * 2);
+  ctx.fillStyle = selected ? ROUTE_RED : ROUTE_BLUE;
+  ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 28px DengXian, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(index), c, c);
+  const url = canvas.toDataURL();
+  circleImageCache.set(key, url);
+  return url;
+}
+
+// (Re)draw the waypoint circles + spline in the Cesium scene. The waypoint
+// whose id equals selectedId is drawn red (the focused one).
+function showRouteOverlay(waypoints, selectedId = null) {
+  const viewer = getViewer();
+  const Cesium = window.Cesium;
+  if (!viewer || !Cesium) return;
+  purgeStaleRouteEntities(viewer);
+  const list = waypoints || [];
+
+  // Spline: create once, refresh positions in place afterwards.
+  if (list.length >= 2) {
+    const samples = splinePath(
+      list.map((w) => ({ lat: w.lat, lng: w.lng, alt: w.alt })),
+      32
+    );
+    const positions = samples.map((s) =>
+      // A couple of meters above the waypoint altitude so the line is
+      // never z-fought away by rooftops at the same height.
+      Cesium.Cartesian3.fromDegrees(s.lng, s.lat, (s.alt || 0) + 2)
+    );
+    if (!splineEntity) {
+      splineEntity = viewer.entities.add({
+        polyline: {
+          positions,
+          width: 3,
+          material: Cesium.Color.fromCssColorString(ROUTE_BLUE).withAlpha(0.8),
+        },
+      });
+      splineEntity.routeOverlayTag = true;
+    } else {
+      splineEntity.polyline.positions = positions;
+    }
+  } else if (splineEntity) {
+    viewer.entities.remove(splineEntity);
+    splineEntity = null;
+  }
+
+  // Billboards: reuse existing entities, add missing ones, drop stale ones.
+  const seen = new Set();
+  list.forEach((w) => {
+    seen.add(w.id);
+    const img = circleImage(w.index, w.id === selectedId);
+    let ent = billboardByWpId.get(w.id);
+    if (!ent) {
+      ent = viewer.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(w.lng, w.lat, (w.alt || 0) + 2),
+        billboard: {
+          image: img,
+          width: 28,
+          height: 28,
+          // Always visible, even when a building is between camera & marker.
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      ent.wpId = w.id; // scene.pick() -> entity -> waypoint id
+      ent.routeOverlayTag = true;
+      billboardByWpId.set(w.id, ent);
+    } else {
+      ent.position = Cesium.Cartesian3.fromDegrees(w.lng, w.lat, (w.alt || 0) + 2);
+      ent.billboard.image = img;
+    }
+  });
+  billboardByWpId.forEach((ent, id) => {
+    if (!seen.has(id)) {
+      viewer.entities.remove(ent);
+      billboardByWpId.delete(id);
+    }
+  });
+}
+
+function hideRouteOverlay() {
+  const viewer = getViewer();
+  // The route overlay is the only feature that adds entities to the shared
+  // viewer, so clear ALL of them: removeAll() also drops stale entities
+  // left behind by hot-module reloads (HMR resets the tracked map but the
+  // global viewer keeps whatever was added before the reload).
+  if (viewer) viewer.entities.removeAll();
+  splineEntity = null;
+  billboardByWpId.clear();
+}
+
+// Left-click picking of the waypoint circles in the 3D scene. Returns a
+// cleanup function that removes the handler.
+function onWaypointPick(callback) {
+  const viewer = getViewer();
+  const Cesium = window.Cesium;
+  if (!viewer || !Cesium || typeof callback !== 'function') return () => {};
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  handler.setInputAction((movement) => {
+    let picked = null;
+    try {
+      picked = viewer.scene.pick(movement.position);
+    } catch {
+      picked = null;
+    }
+    const id = picked && picked.id && picked.id.wpId;
+    if (id != null) callback(id);
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  return () => {
+    try {
+      handler.destroy();
+    } catch {
+      // Already destroyed — nothing to do.
+    }
+  };
+}
+
+// ── 2D map scale ↔ true 3D camera altitude ────────────────────────────────
+// Google's altitude model (20 971 520 / 2^zoom) is a nominal "eye altitude"
+// tied to the visible extent, NOT a perspective camera height: a Cesium
+// camera at 160 m shows a far smaller area than Google zoom 17. These
+// helpers convert between the map-model altitude and the true camera
+// altitude whose nadir view has the same ground scale (meters/pixel).
+const GOOGLE_MPP_K = 156543.03392 / 20971520; // m/px per model-alt meter at equator
+
+function verticalFovRad(viewer) {
+  const frustum = viewer.camera.frustum;
+  if (typeof frustum.verticalFov === 'number') return frustum.verticalFov;
+  // Cesium convention: frustum.fov is the horizontal FOV when aspect > 1.
+  const aspect = viewer.canvas.clientWidth / Math.max(1, viewer.canvas.clientHeight);
+  return aspect > 1 ? 2 * Math.atan(Math.tan(frustum.fov / 2) / aspect) : frustum.fov;
+}
+
+// True camera altitude (m) whose nadir view matches the 2D map's ground
+// scale at the given model altitude.
+function trueAltForMapScale(modelAlt, lat) {
+  const viewer = getViewer();
+  if (!viewer) return modelAlt;
+  const H = viewer.canvas.clientHeight || window.innerHeight;
+  const mpp = GOOGLE_MPP_K * Math.cos((lat * Math.PI) / 180) * modelAlt;
+  return (mpp * H) / (2 * Math.tan(verticalFovRad(viewer) / 2));
+}
+
+// Inverse: map-model altitude that matches a true 3D camera altitude.
+function modelAltForMapScale(trueAlt, lat) {
+  const viewer = getViewer();
+  if (!viewer) return trueAlt;
+  const H = viewer.canvas.clientHeight || window.innerHeight;
+  const mppPerAlt = GOOGLE_MPP_K * Math.cos((lat * Math.PI) / 180);
+  return (2 * Math.tan(verticalFovRad(viewer) / 2) * trueAlt) / (H * mppPerAlt);
+}
+
+// ── Background 3D-tile prefetch while the 2D map is showing ───────────────
+// The shared Cesium canvas keeps rendering (opacity 0) underneath the 2D
+// map, so aiming its hidden camera at the current 2D view (nadir, same
+// ground scale) makes Google stream + cache the photorealistic tiles the
+// user will see after the 2D→3D hand-off — even if they never switch.
+function prefetchTiles(lat, lon, modelAlt) {
+  const viewer = getViewer();
+  const Cesium = window.Cesium;
+  if (!viewer || !Cesium) return;
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(lon, lat, trueAltForMapScale(modelAlt, lat)),
+    orientation: { heading: 0, pitch: -Math.PI / 2, roll: 0 },
+  });
+}
+
 export function useRouteScene3D() {
   return {
     previewActive,
@@ -453,6 +737,13 @@ export function useRouteScene3D() {
     startPreview,
     stopPreview,
     saveClip,
+    showRouteOverlay,
+    hideRouteOverlay,
+    onWaypointPick,
+    setFocusWaypoint,
+    trueAltForMapScale,
+    modelAltForMapScale,
+    prefetchTiles,
     // Re-exported so the view binds one object only.
     showFlight,
     showCamera,
