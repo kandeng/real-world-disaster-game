@@ -36,6 +36,14 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  /**
+   * Optional override of the center-click mode cycle (e.g. ['M','H','V']
+   * on the Route Planning page). Defaults per `mode` when null.
+   */
+  modes: {
+    type: Array,
+    default: null,
+  },
   /** Configurable icon keys. */
   icons: {
     type: Object,
@@ -69,6 +77,7 @@ const centerPressOrigin = ref({ x: 0, y: 0 });
 const isModeCycling = computed(() => props.enableModeCycle);
 
 const cyclingModes = computed(() => {
+  if (props.modes && props.modes.length) return props.modes;
   if (props.mode === 'flight') return ['M', 'R', 'H'];
   if (props.mode === 'camera') return ['Z', 'Y', 'X'];
   return [];
@@ -154,6 +163,13 @@ function applyInput(dx, dy) {
           // Height/Altitude: vertical only. Lat/lon remain unchanged by the consumer.
           emit('move', {
             mode: 'H',
+            vz: -clamped.y * props.sensitivity,
+          });
+          break;
+        case 'V':
+          // Velocity: vertical stick trims the drone cruise speed.
+          emit('move', {
+            mode: 'V',
             vz: -clamped.y * props.sensitivity,
           });
           break;
@@ -293,8 +309,8 @@ function handleEnd(e) {
       </div>
     </template>
 
-    <!-- Height mode: vertical arrows -->
-    <template v-if="mode === 'flight' && cyclingMode === 'H'">
+    <!-- Height / velocity modes: vertical arrows -->
+    <template v-if="mode === 'flight' && (cyclingMode === 'H' || cyclingMode === 'V')">
       <div class="glyph-svg">
         <ConfigurableIcon :name="icons.flightHeight" :size="224" color="rgba(107,114,128,0.6)" />
       </div>

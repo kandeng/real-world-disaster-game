@@ -111,6 +111,12 @@ function onFlightMove(payload) {
       flightCmd.vy = 0;
       flightCmd.yaw = 0;
       flightCmd.vz = payload.vz ?? 0;
+    } else if (payload.mode === 'V') {
+      // Velocity mode reuses the vertical stick axis (vz).
+      flightCmd.vx = 0;
+      flightCmd.vy = 0;
+      flightCmd.yaw = 0;
+      flightCmd.vz = payload.vz ?? 0;
     }
   } else {
     // Fallback for non-cycling emission.

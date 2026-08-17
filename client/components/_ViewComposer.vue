@@ -14,6 +14,9 @@ defineProps({
   showCamera: { type: Boolean, default: true },
   showHud: { type: Boolean, default: true },
   flight: { type: Object, default: () => ({ mode: '-', vx: 0, vy: 0, yaw: 0, vz: 0 }) },
+  // Optional Flight-disk mode cycle override (e.g. ['M','H','V'] on the
+  // Route Planning page); defaults to M/R/H when null.
+  flightModes: { type: Array, default: null },
   camera: { type: Object, default: () => ({ mode: '-', yaw: 0, pitch: 0, roll: 0 }) },
   // Real-drone telemetry override for the HUD (Real Drone page); when set,
   // the HUD renders the physical drone's live state instead of the sim rows.
@@ -70,6 +73,7 @@ defineEmits([
           <FlightController
             :size="224"
             :sensitivity="3"
+            :modes="flightModes"
             enable-mode-cycle
             :disabled="disabled"
             @move="$emit('flightMove', $event)"

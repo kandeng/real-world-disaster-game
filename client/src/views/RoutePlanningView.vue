@@ -37,6 +37,17 @@ const showCameraDisk = computed(
 // HUD dashboard as in 3D Aerial — hidden only while the preview flight is
 // playing or while Save is settling/downloading the clip.
 const showHudDashboard = computed(() => is3d.value && !routeScene.previewActive.value && !routeScene.saving.value);
+// Spinning-circle overlay: the preview/save flight freezes (view stuck)
+// until the Google 3D tiles of the current view are fully downloaded and
+// rendered — quality of each frame beats speed of the simulation.
+const showTileSpinner = computed(() => is3d.value && routeScene.waitingTiles.value);
+// While a preview or a Save capture flight runs, the whole right sidebar
+// (Search / Waypoint / Steer / Route) is locked: buttons dim + ignore
+// clicks, and the Flight / Gimbal disks stay hidden.
+const controlsLocked = computed(() => routeScene.previewActive.value || routeScene.saving.value);
+// Flight disk on this page cycles M (move lat/lon) -> H (height) ->
+// V (velocity), unlike 3D Aerial's M/R/H.
+const FLIGHT_MODES = ['M', 'H', 'V'];
 const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
 const { pages, registerPage, unregisterPage } = usePageRegistry();
 
@@ -75,6 +86,7 @@ function onClickMap() {
 // and cancels the waypoint focus (disks hide); the blue overlay dots and
 // the spline stay visible in every 3D state.
 function onClickRoute() {
+  if (controlsLocked.value) return; // locked during preview / save flights
   const opening = !showRoutePanel.value;
   showRoutePanel.value = opening;
   if (opening) {
@@ -89,6 +101,7 @@ function onClickRoute() {
 }
 
 function onClickSearch() {
+  if (controlsLocked.value) return; // locked during preview / save flights
   // Address search lives on the 2D map: leave 3D first if needed.
   if (!showSearchPanel.value && is3d.value) viewMode.value = 'street';
   showSearchPanel.value = !showSearchPanel.value;
@@ -104,6 +117,7 @@ const showWaypointHint = ref(false);
 const waypoints = ref([]);
 
 function onWaypointClick() {
+  if (controlsLocked.value) return; // locked during preview / save flights
   const arming = !showWaypointHint.value;
   // Waypoint picking happens on the 2D map: leave 3D first if needed.
   if (arming && is3d.value) viewMode.value = 'street';
@@ -150,6 +164,7 @@ let wpSeq = 0; // stable row id (Vue :key) independent of the position index
 // backfill any missing field when the Route list is opened.
 const WP_DEFAULT_ALT_M = 150;        // cruise altitude
 const WP_DEFAULT_SPEED_MPS = 8.0;    // same as the Takeoff/Landing auto speed
+const WP_SPEED_MAX_MPS = 100 / 3.6;  // ±100 km/h expressed in m/s (negative = fly backward)
 const WP_DEFAULT_CAM_PITCH_DEG = -90; // nadir: look straight down
 
 // Fill in any missing waypoint field with its default value.
@@ -188,11 +203,14 @@ function onEditCoord(event, pos, field) {
   if (field === 'lat') v = Math.max(-90, Math.min(90, v));
   else if (field === 'lng') v = Math.max(-180, Math.min(180, v));
   else if (field === 'alt') v = Math.max(0, Math.min(100000, v));
-  else if (field === 'speed') v = Math.max(0, Math.min(1000, v));
+  else if (field === 'speed') v = Math.max(-WP_SPEED_MAX_MPS, Math.min(WP_SPEED_MAX_MPS, v));
   else if (field === 'camPitch') v = Math.max(-90, Math.min(90, v));
   else v = normAngle(v); // camYaw / camRoll
   wp[field] = v;
   event.target.value = fmtCoord(v, digits);
+  // The preview flight flies at the shared cruise speed: keep it in sync
+  // with the waypoint row edited last (same value the V disk mode trims).
+  if (field === 'speed') routeScene.cruiseSpeedMps.value = v;
   // Only the horizontal position affects the map circles / spline.
   if (field === 'lat' || field === 'lng') {
     mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
@@ -409,6 +427,7 @@ function registerRightDock() {
       titleKey: 'aerialview.waypoint',
       size: 35,
       active: showWaypointHint.value,
+      disabled: controlsLocked.value,
       onClick: onWaypointClick,
     }),
   });
@@ -442,6 +461,7 @@ let steerTweenRaf = null;  // running drone-state tween (focus / rollback)
 let pickCleanup = null;    // 3D overlay waypoint click handler teardown
 
 function onClickSteer() {
+  if (controlsLocked.value) return; // locked during preview / save flights
   routeScene.stopPreview();
   if (!is3d.value) {
     // 2D -> 3D nadir overview (the watch(is3d) entry sets center/scale).
@@ -577,8 +597,16 @@ const showPreviewHint = ref(false);
 let previewHintTimer = null;
 
 function onClickPreview() {
+  // While a Save capture flight runs, Preview aborts it (no download).
+  if (routeScene.saving.value) {
+    routeScene.stopPreview();
+    routeScene.showRouteOverlay(waypoints.value, null);
+    return;
+  }
   if (routeScene.previewActive.value) {
     routeScene.stopPreview();
+    // Back in the nadir overview: the blue dots + spline reappear.
+    routeScene.showRouteOverlay(waypoints.value, null);
     return;
   }
   // The preview flight lives in the 3D tiles: enter 3D first if needed.
@@ -595,8 +623,20 @@ function onClickPreview() {
   }
 }
 
-function onClickSave() {
-  routeScene.saveClip();
+async function onClickSave() {
+  if (routeScene.saving.value) return;
+  if (waypoints.value.length < 2) {
+    // Same green reminder as Preview: a route needs >= 2 waypoints.
+    showPreviewHint.value = true;
+    clearTimeout(previewHintTimer);
+    previewHintTimer = setTimeout(() => {
+      showPreviewHint.value = false;
+    }, 2500);
+    return;
+  }
+  // Save re-flies the whole route (origin -> destination) as a quality-
+  // gated capture flight and downloads a 16:9 mp4 when it arrives.
+  await routeScene.saveClip(waypoints.value);
 }
 
 onMounted(() => {
@@ -668,11 +708,20 @@ onMounted(() => {
       if (bsv) bsv.active = savingNow;
 
       const bs = rightItems.find((i) => i.id === 'search');
-      if (bs) bs.active = showSearchPanel.value;
+      if (bs) {
+        bs.active = showSearchPanel.value;
+        bs.disabled = controlsLocked.value;
+      }
       const bt = rightItems.find((i) => i.id === 'steer');
-      if (bt) bt.active = is3d.value;
+      if (bt) {
+        bt.active = is3d.value;
+        bt.disabled = controlsLocked.value;
+      }
       const br = rightItems.find((i) => i.id === 'route');
-      if (br) br.active = showRoutePanel.value;
+      if (br) {
+        br.active = showRoutePanel.value;
+        br.disabled = controlsLocked.value;
+      }
     }
   );
 
@@ -692,7 +741,8 @@ onMounted(() => {
       routeScene.setFocusWaypoint(null);
       routeScene.showFlight.value = false; // no disks in the nadir overview
       routeScene.showCamera.value = false;
-      routeScene.showRouteOverlay(waypoints.value, null);
+      // A preview started from 2D already hid the overlay: don't re-show it.
+      if (!routeScene.previewActive.value) routeScene.showRouteOverlay(waypoints.value, null);
       if (pickCleanup) pickCleanup();
       pickCleanup = routeScene.onWaypointPick(onOverlayWpClick);
       if (routeScene.previewActive.value) return; // preview owns the camera
@@ -738,11 +788,12 @@ onMounted(() => {
 
   // Keep the 3D route overlay in sync with every waypoint change (Route
   // list card edits / reorders / removals). While a waypoint is focused
-  // the overlay is hidden, so skip updates then.
+  // the overlay is hidden, so skip updates then — and never re-show it in
+  // the middle of a preview / Save flight (it hides for the whole flight).
   watch(
     waypoints,
     () => {
-      if (is3d.value && focusedWpId.value == null) {
+      if (is3d.value && focusedWpId.value == null && !routeScene.previewActive.value) {
         routeScene.showRouteOverlay(waypoints.value, null);
       }
     },
@@ -755,8 +806,11 @@ onUnmounted(() => {
   if (previewHintTimer) clearTimeout(previewHintTimer);
   if (pickCleanup) pickCleanup();
   cancelSteerTween();
-  routeScene.stopPreview();
+  routeScene.stopPreview(); // aborts a running preview / Save capture flight
   routeScene.stopLoop();
+  // The overlay entities live in the SHARED global viewer: clear them so
+  // they never linger on the other pages after leaving Route Planning.
+  routeScene.hideRouteOverlay();
   clear();
   unregisterPage('aerial');
   unregisterPage('map');
@@ -775,6 +829,7 @@ onUnmounted(() => {
     :show-flight="showFlightDisk"
     :show-camera="showCameraDisk"
     :show-hud="showHudDashboard"
+    :flight-modes="FLIGHT_MODES"
     :flight="flight"
     :camera="camera"
     @flightMove="onFlightMove"
@@ -795,6 +850,12 @@ onUnmounted(() => {
       <!-- Green top-center reminder: preview needs >= 2 waypoints -->
       <div v-if="showPreviewHint" class="top-center-message top-center-message--success">
         {{ t('routeplanningview.preview_need_waypoints') }}
+      </div>
+
+      <!-- Spinning circle: the preview/save flight is stuck waiting for
+           the Google 3D tiles of the current view to download + render. -->
+      <div v-if="showTileSpinner" class="tile-wait-overlay">
+        <div class="tile-wait-spinner" />
       </div>
 
       <!-- Address search popup -->
@@ -963,6 +1024,33 @@ onUnmounted(() => {
   inset: 0;
   z-index: 0;
   pointer-events: auto;
+}
+
+/* Tile-wait spinner: preview/save freeze with this spinning circle until
+   the 3D tiles of the current view are fully downloaded and rendered. */
+.tile-wait-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.tile-wait-spinner {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 5px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #4ade80;
+  animation: tile-wait-spin 0.9s linear infinite;
+}
+
+@keyframes tile-wait-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Translucent rounded rectangles styled after the Flight / Gimbal disk

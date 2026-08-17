@@ -11,8 +11,11 @@ import { splinePath } from '../src/2d_map/spline.js';
 //   1. The simulation loop that keeps the shared Cesium camera slaved to
 //      the virtual drone state while the Flight / Gimbal disks are shown
 //      (full control parity with 3D Aerial, minus collision / Street View).
-//   2. The first-person preview flight along the waypoint B-spline, recorded
-//      into a video clip through a mirror canvas + MediaRecorder.
+//   2. The first-person preview flight along the waypoint route: quality-
+//      gated on 3D-tile streaming (the view freezes until every tile of the
+//      current view is downloaded and rendered), with waypoint alt / speed /
+//      gimbal-angle interpolation between waypoints. Save re-flies the whole
+//      route as a capture flight recorded into a 16:9 mp4.
 
 const { drone, gimbal } = useDrone();
 const { flightCmd, activeFlightMode, showFlight } = useFlightCommands();
@@ -20,12 +23,30 @@ const { computeDesiredEnuMove, applyEnuMove, updateTelemetry: updateFlightTeleme
 const { showCamera, cameraCmd } = useCameraCommands();
 const { step: stepCameraPhysics } = useCameraPhysics();
 
-const PREVIEW_SPEED_MPS = 8; // cruise speed along the spline
-const PREVIEW_CRUISE_ALT_M = 30; // height above the sampled surface
-const PREVIEW_PITCH_DEG = -10; // slight downward look while flying
-const RECORDING_MAX_WIDTH = 1920;
+// Waypoint parameter defaults (mirror RoutePlanningView's; backfilled there
+// before any preview, so these are fallbacks only).
+const WP_DEFAULT_ALT_M = 150;
+const WP_DEFAULT_SPEED_MPS = 8.0;
+const WP_DEFAULT_CAM_PITCH_DEG = -90;
+
+// Preview quality gate: the flight advances only while every tile of the
+// current view is downloaded AND rendered (tileset.tilesLoaded), and only
+// after READY_HOLD consecutive ready frames — the quality of each frame
+// beats the speed of the simulation. waitingTiles drives the spinning-
+// circle overlay while the view is stuck waiting.
+const READY_HOLD = 15; // ~0.25 s at 60 fps of stable readiness before moving
+
+// Virtual-drone cruise speed along the route (the HUD's v while focused).
+// Default matches the 3D Aerial Takeoff/Landing auto speed (useAltitudeGate
+// AUTO_SPEED = 8 m/s); the Flight disk's V mode trims it within ±100 km/h.
+// A negative speed flies the route backward (destination -> origin).
+const CRUISE_DEFAULT_MPS = 8.0;
+const CRUISE_MAX_MPS = 100 / 3.6; // 100 km/h expressed in m/s
+const CRUISE_RATE = 5; // cruise change (m/s) per second at full deflection
+const cruiseSpeedMps = ref(CRUISE_DEFAULT_MPS);
 const RECORDING_FPS = 30;
-const RECORDING_BITRATE = 6_000_000;
+const RECORDING_MIN_BITRATE = 8_000_000;
+const RECORDING_ASPECT = 16 / 9; // Save always outputs a 16:9 (w:h) frame
 
 const previewActive = ref(false);
 // True while Save is settling the recorder / downloading the clip (the HUD
@@ -39,7 +60,17 @@ let lastErrorLogTs = 0;
 let pathSamples = []; // { lat, lng, dist } — cumulative arc-length table
 let pathTotalM = 0;
 let previewCursorM = 0;
-let previewSurfaceAlt = 0;
+let previewWps = [];    // waypoint cards (alt / speed / gimbal interpolation)
+let wpArcDist = [];     // arc-length position of each waypoint on the path
+let flightDir = 1;      // +1 origin->destination, -1 backward (negative speed)
+let previewHudSpeed = 0; // signed interpolated speed (HUD v while flying)
+let captureMode = false;     // Save: record the flight into a 16:9 mp4
+let captureCompleted = false;
+let captureDoneResolve = null;
+let readyStreak = 0;         // consecutive tile-ready frames
+// True while the preview/save flight is stuck waiting for the 3D tiles of
+// the current view; the view shows a spinning circle and does not advance.
+const waitingTiles = ref(false);
 
 // ── Recording state ────────────────────────────────────────────────────────
 let mediaRecorder = null;
@@ -83,11 +114,20 @@ let focusWaypoint = null;
 
 function setFocusWaypoint(wp) {
   focusWaypoint = wp || null;
+  if (focusWaypoint) {
+    // V-mode editing continues from the waypoint's own stored speed, and
+    // the HUD's v mirrors it immediately (stepFrame slaves drone.speed to
+    // cruiseSpeedMps while a waypoint is focused).
+    const s = Number(focusWaypoint.speed);
+    cruiseSpeedMps.value = Number.isFinite(s)
+      ? Math.max(-CRUISE_MAX_MPS, Math.min(CRUISE_MAX_MPS, s))
+      : CRUISE_DEFAULT_MPS;
+  }
 }
 
 // Waypoint editing rates while focused.
 const FOCUS_MOVE_RATE = 0.05; // m/s per deflection unit per meter of camera altitude
-const FOCUS_SPEED_RATE = 4;   // wp.speed change (m/s) per second at full deflection
+const FOCUS_ALT_RATE = 10;    // wp.alt change (m/s) per deflection unit
 const FOCUS_ANGLE_RATE = 45;  // camera-angle change (deg/s) per deflection unit
 
 function normDeg(v) {
@@ -110,11 +150,19 @@ function stepFocusFrame(dt) {
       drone.lat = wp.lat;
       drone.lon = wp.lng;
     } else if (activeFlightMode.value === 'H') {
-      // Throttle stick sets the waypoint's cruise speed along the route.
-      wp.speed = Math.max(0, Math.min(1000, wp.speed + flightCmd.vz * FOCUS_SPEED_RATE * dt));
-    } else if (activeFlightMode.value === 'R') {
-      wp.camYaw = normDeg(wp.camYaw + flightCmd.yaw * FOCUS_ANGLE_RATE * dt);
-      gimbal.yaw = wp.camYaw; // the view mirrors the waypoint camera
+      // Vertical stick raises/lowers the waypoint; the camera follows.
+      wp.alt = Math.max(0, Math.min(100000, wp.alt + flightCmd.vz * FOCUS_ALT_RATE * dt));
+      drone.alt = wp.alt;
+    } else if (activeFlightMode.value === 'V') {
+      // Vertical stick trims the virtual drone's cruise speed (±100 km/h);
+      // negative flies the route backward (destination -> origin). The
+      // value is stored on the waypoint itself, so its Route list row's
+      // v field follows the disk live.
+      cruiseSpeedMps.value = Math.max(
+        -CRUISE_MAX_MPS,
+        Math.min(CRUISE_MAX_MPS, cruiseSpeedMps.value + flightCmd.vz * CRUISE_RATE * dt)
+      );
+      wp.speed = cruiseSpeedMps.value;
     }
   }
   if (showCamera.value) {
@@ -167,6 +215,11 @@ function stepFrame() {
   const dh = haversineMeters(pLat, pLon, drone.lat, drone.lon);
   const dz = drone.alt - pAlt;
   drone.speed = Math.sqrt(dh * dh + dz * dz) / dt;
+  // While focused, the HUD's v shows the V-mode cruise speed, not the
+  // (usually zero) actual movement of the parked camera; during a preview
+  // it shows the signed interpolated waypoint speed.
+  if (focusWaypoint) drone.speed = cruiseSpeedMps.value;
+  else if (previewActive.value) drone.speed = previewHudSpeed;
   syncCesiumCamera();
 }
 
@@ -243,32 +296,58 @@ function bearingDeg(aLat, aLng, bLat, bLng) {
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
 
-// Sample the tileset surface height under (lat, lng); updates
-// previewSurfaceAlt asynchronously (fallback stays 0 -> 30 m AMSL).
-function sampleSurfaceAt(lat, lng) {
-  const viewer = getViewer();
-  const Cesium = window.Cesium;
-  if (!viewer || !Cesium || typeof viewer.scene?.sampleHeightMostDetailed !== 'function') return;
-  const position = Cesium.Cartesian3.fromDegrees(lng, lat);
-  const apply = (result) => {
-    const p = result && result.position ? result.position : result;
-    if (!p) return;
-    try {
-      const carto = Cesium.Cartographic.fromCartesian(p);
-      if (carto && Number.isFinite(carto.height)) previewSurfaceAlt = carto.height;
-    } catch {
-      // Keep the previous value; a bad sample must not break the flight.
-    }
+// ── Waypoint parameter interpolation + tile-quality gate ─────────────────
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+// Shortest-arc angular interpolation (yaw / roll wrap at ±180°).
+function lerpAngleDeg(a, b, t) {
+  return normDeg(a + normDeg(b - a) * t);
+}
+
+function wpNum(v, dflt) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : dflt;
+}
+
+// Linear interpolation of (alt, v, yaw, pitch, roll) between the two
+// waypoints bracketing the cursor's arc position.
+function interpWpStateAtCursor() {
+  const n = wpArcDist.length;
+  if (n < 2 || previewWps.length < 2) return null;
+  const d = Math.max(0, Math.min(previewCursorM, pathTotalM));
+  let k = 0;
+  while (k < n - 2 && d > wpArcDist[k + 1]) k += 1;
+  const a = previewWps[k];
+  const b = previewWps[k + 1];
+  const span = Math.max(1e-6, wpArcDist[k + 1] - wpArcDist[k]);
+  const t = Math.max(0, Math.min(1, (d - wpArcDist[k]) / span));
+  return {
+    alt: lerp(wpNum(a.alt, WP_DEFAULT_ALT_M), wpNum(b.alt, WP_DEFAULT_ALT_M), t),
+    speed: lerp(wpNum(a.speed, WP_DEFAULT_SPEED_MPS), wpNum(b.speed, WP_DEFAULT_SPEED_MPS), t),
+    camYaw: lerpAngleDeg(wpNum(a.camYaw, 0), wpNum(b.camYaw, 0), t),
+    camPitch: lerp(wpNum(a.camPitch, WP_DEFAULT_CAM_PITCH_DEG), wpNum(b.camPitch, WP_DEFAULT_CAM_PITCH_DEG), t),
+    camRoll: lerpAngleDeg(wpNum(a.camRoll, 0), wpNum(b.camRoll, 0), t),
   };
-  try {
-    // Callback style (older Cesium) — newer versions return a promise too.
-    const ret = viewer.scene.sampleHeightMostDetailed(position, apply);
-    if (ret && typeof ret.then === 'function') {
-      ret.then(apply).catch(() => {});
-    }
-  } catch (err) {
-    console.warn('[RouteScene3D] surface sampling unavailable:', err);
+}
+
+// True once every 3D tileset in the scene has finished streaming AND
+// rendering the current view (tilesLoaded is the reliable signal — see
+// waitForTilesRendered in cesium-main.js). Globe imagery counts too when
+// the fallback globe is visible.
+function sceneTilesReady() {
+  const viewer = getViewer();
+  if (!viewer || !viewer.scene) return false;
+  const prims = viewer.scene.primitives;
+  for (let i = 0; i < prims.length; i += 1) {
+    const p = prims.get(i);
+    if (p && p.tilesLoaded === false) return false;
   }
+  const globe = viewer.scene.globe;
+  if (globe && globe.show && !globe.tilesLoaded) return false;
+  return true;
 }
 
 // Interpolated position + tangent bearing at a distance along the table.
@@ -304,27 +383,67 @@ function sampleAtDistance(dist) {
 }
 
 function stepPreviewFrame(dt) {
-  previewCursorM += PREVIEW_SPEED_MPS * dt;
-  const atEnd = previewCursorM >= pathTotalM;
-  const s = sampleAtDistance(Math.min(previewCursorM, pathTotalM));
+  // Quality gate: the flight is stuck (view frozen, spinning circle up)
+  // until every tile of the current view is downloaded AND rendered, plus
+  // READY_HOLD stable frames — the best quality of each frame beats the
+  // speed of the simulation.
+  if (!sceneTilesReady()) {
+    readyStreak = 0;
+    waitingTiles.value = true;
+    return;
+  }
+  readyStreak += 1;
+  if (readyStreak < READY_HOLD) {
+    waitingTiles.value = true;
+    return;
+  }
+  waitingTiles.value = false;
+  // Save: start the recorder only once the first view is fully rendered,
+  // so the mp4 contains no blurry pre-roll frames.
+  if (captureMode && !mediaRecorder) startRecording();
+
+  const st = interpWpStateAtCursor();
+  if (!st) {
+    stopPreview();
+    return;
+  }
+  // Advance at the interpolated waypoint speed; a minimum magnitude keeps
+  // a zero-speed waypoint from stalling the flight forever.
+  const speed = Math.max(0.1, Math.abs(st.speed));
+  previewHudSpeed = flightDir < 0 ? -speed : speed;
+  drone.alt = st.alt;
+  gimbal.yaw = st.camYaw;
+  gimbal.pitch = st.camPitch;
+  gimbal.roll = st.camRoll;
+  previewCursorM += flightDir * speed * dt;
+  const done = previewCursorM <= 0 || previewCursorM >= pathTotalM;
+  const s = sampleAtDistance(Math.max(0, Math.min(previewCursorM, pathTotalM)));
   if (!s) {
     stopPreview();
     return;
   }
   drone.lat = s.lat;
   drone.lon = s.lng;
-  drone.alt = previewSurfaceAlt + PREVIEW_CRUISE_ALT_M;
-  drone.heading = s.bearing;
-  if (atEnd) stopPreview();
+  // Negative speed flies backward: face the opposite way.
+  drone.heading = flightDir < 0 ? (s.bearing + 180) % 360 : s.bearing;
+  if (done) {
+    captureCompleted = captureMode;
+    stopPreview();
+  }
 }
 
-// Start the first-person preview flight along the waypoint spline.
+// Start the first-person preview flight along the route: (lat, lon)
+// follow the route's B-spline while alt, speed and the camera gimbal
+// angles are linearly interpolated between the waypoints. opts.capture
+// (the Save button) additionally records the flight into a 16:9 mp4.
 // Returns false (nothing started) when fewer than two waypoints exist.
-function startPreview(waypoints) {
+function startPreview(waypoints, opts = {}) {
   if (previewActive.value) return true;
-  const pts = (waypoints || []).map((w) => ({ lat: w.lat, lng: w.lng }));
+  const list = waypoints || [];
+  const pts = list.map((w) => ({ lat: w.lat, lng: w.lng }));
   if (pts.length < 2) return false;
-  const samples = splinePath(pts, 32);
+  const SAMPLES_PER_SEG = 32;
+  const samples = splinePath(pts, SAMPLES_PER_SEG);
   if (samples.length < 2) return false;
 
   // Cumulative arc-length table for constant-speed travel.
@@ -336,37 +455,73 @@ function startPreview(waypoints) {
   }
   pathTotalM = pathSamples[pathSamples.length - 1].dist;
   if (pathTotalM <= 0) return false;
-  previewCursorM = 0;
 
-  // The preview owns the view: hide both disks and fly first-person.
+  // Arc position of each waypoint: sample k*SAMPLES_PER_SEG sits exactly
+  // on waypoint k (Catmull-Rom interpolates through every control point).
+  // The parameter interpolation below is keyed on these distances.
+  previewWps = list;
+  wpArcDist = list.map((w, k) => {
+    const idx = Math.min(k * SAMPLES_PER_SEG, pathSamples.length - 1);
+    return pathSamples[idx].dist;
+  });
+  wpArcDist[wpArcDist.length - 1] = pathTotalM;
+
+  // A negative speed on the first waypoint flies the route backward
+  // (destination -> origin); the direction is locked for the whole flight.
+  flightDir = wpNum(list[0].speed, WP_DEFAULT_SPEED_MPS) < 0 ? -1 : 1;
+  previewCursorM = flightDir < 0 ? pathTotalM : 0;
+  previewHudSpeed = 0;
+
+  // The preview owns the view: hide both disks and fly first-person. The
+  // blue dots + B-spline route overlay stay hidden for the whole flight
+  // (the view re-shows them after the flight stops in 3D).
   previewActive.value = true;
+  captureMode = Boolean(opts.capture);
+  captureCompleted = false;
   showFlight.value = false;
   showCamera.value = false;
-  gimbal.yaw = 0;
-  gimbal.roll = 0;
-  gimbal.pitch = PREVIEW_PITCH_DEG;
+  hideRouteOverlay();
+  readyStreak = 0; // stuck until the start view's tiles are fully rendered
 
-  // Jump to the first waypoint; the surface height arrives asynchronously.
-  previewSurfaceAlt = 0;
-  const first = sampleAtDistance(0);
+  // Jump to the start waypoint with its own altitude and gimbal angles.
+  const wpStart = flightDir < 0 ? list[list.length - 1] : list[0];
+  const first = sampleAtDistance(previewCursorM);
   drone.lat = first.lat;
   drone.lon = first.lng;
-  drone.heading = first.bearing;
-  drone.alt = PREVIEW_CRUISE_ALT_M;
-  sampleSurfaceAt(first.lat, first.lng);
+  drone.alt = wpNum(wpStart.alt, WP_DEFAULT_ALT_M);
+  drone.heading = flightDir < 0 ? (first.bearing + 180) % 360 : first.bearing;
+  drone.speed = 0;
+  gimbal.yaw = wpNum(wpStart.camYaw, 0);
+  gimbal.pitch = wpNum(wpStart.camPitch, WP_DEFAULT_CAM_PITCH_DEG);
+  gimbal.roll = wpNum(wpStart.camRoll, 0);
   syncCesiumCamera();
-
-  startRecording();
   return true;
 }
 
 function stopPreview() {
   if (!previewActive.value) return;
   previewActive.value = false;
+  waitingTiles.value = false;
+  const wasCapture = captureMode;
+  captureMode = false;
   pathSamples = [];
   pathTotalM = 0;
   previewCursorM = 0;
-  stopRecording();
+  previewWps = [];
+  wpArcDist = [];
+  readyStreak = 0;
+  previewHudSpeed = 0;
+  // Back to the nadir, north-up overview orientation.
+  drone.heading = 0;
+  gimbal.yaw = 0;
+  gimbal.pitch = -90;
+  gimbal.roll = 0;
+  if (wasCapture) stopRecording(); // settles the clip for the Save flow
+  if (captureDoneResolve) {
+    const resolve = captureDoneResolve;
+    captureDoneResolve = null;
+    resolve();
+  }
 }
 
 // ── Recording (mirror canvas + MediaRecorder, same pattern as
@@ -393,24 +548,49 @@ function downloadBlob(blob, filename) {
 function startRecording() {
   const viewer = getViewer();
   if (!viewer || !viewer.canvas || typeof viewer.canvas.captureStream !== 'function') {
-    console.warn('[RouteScene3D] Cesium viewer is not ready; preview recording skipped.');
+    console.warn('[RouteScene3D] Cesium viewer is not ready; Save recording skipped.');
     return;
   }
   try {
     const source = viewer.canvas;
-    // Downscale only when the window exceeds 1080p; even dimensions for
-    // codec compatibility. Never upscale.
-    const scale = Math.min(1, RECORDING_MAX_WIDTH / source.width);
+    // Best resolution: never downscale or upscale. The output must be
+    // 16:9 (width:height), so each rendered frame is center-cropped to
+    // that aspect at the canvas's native pixel size.
+    let cw = source.width;
+    let ch = source.height;
+    if (cw / ch > RECORDING_ASPECT) cw = Math.round(ch * RECORDING_ASPECT);
+    else ch = Math.round(cw / RECORDING_ASPECT);
+    cw = Math.max(2, cw & ~1); // even dimensions for codec compatibility
+    ch = Math.max(2, ch & ~1);
     mirrorCanvas = document.createElement('canvas');
-    mirrorCanvas.width = Math.max(2, Math.round(source.width * scale) & ~1);
-    mirrorCanvas.height = Math.max(2, Math.round(source.height * scale) & ~1);
+    mirrorCanvas.width = cw;
+    mirrorCanvas.height = ch;
     mirrorCtx = mirrorCanvas.getContext('2d');
 
     const mirrorFrame = () => {
       if (!mirrorCtx) return;
-      if (source.width > 0 && source.height > 0) {
-        mirrorCtx.drawImage(source, 0, 0, mirrorCanvas.width, mirrorCanvas.height);
-      }
+      const w = source.width;
+      const h = source.height;
+      if (w <= 0 || h <= 0) return;
+      // Re-derive the 16:9 crop from the CURRENT canvas size (a window
+      // resize mid-save must not skew or letterbox the recording).
+      let sw = w;
+      let sh = h;
+      if (sw / sh > RECORDING_ASPECT) sw = Math.round(sh * RECORDING_ASPECT);
+      else sh = Math.round(sw / RECORDING_ASPECT);
+      sw = Math.max(2, sw & ~1);
+      sh = Math.max(2, sh & ~1);
+      mirrorCtx.drawImage(
+        source,
+        Math.round((w - sw) / 2),
+        Math.round((h - sh) / 2),
+        sw,
+        sh,
+        0,
+        0,
+        mirrorCanvas.width,
+        mirrorCanvas.height
+      );
     };
     mirrorFrame();
     // postRender fires synchronously after Cesium renders, while the WebGL
@@ -425,11 +605,13 @@ function startRecording() {
       mirrorRafId = requestAnimationFrame(pump);
     }
 
+    // Bitrate scales with the pixel count (~0.12 bits/px/frame), floored.
+    const bitrate = Math.max(RECORDING_MIN_BITRATE, Math.round(cw * ch * RECORDING_FPS * 0.12));
     stream = mirrorCanvas.captureStream(RECORDING_FPS);
     const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
     mediaRecorder = new MediaRecorder(stream, {
       mimeType,
-      videoBitsPerSecond: RECORDING_BITRATE,
+      videoBitsPerSecond: bitrate,
     });
     recordedChunks = [];
     mediaRecorder.ondataavailable = (event) => {
@@ -501,16 +683,28 @@ function cleanupRecording() {
   recordedChunks = [];
 }
 
-// Download the last recorded preview clip. Stops a running preview first so
-// the clip is complete; resolves after the recorder has settled.
-async function saveClip() {
+// Save = a dedicated capture flight: re-fly the WHOLE route from the origin
+// to the destination (quality-gated exactly like the live preview) while
+// recording every frame at the canvas's full resolution, center-cropped to
+// 16:9, then download it as an mp4. Resolves after the download; returns
+// false when nothing was captured (fewer than two waypoints, or the flight
+// was canceled before reaching the destination).
+async function saveClip(waypoints) {
+  if (saving.value) return false;
+  if (previewActive.value) stopPreview(); // a live preview is canceled
   saving.value = true;
   try {
-    if (previewActive.value) stopPreview();
+    if (!startPreview(waypoints, { capture: true })) return false;
+    await new Promise((resolve) => {
+      captureDoneResolve = resolve;
+    });
     if (clipSettlePromise) await clipSettlePromise;
-    if (!lastClip) return false;
-    downloadBlob(lastClip.blob, `route-preview-${timestamp()}.${lastClip.ext}`);
-    return true;
+    if (captureCompleted && lastClip) {
+      downloadBlob(lastClip.blob, `route-preview-${timestamp()}.${lastClip.ext}`);
+      lastClip = null;
+      return true;
+    }
+    return false;
   } finally {
     saving.value = false;
   }
@@ -732,11 +926,13 @@ export function useRouteScene3D() {
   return {
     previewActive,
     saving,
+    waitingTiles,
     startLoop,
     stopLoop,
     startPreview,
     stopPreview,
     saveClip,
+    cruiseSpeedMps,
     showRouteOverlay,
     hideRouteOverlay,
     onWaypointPick,

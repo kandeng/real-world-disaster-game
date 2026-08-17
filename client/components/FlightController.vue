@@ -5,6 +5,7 @@ defineProps({
   size: { type: Number, default: 224 },
   sensitivity: { type: Number, default: 3 },
   disabled: { type: Boolean, default: false },
+  modes: { type: Array, default: null },
 });
 
 defineEmits(['move', 'stop', 'modeChange']);
@@ -15,6 +16,7 @@ defineEmits(['move', 'stop', 'modeChange']);
     mode="flight"
     :size="size"
     :sensitivity="sensitivity"
+    :modes="modes"
     enable-mode-cycle
     :disabled="disabled"
     @move="$emit('move', $event)"
