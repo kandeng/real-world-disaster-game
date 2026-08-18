@@ -14,5 +14,6 @@
   "steer": "Steer",
   "preview": "Preview",
   "save": "Save",
-  "preview_need_waypoints": "Add at least two waypoints before preview."
+  "preview_need_waypoints": "Add at least two waypoints before preview.",
+  "auth_notice_preview": "Please log in before saving the preview video."
 }

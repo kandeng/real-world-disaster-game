@@ -14,5 +14,6 @@
   "steer": "操控",
   "preview": "预览",
   "save": "保存",
-  "preview_need_waypoints": "请至少添加两个航点后再预览"
+  "preview_need_waypoints": "请至少添加两个航点后再预览",
+  "auth_notice_preview": "请先登录，然后再保存预览视频。"
 }

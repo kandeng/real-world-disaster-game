@@ -590,23 +590,6 @@ function stopPreview() {
 //    useScreenCapture: the viewer has no preserveDrawingBuffer, so the
 //    WebGL canvas is copied inside scene.postRender while still fresh) ────
 
-function timestamp() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-}
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 function startRecording() {
   const viewer = getViewer();
   if (!viewer || !viewer.canvas || typeof viewer.canvas.captureStream !== 'function') {
@@ -971,7 +954,9 @@ async function tryOfflineSave(waypoints) {
     if (offlineAbort || encoderError) return false;
     muxer.finalize();
     const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
-    downloadBlob(blob, `route-preview-${timestamp()}.mp4`);
+    // Hand the clip to the UI layer (login gate + save dialog) instead of
+    // downloading it directly.
+    lastClip = { blob, ext: 'mp4' };
     return true;
   } catch (err) {
     console.error('[RouteScene3D] Offline save failed:', err);
@@ -995,8 +980,10 @@ async function tryOfflineSave(waypoints) {
 // the canvas's native resolution. Preferred path: the offline frame-by-
 // frame renderer above (exact 30 fps, every frame fully rendered). Fallback
 // when WebCodecs/H.264 is unavailable: a live capture flight recorded with
-// MediaRecorder. Resolves after the download attempt; returns false when
-// nothing was saved (fewer than two waypoints, aborted, or encode error).
+// MediaRecorder. The finished clip is NOT downloaded here — it is handed to
+// the caller via takeLastClip() (which applies the login gate and the save
+// dialog). Returns false when nothing was rendered (fewer than two
+// waypoints, aborted, or encode error).
 async function saveClip(waypoints) {
   if (saving.value) return false;
   if (previewActive.value) stopPreview(); // a live preview is canceled
@@ -1011,16 +998,20 @@ async function saveClip(waypoints) {
       captureDoneResolve = resolve;
     });
     if (clipSettlePromise) await clipSettlePromise;
-    if (captureCompleted && lastClip) {
-      downloadBlob(lastClip.blob, `route-preview-${timestamp()}.${lastClip.ext}`);
-      lastClip = null;
-      return true;
-    }
+    if (captureCompleted && lastClip) return true; // clip stays in lastClip
     return false;
   } finally {
     saving.value = false;
     renderProgress.value = null;
   }
+}
+
+// Hand off the clip produced by saveClip() ({ blob, ext }) and clear it.
+// Returns null when there is nothing to take.
+function takeLastClip() {
+  const clip = lastClip;
+  lastClip = null;
+  return clip;
 }
 
 // ── 3D route overlay: blue indexed circles + B-spline polyline ────────────
@@ -1246,6 +1237,7 @@ export function useRouteScene3D() {
     startPreview,
     stopPreview,
     saveClip,
+    takeLastClip,
     cruiseSpeedMps,
     showRouteOverlay,
     hideRouteOverlay,

@@ -10,6 +10,7 @@ import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
+import { useAuth } from '@shared-composables/useAuth.js';
 import DockMenuButton from '@shared/DockMenuButton.vue';
 import DockButton from '@shared/DockButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
@@ -18,6 +19,9 @@ import cancelIcon from '../../icons/cancel.svg';
 
 const { t } = useI18n();
 const { drone, gimbal } = useDrone();
+// Login state: the finished preview video is only handed out to logged-in
+// users (same gate as the captures on 3D Exploration -> 3D Aerial).
+const { isAuthenticated } = useAuth();
 
 // 3D subpage scene controller: sim loop, Flight/Gimbal disk state and the
 // first-person preview flight + recording (singleton composable).
@@ -596,31 +600,43 @@ function onOverlayWpClick(id) {
 const showPreviewHint = ref(false);
 let previewHintTimer = null;
 
-function onClickPreview() {
-  // While a Save capture flight runs, Preview aborts it (no download).
-  if (routeScene.saving.value) {
-    routeScene.stopPreview();
-    routeScene.showRouteOverlay(waypoints.value, null);
-    return;
+// Green top-center login reminder after the render completes (same style
+// and content pattern as 3D Exploration -> 3D Aerial).
+const showAuthNotice = ref(false);
+let authNoticeTimer = null;
+
+// Ask the user where to save the clip: the native "Save As" dialog of the
+// File System Access API; browsers without it fall back to a plain download
+// anchor. A cancelled dialog keeps nothing — the render can simply be
+// started again (the tile cache makes reruns fast).
+async function saveClipToFile(clip) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const d = new Date();
+  const name = `route-preview-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${clip.ext}`;
+  const mime = clip.ext === 'mp4' ? 'video/mp4' : 'video/webm';
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'Video', accept: { [mime]: [`.${clip.ext}`] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(clip.blob);
+      await writable.close();
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return; // user cancelled
+      // Any other failure falls through to the anchor download below.
+    }
   }
-  if (routeScene.previewActive.value) {
-    routeScene.stopPreview();
-    // Back in the nadir overview: the blue dots + spline reappear.
-    routeScene.showRouteOverlay(waypoints.value, null);
-    return;
-  }
-  // The preview flight lives in the 3D tiles: enter 3D first if needed.
-  if (!is3d.value) viewMode.value = '3d';
-  // Preview owns the screen: disks and the Route list are hidden.
-  showRoutePanel.value = false;
-  if (!routeScene.startPreview(waypoints.value)) {
-    // Green top-center reminder: the preview needs at least two waypoints.
-    showPreviewHint.value = true;
-    clearTimeout(previewHintTimer);
-    previewHintTimer = setTimeout(() => {
-      showPreviewHint.value = false;
-    }, 2500);
-  }
+  const url = URL.createObjectURL(clip.blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = name;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 async function onClickSave() {
@@ -637,14 +653,26 @@ async function onClickSave() {
   // The offline renderer walks the 3D camera along the route: enter 3D so
   // the render pass (and its frame-counter overlay) is visible.
   if (!is3d.value) viewMode.value = '3d';
-  // Save renders the whole route (origin -> destination) at exact 30 fps
-  // into a 16:9 mp4 and downloads it (MediaRecorder capture flight only as
-  // a fallback when WebCodecs is unavailable).
-  await routeScene.saveClip(waypoints.value);
+  // Preview renders the whole route (origin -> destination) at exact 30 fps
+  // into a 16:9 mp4 (MediaRecorder capture flight only as a fallback when
+  // WebCodecs is unavailable).
+  const ok = await routeScene.saveClip(waypoints.value);
   // The flight hid the route overlay; restore it in the 3D overview.
   if (is3d.value && !routeScene.previewActive.value) {
     routeScene.showRouteOverlay(waypoints.value, null);
   }
+  if (!ok) return; // aborted or failed: no clip was produced
+  const clip = routeScene.takeLastClip();
+  if (!clip) return;
+  // Login gate: once the render is done, anonymous users get the green
+  // top-center reminder instead of the video file.
+  if (!isAuthenticated.value) {
+    showAuthNotice.value = true;
+    clearTimeout(authNoticeTimer);
+    authNoticeTimer = setTimeout(() => { showAuthNotice.value = false; }, 6000);
+    return;
+  }
+  await saveClipToFile(clip);
 }
 
 onMounted(() => {
@@ -680,16 +708,12 @@ onMounted(() => {
     onClick: onClickMap,
   });
   registerLeft({
+    // The single Preview button: renders the whole route on screen at
+    // exact 30 fps (offline pass, every frame fully rendered) and saves
+    // it as a 16:9 mp4.
     id: 'preview',
     icon: 'MENU_PREVIEW',
     titleKey: 'routeplanningview.preview',
-    active: routeScene.previewActive.value,
-    onClick: onClickPreview,
-  });
-  registerLeft({
-    id: 'save',
-    icon: 'MENU_SAVE',
-    titleKey: 'routeplanningview.save',
     active: routeScene.saving.value,
     onClick: onClickSave,
   });
@@ -710,9 +734,7 @@ onMounted(() => {
       const savingNow = routeScene.saving.value;
       const bm = leftItems.find((i) => i.id === 'map');
       if (bm) bm.active = viewMode.value !== '3d' && !savingNow;
-      const bp = leftItems.find((i) => i.id === 'preview');
-      if (bp) bp.active = routeScene.previewActive.value && !savingNow;
-      const bsv = leftItems.find((i) => i.id === 'save');
+      const bsv = leftItems.find((i) => i.id === 'preview');
       if (bsv) bsv.active = savingNow;
 
       const bs = rightItems.find((i) => i.id === 'search');
@@ -861,6 +883,12 @@ onUnmounted(() => {
       <!-- Green top-center reminder: preview needs >= 2 waypoints -->
       <div v-if="showPreviewHint" class="top-center-message top-center-message--success">
         {{ t('routeplanningview.preview_need_waypoints') }}
+      </div>
+
+      <!-- Green top-center reminder: the preview video needs a login
+           (same gate as 3D Exploration -> 3D Aerial) -->
+      <div v-if="showAuthNotice" class="top-center-message top-center-message--auth">
+        {{ t('routeplanningview.auth_notice_preview') }}
       </div>
 
       <!-- Spinning circle: the preview/save flight is stuck waiting for
@@ -1412,6 +1440,12 @@ onUnmounted(() => {
 
 .top-center-message--success {
   background: rgba(34, 197, 94, 0.9);
+  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
+}
+
+/* Login-gate reminder — same style as the 3D Exploration page. */
+.top-center-message--auth {
+  background: rgba(34, 197, 94, 0.92);
   box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
 }
 </style>
