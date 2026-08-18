@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "matrix-js-sdk": "^42.0.0",
+    "mp4-muxer": "^5.2.2",
     "vue": "^3.4.27",
     "vue-i18n": "^9.14.5",
     "vue-router": "^4.3.2"

@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { useDrone } from './useDrone.js';
 import { useFlightCommands } from './useFlightCommands.js';
 import { useFlightPhysics } from './useFlightPhysics.js';
@@ -76,6 +77,11 @@ let flightReleased = false;  // takeoff gate passed -> grace window applies
 // True while the preview/save flight is stuck waiting for the 3D tiles of
 // the current view; the view shows a spinning circle and does not advance.
 const waitingTiles = ref(false);
+// Offline Save renderer state: renderProgress drives the frame-counter
+// overlay ({ frame, total }); offlineAbort stops the pass at the next
+// frame boundary (Pages / Map / Preview all call stopPreview to abort).
+let offlineAbort = false;
+const renderProgress = ref(null);
 
 // ── Recording state ────────────────────────────────────────────────────────
 let mediaRecorder = null;
@@ -331,10 +337,10 @@ function wpNum(v, dflt) {
 
 // Linear interpolation of (alt, v, yaw, pitch, roll) between the two
 // waypoints bracketing the cursor's arc position.
-function interpWpStateAtCursor() {
+function interpWpStateAt(distM) {
   const n = wpArcDist.length;
   if (n < 2 || previewWps.length < 2) return null;
-  const d = Math.max(0, Math.min(previewCursorM, pathTotalM));
+  const d = Math.max(0, Math.min(distM, pathTotalM));
   let k = 0;
   while (k < n - 2 && d > wpArcDist[k + 1]) k += 1;
   const a = previewWps[k];
@@ -439,7 +445,7 @@ function stepPreviewFrame(dt) {
   // so the mp4 contains no blurry pre-roll frames.
   if (captureMode && !mediaRecorder) startRecording();
 
-  const st = interpWpStateAtCursor();
+  const st = interpWpStateAt(previewCursorM);
   if (!st) {
     stopPreview();
     return;
@@ -448,10 +454,6 @@ function stepPreviewFrame(dt) {
   // a zero-speed waypoint from stalling the flight forever.
   const speed = Math.max(0.1, Math.abs(st.speed));
   previewHudSpeed = flightDir < 0 ? -speed : speed;
-  drone.alt = st.alt;
-  gimbal.yaw = st.camYaw;
-  gimbal.pitch = st.camPitch;
-  gimbal.roll = st.camRoll;
   previewCursorM += flightDir * speed * dt;
   const done = previewCursorM <= 0 || previewCursorM >= pathTotalM;
   const s = sampleAtDistance(Math.max(0, Math.min(previewCursorM, pathTotalM)));
@@ -463,21 +465,26 @@ function stepPreviewFrame(dt) {
   drone.lon = s.lng;
   // Negative speed flies backward: face the opposite way.
   drone.heading = flightDir < 0 ? (s.bearing + 180) % 360 : s.bearing;
+  drone.alt = st.alt;
+  // The waypoint camera yaw is authored as an ABSOLUTE compass bearing:
+  // focus mode flies with heading 0, so gimbal yaw == view azimuth there.
+  // Keep it absolute in flight: express it body-relative so that
+  // heading + gimbalYaw reproduces the authored azimuth instead of
+  // rotating the whole view by the route bearing.
+  gimbal.yaw = normDeg(st.camYaw - drone.heading);
+  gimbal.pitch = st.camPitch;
+  gimbal.roll = st.camRoll;
   if (done) {
     captureCompleted = captureMode;
     stopPreview();
   }
 }
 
-// Start the first-person preview flight along the route: (lat, lon)
-// follow the route's B-spline while alt, speed and the camera gimbal
-// angles are linearly interpolated between the waypoints. opts.capture
-// (the Save button) additionally records the flight into a 16:9 mp4.
-// Returns false (nothing started) when fewer than two waypoints exist.
-function startPreview(waypoints, opts = {}) {
-  if (previewActive.value) return true;
-  const list = waypoints || [];
-  const pts = list.map((w) => ({ lat: w.lat, lng: w.lng }));
+// Builds the spline arc table, the per-waypoint arc positions and the
+// flight direction; shared by the live preview and the offline Save
+// renderer. Returns false when fewer than two usable waypoints exist.
+function buildFlightPath(list) {
+  const pts = (list || []).map((w) => ({ lat: w.lat, lng: w.lng }));
   if (pts.length < 2) return false;
   const SAMPLES_PER_SEG = 32;
   const samples = splinePath(pts, SAMPLES_PER_SEG);
@@ -495,7 +502,7 @@ function startPreview(waypoints, opts = {}) {
 
   // Arc position of each waypoint: sample k*SAMPLES_PER_SEG sits exactly
   // on waypoint k (Catmull-Rom interpolates through every control point).
-  // The parameter interpolation below is keyed on these distances.
+  // The parameter interpolation is keyed on these distances.
   previewWps = list;
   wpArcDist = list.map((w, k) => {
     const idx = Math.min(k * SAMPLES_PER_SEG, pathSamples.length - 1);
@@ -506,6 +513,18 @@ function startPreview(waypoints, opts = {}) {
   // A negative speed on the first waypoint flies the route backward
   // (destination -> origin); the direction is locked for the whole flight.
   flightDir = wpNum(list[0].speed, WP_DEFAULT_SPEED_MPS) < 0 ? -1 : 1;
+  return true;
+}
+
+// Start the first-person preview flight along the route: (lat, lon)
+// follow the route's B-spline while alt, speed and the camera gimbal
+// angles are linearly interpolated between the waypoints. opts.capture
+// (the Save button) additionally records the flight into a 16:9 mp4.
+// Returns false (nothing started) when fewer than two waypoints exist.
+function startPreview(waypoints, opts = {}) {
+  if (previewActive.value) return true;
+  const list = waypoints || [];
+  if (!buildFlightPath(list)) return false;
   previewCursorM = flightDir < 0 ? pathTotalM : 0;
   previewHudSpeed = 0;
 
@@ -530,7 +549,8 @@ function startPreview(waypoints, opts = {}) {
   drone.alt = wpNum(wpStart.alt, WP_DEFAULT_ALT_M);
   drone.heading = flightDir < 0 ? (first.bearing + 180) % 360 : first.bearing;
   drone.speed = 0;
-  gimbal.yaw = wpNum(wpStart.camYaw, 0);
+  // Authored view azimuth kept absolute (see stepPreviewFrame).
+  gimbal.yaw = normDeg(wpNum(wpStart.camYaw, 0) - drone.heading);
   gimbal.pitch = wpNum(wpStart.camPitch, WP_DEFAULT_CAM_PITCH_DEG);
   gimbal.roll = wpNum(wpStart.camRoll, 0);
   syncCesiumCamera();
@@ -538,6 +558,7 @@ function startPreview(waypoints, opts = {}) {
 }
 
 function stopPreview() {
+  offlineAbort = true; // also interrupts a running offline Save render pass
   if (!previewActive.value) return;
   previewActive.value = false;
   waitingTiles.value = false;
@@ -724,17 +745,267 @@ function cleanupRecording() {
   recordedChunks = [];
 }
 
-// Save = a dedicated capture flight: re-fly the WHOLE route from the origin
-// to the destination (quality-gated exactly like the live preview) while
-// recording every frame at the canvas's full resolution, center-cropped to
-// 16:9, then download it as an mp4. Resolves after the download; returns
-// false when nothing was captured (fewer than two waypoints, or the flight
-// was canceled before reaching the destination).
+// ── Offline Save renderer (WebCodecs + mp4-muxer) ──────────────────────────
+// Instead of recording the live flight in real time, the camera is stepped
+// along the route at exact 1/RECORDING_FPS flight-time intervals; every
+// frame waits until its view is FULLY rendered, is captured from the WebGL
+// buffer and encoded straight into an mp4. Result: exact frame rate, no
+// dropped/juddered frames, fully-rendered tiles in every frame. Falls back
+// to the live MediaRecorder capture flight when WebCodecs/H.264 is missing.
+
+// 16:9 center crop of a w×h canvas at native resolution (even dimensions).
+function computeCropRect(w, h) {
+  if (w <= 0 || h <= 0) return null;
+  let cw = w;
+  let ch = h;
+  if (cw / ch > RECORDING_ASPECT) cw = Math.round(ch * RECORDING_ASPECT);
+  else ch = Math.round(cw / RECORDING_ASPECT);
+  cw = Math.max(2, cw & ~1);
+  ch = Math.max(2, ch & ~1);
+  return { x: Math.round((w - cw) / 2), y: Math.round((h - ch) / 2), w: cw, h: ch };
+}
+
+function ensureMirrorCanvas(w, h) {
+  if (!mirrorCanvas) {
+    mirrorCanvas = document.createElement('canvas');
+    mirrorCtx = mirrorCanvas.getContext('2d');
+  }
+  if (mirrorCanvas.width !== w) mirrorCanvas.width = w;
+  if (mirrorCanvas.height !== h) mirrorCanvas.height = h;
+}
+
+// Resolve once the current view reports holdFrames consecutive tile-ready
+// frames (or false when the pass is aborted while waiting).
+function awaitTilesStable(holdFrames) {
+  return new Promise((resolve) => {
+    let streak = 0;
+    const tick = () => {
+      if (offlineAbort) return resolve(false);
+      if (sceneTilesReady()) {
+        streak += 1;
+        if (streak >= holdFrames) return resolve(true);
+      } else {
+        streak = 0;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+// Copy the 16:9 crop of the NEXT rendered frame into the mirror canvas
+// (postRender fires while the WebGL buffer is still valid to sample).
+function grabCroppedFrame(crop) {
+  const viewer = getViewer();
+  if (!viewer || !viewer.canvas || !viewer.scene || !viewer.scene.postRender || !mirrorCtx) {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let remove = null;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (typeof remove === 'function') remove();
+      resolve(ok);
+    };
+    remove = viewer.scene.postRender.addEventListener(() => {
+      try {
+        mirrorCtx.drawImage(
+          viewer.canvas, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h
+        );
+        finish(true);
+      } catch (err) {
+        finish(false);
+      }
+    });
+    // Watchdog: a stalled renderer must never hang the Save action.
+    setTimeout(() => finish(false), 15000);
+  });
+}
+
+// Flight timeline: integrate the speed interpolated between the waypoints
+// along the arc table, so output frames land at exact flight-time steps.
+// Returns { times[i] at pathSamples[i], totalT }.
+function buildTimeTable() {
+  const times = new Array(pathSamples.length);
+  times[0] = 0;
+  let t = 0;
+  for (let i = 1; i < pathSamples.length; i += 1) {
+    const seg = pathSamples[i].dist - pathSamples[i - 1].dist;
+    const sa = interpWpStateAt(pathSamples[i - 1].dist);
+    const sb = interpWpStateAt(pathSamples[i].dist);
+    const va = Math.max(0.1, Math.abs(sa ? sa.speed : WP_DEFAULT_SPEED_MPS));
+    const vb = Math.max(0.1, Math.abs(sb ? sb.speed : WP_DEFAULT_SPEED_MPS));
+    t += seg / ((va + vb) / 2);
+    times[i] = t;
+  }
+  return { times, totalT: t };
+}
+
+// Invert the timeline: flight time -> arc distance (binary search + lerp).
+function distanceAtTime(timeS, table) {
+  if (timeS <= 0) return 0;
+  if (timeS >= table.totalT) return pathTotalM;
+  let lo = 0;
+  let hi = table.times.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (table.times[mid] <= timeS) lo = mid;
+    else hi = mid;
+  }
+  const span = Math.max(1e-9, table.times[hi] - table.times[lo]);
+  const f = (timeS - table.times[lo]) / span;
+  return pathSamples[lo].dist + (pathSamples[hi].dist - pathSamples[lo].dist) * f;
+}
+
+// First H.264 config the platform can encode at this size, or null.
+async function probeOfflineEncoder(width, height, bitrate) {
+  if (typeof VideoEncoder === 'undefined') return null;
+  const candidates = ['avc1.640033', 'avc1.640032', 'avc1.64002A'];
+  for (const codec of candidates) {
+    try {
+      const res = await VideoEncoder.isConfigSupported({
+        codec,
+        width,
+        height,
+        bitrate,
+        framerate: RECORDING_FPS,
+        hardwareAcceleration: 'prefer-hardware',
+      });
+      if (res && res.supported) return codec;
+    } catch (err) {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
+// The offline render pass. Returns true = clip encoded + downloaded,
+// false = aborted/failed (nothing downloaded), null = WebCodecs H.264
+// unavailable -> the caller falls back to the MediaRecorder capture flight.
+async function tryOfflineSave(waypoints) {
+  if (typeof VideoEncoder === 'undefined') return null;
+  if (!buildFlightPath(waypoints)) return false;
+  const viewer = getViewer();
+  if (!viewer || !viewer.canvas) return false;
+  const crop = computeCropRect(viewer.canvas.width, viewer.canvas.height);
+  if (!crop) return false;
+  // Bitrate scales with the pixel count (~0.12 bits/px/frame), floored.
+  const bitrate = Math.max(RECORDING_MIN_BITRATE, Math.round(crop.w * crop.h * RECORDING_FPS * 0.12));
+  const codec = await probeOfflineEncoder(crop.w, crop.h, bitrate);
+  if (!codec) return null; // no H.264 encoder -> MediaRecorder fallback
+
+  // The pass owns the view exactly like a preview: disks hidden, and the
+  // blue dots + spline overlay must never appear in the encoded frames.
+  showFlight.value = false;
+  showCamera.value = false;
+  hideRouteOverlay();
+
+  const table = buildTimeTable();
+  const totalFrames = Math.max(1, Math.round(table.totalT * RECORDING_FPS));
+  let muxer = null;
+  let encoder = null;
+  let encoderError = null;
+  try {
+    muxer = new Muxer({
+      target: new ArrayBufferTarget(),
+      video: { codec: 'avc', width: crop.w, height: crop.h, frameRate: RECORDING_FPS },
+      fastStart: 'in-memory',
+    });
+    encoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (err) => {
+        encoderError = err;
+      },
+    });
+    encoder.configure({
+      codec,
+      width: crop.w,
+      height: crop.h,
+      bitrate,
+      framerate: RECORDING_FPS,
+      hardwareAcceleration: 'prefer-hardware',
+    });
+  } catch (err) {
+    console.warn('[RouteScene3D] Offline encoder setup failed; falling back to MediaRecorder.', err);
+    return null;
+  }
+  ensureMirrorCanvas(crop.w, crop.h);
+
+  try {
+    for (let k = 0; k <= totalFrames; k += 1) {
+      if (offlineAbort || encoderError) return false;
+      renderProgress.value = { frame: k + 1, total: totalFrames + 1 };
+      // Exact flight-time sampling: waypoint speeds integrated along the
+      // B-spline decide where the drone is at t = k / RECORDING_FPS.
+      const time = Math.min(k / RECORDING_FPS, table.totalT);
+      const dist = distanceAtTime(time, table);
+      const s = sampleAtDistance(dist);
+      const st = interpWpStateAt(dist);
+      if (!s || !st) return false;
+      drone.lat = s.lat;
+      drone.lon = s.lng;
+      drone.alt = st.alt;
+      drone.heading = flightDir < 0 ? (s.bearing + 180) % 360 : s.bearing;
+      // Authored view azimuth kept absolute (see stepPreviewFrame).
+      gimbal.yaw = normDeg(st.camYaw - drone.heading);
+      gimbal.pitch = st.camPitch;
+      gimbal.roll = st.camRoll;
+      syncCesiumCamera();
+      // Quality gate with no grace window: waiting is free here — every
+      // encoded frame must be fully rendered.
+      if (!(await awaitTilesStable(3))) return false; // aborted while waiting
+      if (!(await grabCroppedFrame(crop))) return false;
+      const vf = new VideoFrame(mirrorCanvas, {
+        timestamp: Math.round((k * 1e6) / RECORDING_FPS),
+      });
+      encoder.encode(vf, { keyFrame: k % 60 === 0 });
+      vf.close();
+      // Backpressure: keep the encode queue shallow.
+      while (encoder.encodeQueueSize > 8 && !offlineAbort && !encoderError) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+    await encoder.flush();
+    if (offlineAbort || encoderError) return false;
+    muxer.finalize();
+    const blob = new Blob([muxer.target.buffer], { type: 'video/mp4' });
+    downloadBlob(blob, `route-preview-${timestamp()}.mp4`);
+    return true;
+  } catch (err) {
+    console.error('[RouteScene3D] Offline save failed:', err);
+    return false;
+  } finally {
+    try {
+      if (encoder && encoder.state !== 'closed') encoder.close();
+    } catch (err) {
+      // already closed
+    }
+    // The pass owned the shared path globals; clear them (the caller
+    // restores the route overlay once the Save action settles).
+    pathSamples = [];
+    pathTotalM = 0;
+    previewWps = [];
+    wpArcDist = [];
+  }
+}
+
+// Save = render the WHOLE route (origin -> destination) into a 16:9 mp4 at
+// the canvas's native resolution. Preferred path: the offline frame-by-
+// frame renderer above (exact 30 fps, every frame fully rendered). Fallback
+// when WebCodecs/H.264 is unavailable: a live capture flight recorded with
+// MediaRecorder. Resolves after the download attempt; returns false when
+// nothing was saved (fewer than two waypoints, aborted, or encode error).
 async function saveClip(waypoints) {
   if (saving.value) return false;
   if (previewActive.value) stopPreview(); // a live preview is canceled
+  offlineAbort = false;
   saving.value = true;
   try {
+    const offline = await tryOfflineSave(waypoints);
+    if (offline !== null) return offline;
+    // Fallback: quality-gated capture flight + MediaRecorder.
     if (!startPreview(waypoints, { capture: true })) return false;
     await new Promise((resolve) => {
       captureDoneResolve = resolve;
@@ -748,6 +1019,7 @@ async function saveClip(waypoints) {
     return false;
   } finally {
     saving.value = false;
+    renderProgress.value = null;
   }
 }
 
@@ -968,6 +1240,7 @@ export function useRouteScene3D() {
     previewActive,
     saving,
     waitingTiles,
+    renderProgress,
     startLoop,
     stopLoop,
     startPreview,

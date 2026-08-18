@@ -40,7 +40,7 @@ const showHudDashboard = computed(() => is3d.value && !routeScene.previewActive.
 // Spinning-circle overlay: the preview/save flight freezes (view stuck)
 // until the Google 3D tiles of the current view are fully downloaded and
 // rendered — quality of each frame beats speed of the simulation.
-const showTileSpinner = computed(() => is3d.value && routeScene.waitingTiles.value);
+const showTileSpinner = computed(() => is3d.value && (routeScene.waitingTiles.value || routeScene.renderProgress.value != null));
 // While a preview or a Save capture flight runs, the whole right sidebar
 // (Search / Waypoint / Steer / Route) is locked: buttons dim + ignore
 // clicks, and the Flight / Gimbal disks stay hidden.
@@ -634,9 +634,17 @@ async function onClickSave() {
     }, 2500);
     return;
   }
-  // Save re-flies the whole route (origin -> destination) as a quality-
-  // gated capture flight and downloads a 16:9 mp4 when it arrives.
+  // The offline renderer walks the 3D camera along the route: enter 3D so
+  // the render pass (and its frame-counter overlay) is visible.
+  if (!is3d.value) viewMode.value = '3d';
+  // Save renders the whole route (origin -> destination) at exact 30 fps
+  // into a 16:9 mp4 and downloads it (MediaRecorder capture flight only as
+  // a fallback when WebCodecs is unavailable).
   await routeScene.saveClip(waypoints.value);
+  // The flight hid the route overlay; restore it in the 3D overview.
+  if (is3d.value && !routeScene.previewActive.value) {
+    routeScene.showRouteOverlay(waypoints.value, null);
+  }
 }
 
 onMounted(() => {
@@ -741,8 +749,11 @@ onMounted(() => {
       routeScene.setFocusWaypoint(null);
       routeScene.showFlight.value = false; // no disks in the nadir overview
       routeScene.showCamera.value = false;
-      // A preview started from 2D already hid the overlay: don't re-show it.
-      if (!routeScene.previewActive.value) routeScene.showRouteOverlay(waypoints.value, null);
+      // A preview started from 2D already hid the overlay: don't re-show it
+      // (same for an offline Save render pass, which hides it itself).
+      if (!routeScene.previewActive.value && !routeScene.saving.value) {
+        routeScene.showRouteOverlay(waypoints.value, null);
+      }
       if (pickCleanup) pickCleanup();
       pickCleanup = routeScene.onWaypointPick(onOverlayWpClick);
       if (routeScene.previewActive.value) return; // preview owns the camera
@@ -793,7 +804,7 @@ onMounted(() => {
   watch(
     waypoints,
     () => {
-      if (is3d.value && focusedWpId.value == null && !routeScene.previewActive.value) {
+      if (is3d.value && focusedWpId.value == null && !routeScene.previewActive.value && !routeScene.saving.value) {
         routeScene.showRouteOverlay(waypoints.value, null);
       }
     },
@@ -853,9 +864,15 @@ onUnmounted(() => {
       </div>
 
       <!-- Spinning circle: the preview/save flight is stuck waiting for
-           the Google 3D tiles of the current view to download + render. -->
+           the Google 3D tiles of the current view to download + render;
+           during an offline Save the frame counter shows the progress. -->
       <div v-if="showTileSpinner" class="tile-wait-overlay">
-        <div class="tile-wait-spinner" />
+        <div class="tile-wait-box">
+          <div class="tile-wait-spinner" />
+          <div v-if="routeScene.renderProgress.value" class="tile-wait-text">
+            {{ routeScene.renderProgress.value.frame }} / {{ routeScene.renderProgress.value.total }}
+          </div>
+        </div>
       </div>
 
       <!-- Address search popup -->
@@ -1036,6 +1053,20 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   pointer-events: none;
+}
+
+.tile-wait-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.tile-wait-text {
+  font: 600 16px/1 system-ui, sans-serif;
+  color: #fff;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
 
 .tile-wait-spinner {
