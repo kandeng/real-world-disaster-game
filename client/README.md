@@ -13,7 +13,7 @@ client/                     # Vite project root
 │   ├── App.vue             # Root Vue component
 │   ├── main.js             # Vue app initialization
 │   ├── router/             # Vue Router routes
-│   ├── views/              # Page components (AerialView, Map2DView, Satellite2DView, ChatView, SettingsView)
+│   ├── views/              # Page components (AerialView, Satellite2DView, RoutePlanningView, ChatView, SettingsView)
 │   ├── components/         # App-specific components (CollisionWarning, StreetViewPane)
 │   ├── composables/        # App-specific composables (useAltitudeGate)
 │   ├── config/             # IconConfig.js — centralized SVG icon registry
@@ -59,7 +59,6 @@ Each page registers its own dock buttons through `useDockRegistry()` (a module-l
 | Route | Page | Description |
 |-------|------|-------------|
 | `/` | `AerialView.vue` | 3D photorealistic aerial view (Cesium) with collision detection, auto takeoff/landing, and Street View fallback when grounded. |
-| `/map` | `Map2DView.vue` | 2D Google Map with a centered drone icon. |
 | `/satellite` | `Satellite2DView.vue` | 2D Google Satellite view. |
 | `/chat` | `ChatView.vue` | Mission-control chat interface. |
 
