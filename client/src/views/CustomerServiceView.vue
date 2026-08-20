@@ -1,18 +1,15 @@
 <script setup>
-import { ref, computed, h, nextTick, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
-import DockMenuButton from '@shared/DockMenuButton.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
-import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useOpenClaw } from '@shared-composables/useOpenClaw.js';
 
 const { t } = useI18n();
 const router = useRouter();
-const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
-const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { rightItems, registerRight, clear } = useDockRegistry();
 const { status, error, messages, isConnected, sendMessage } = useOpenClaw();
 
 const selectedNav = ref('customer_service');
@@ -79,43 +76,28 @@ watch(messages, () => {
 
 /* ─── Dock registration ─── */
 onMounted(() => {
-  registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'routeplanning', nameKey: 'aerialview.page_routeplanning', route: '/route-planning' });
-  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-
-  registerLeft({
-    id: 'pages',
-    render: () => h(DockMenuButton, {
-      icon: 'MENU_ROUTER',
-      titleKey: 'chatview.nav_pages',
-      pages,
-    }),
-  });
-  registerLeft({
+  registerRight({
     id: 'chat',
     icon: 'MENU_CHAT',
     titleKey: 'chatview.nav_chat',
     active: computed(() => selectedNav.value === 'chat'),
     onClick: () => { router.push('/chat'); },
   });
-  registerLeft({
+  registerRight({
     id: 'contacts',
     icon: 'MENU_CONTACTS',
     titleKey: 'chatview.nav_contacts',
     active: computed(() => selectedNav.value === 'contacts'),
     onClick: () => { selectedNav.value = 'contacts'; },
   });
-  registerLeft({
+  registerRight({
     id: 'gallery',
     icon: 'MENU_GALLARY',
     titleKey: 'chatview.nav_gallery',
     active: computed(() => selectedNav.value === 'gallery'),
     onClick: () => { selectedNav.value = 'gallery'; },
   });
-  registerLeft({
+  registerRight({
     id: 'customer_service',
     icon: 'MENU_CUSTOMER_SERVICE',
     titleKey: 'chatview.nav_customer_service',
@@ -157,19 +139,11 @@ onMounted(() => {
 
 onUnmounted(() => {
   clear();
-  unregisterPage('aerial');
-  unregisterPage('realdrone');
-  unregisterPage('map');
-  unregisterPage('routeplanning');
-  unregisterPage('myspace');
-  unregisterPage('chat');
-  unregisterPage('extensions');
 });
 </script>
 
 <template>
   <ViewComposer
-    :left-items="leftItems"
     :right-items="rightItems"
     :show-flight="false"
     :show-camera="false"

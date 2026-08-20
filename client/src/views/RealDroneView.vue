@@ -2,12 +2,10 @@
 import { ref, computed, watch, h, onMounted, onUnmounted, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
-import DockMenuButton from '@shared/DockMenuButton.vue';
 import VolumeDockButton from '@shared/VolumeDockButton.vue';
 import FpvSplash from '@shared/FpvSplash.vue';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
-import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
 import { useStreamConfig } from '@shared-composables/useStreamConfig.js';
 import { useDroneTelemetry } from '@shared-composables/useDroneTelemetry.js';
@@ -198,20 +196,7 @@ const {
   onFlightModeChange,
 } = useFlightCommands();
 
-const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
-const { pages, registerPage, unregisterPage } = usePageRegistry();
-
-function hideAllDisks() {
-  stopRealFlight(); // never leave a stale velocity running on the real drone
-  showFlight.value = false;
-}
-
-// Opening the Pages menu hides the disks (safety while navigating away).
-// The Viewer subpage moved to Community, so this page IS the Host context
-// and the flight-control buttons are always unlocked.
-function onPagesBeforeOpen() {
-  hideAllDisks();
-}
+const { rightItems, registerRight, clear } = useDockRegistry();
 
 /* ─── Livestream: WHEP playback of the MediaMTX stream catalog ─── */
 // ONE shared connection for both subpages, playing ONE selected stream
@@ -396,24 +381,7 @@ watch(liveFullscreen, (fs) => {
 watch(() => settings.audioVolume, applyLiveVolume);
 
 onMounted(() => {
-  // Register pages for the router menu
-  registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'routeplanning', nameKey: 'aerialview.page_routeplanning', route: '/route-planning' });
-  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-
-  registerLeft({
-    id: 'router',
-    render: () => h(DockMenuButton, {
-      icon: 'MENU_ROUTER',
-      titleKey: 'aerialview.pages',
-      pages,
-      onBeforeOpen: onPagesBeforeOpen,
-    }),
-  });
-  registerLeft({
+  registerRight({
     id: 'subpage_host',
     icon: 'MENU_REMOTE_CONTROLLER',
     titleKey: 'aerialview.subpage_livestream_host',
@@ -508,20 +476,12 @@ onUnmounted(() => {
   }
   livePlayer.stop();
   clear();
-  unregisterPage('aerial');
-  unregisterPage('realdrone');
-  unregisterPage('map');
-  unregisterPage('routeplanning');
-  unregisterPage('myspace');
-  unregisterPage('chat');
-  unregisterPage('extensions');
 });
 </script>
 
 <template>
   <ViewComposer
     :class="{ 'live-fullscreen-active': liveFullscreen, 'fpv-locked': liveConnectFailed }"
-    :left-items="leftItems"
     :right-items="rightItems"
     :show-flight="showFlight"
     :show-camera="false"
@@ -550,28 +510,28 @@ onUnmounted(() => {
       <!-- FPV clip splash while the bridge connection is failing (mirrors
            the initial 3D-tiles splash); fades out once the stream plays -->
       <FpvSplash :visible="liveConnectFailed" />
-      <!-- Login reminder for Screenshot / Recorder (same gate as the 3D pages) -->
-      <div
-        v-if="captureAuthNotice"
-        class="top-center-message top-center-message--auth"
-      >
-        {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
-      </div>
-      <!-- Green progress pill while the livestream connection is set up -->
-      <div v-if="liveLoading" class="top-center-message asset-loading">
-        <span>{{ t('aerialview.loading_realdrone') }}</span>
-        <router-link
-          v-if="liveConnectFailed"
-          class="asset-loading__fail"
-          :to="{ path: '/extensions', query: { cat: 'real_drone', ext: 'crazyflie-bridge' } }"
-        >
-          <span>{{ t('aerialview.livestream_connect_failed') }}</span>
-          <span>{{ t('aerialview.livestream_connect_failed_path') }}</span>
-        </router-link>
-        <div class="asset-loading__track">
-          <div class="asset-loading__fill" :style="{ width: (liveProgress * 100).toFixed(1) + '%' }" />
+      <!-- Reminders live centered in the shell top bar. -->
+      <Teleport to="#shell-notices">
+        <!-- Login reminder for Screenshot / Recorder (same gate as the 3D pages) -->
+        <div v-if="captureAuthNotice" class="shell-notice">
+          {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
         </div>
-      </div>
+        <!-- Progress while the livestream connection is set up -->
+        <div v-if="liveLoading" class="shell-notice asset-loading">
+          <span>{{ t('aerialview.loading_realdrone') }}</span>
+          <router-link
+            v-if="liveConnectFailed"
+            class="asset-loading__fail"
+            :to="{ path: '/extensions', query: { cat: 'real_drone', ext: 'crazyflie-bridge' } }"
+          >
+            <span>{{ t('aerialview.livestream_connect_failed') }}</span>
+            <span>{{ t('aerialview.livestream_connect_failed_path') }}</span>
+          </router-link>
+          <div class="asset-loading__track">
+            <div class="asset-loading__fill" :style="{ width: (liveProgress * 100).toFixed(1) + '%' }" />
+          </div>
+        </div>
+      </Teleport>
     </template>
   </ViewComposer>
 </template>
@@ -613,49 +573,25 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
-/* ─── Livestream connection progress pill (mirrors AerialView asset-loading) ─── */
-.top-center-message {
-  position: fixed;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  padding: 12px 28px;
-  border-radius: 8px;
-  font-family: Calibri, 'Segoe UI', sans-serif;
-  font-size: 0.77rem;
-  font-weight: 700;
-  color: #ffffff;
-  white-space: nowrap;
-  pointer-events: none;
-  text-align: center;
-}
-
-.top-center-message--auth {
-  background: rgba(34, 197, 94, 0.92);
-  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
-}
-
+/* ─── Livestream connection progress (teleported into the shell top bar) ─── */
 .asset-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  background: rgba(34, 197, 94, 0.88);
-  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
+  gap: 6px;
 }
 
 .asset-loading__track {
   width: 240px;
   height: 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.12);
   overflow: hidden;
 }
 
 /* Second line shown when the livestream connection fails: a clickable hint
-   pointing at the Crazyflie Bridge deployment guide. Overrides the pill's
-   pointer-events:none so the link works. Two lines: message + menu path. */
+   pointing at the Crazyflie Bridge deployment guide. Two lines: message +
+   menu path. */
 .asset-loading__fail {
   pointer-events: auto;
   display: flex;
@@ -667,7 +603,7 @@ onUnmounted(() => {
   font-size: 0.7rem;
   font-weight: 600;
   line-height: 1.35;
-  color: #ffffff;
+  color: #007aff;
   text-decoration: none;
   cursor: pointer;
 }
@@ -675,7 +611,7 @@ onUnmounted(() => {
 .asset-loading__fill {
   height: 100%;
   border-radius: 3px;
-  background: #ffffff;
+  background: #22c55e;
   transition: width 0.15s linear;
 }
 </style>

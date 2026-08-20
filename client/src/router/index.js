@@ -5,7 +5,6 @@ import MeshView from '@/views/MeshView.vue';
 import Satellite2DView from '@/views/Satellite2DView.vue';
 import RoutePlanningView from '@/views/RoutePlanningView.vue';
 import ChatView from '@/views/ChatView.vue';
-import SettingsView from '@/views/SettingsView.vue';
 import MySpaceView from '@/views/MySpaceView.vue';
 import ExtensionsView from '@/views/ExtensionsView.vue';
 
@@ -46,14 +45,34 @@ const routes = [
     component: () => import('@/views/CustomerServiceView.vue'),
   },
   {
-    path: '/settings',
-    name: 'Settings',
-    component: SettingsView,
+    // My Space subpages: the shell's left panel navigates here; Account
+    // shows the login/register card, Wallet and Content are blank for now.
+    path: '/account',
+    name: 'Account',
+    component: MySpaceView,
+    props: { sub: 'account' },
   },
   {
-    path: '/myspace',
-    name: 'MySpace',
+    path: '/wallet',
+    name: 'Wallet',
     component: MySpaceView,
+    props: { sub: 'wallet' },
+  },
+  {
+    path: '/content',
+    name: 'Content',
+    component: MySpaceView,
+    props: { sub: 'content' },
+  },
+  {
+    // Legacy deep links (/myspace?sub=…) keep working.
+    path: '/myspace',
+    redirect: (to) => {
+      const sub = ['account', 'wallet', 'content'].includes(to.query.sub)
+        ? to.query.sub
+        : 'account';
+      return { path: `/${sub}` };
+    },
   },
   {
     // Auth flow action pages (email links + Google OAuth landing)

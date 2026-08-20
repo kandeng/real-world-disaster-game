@@ -1,16 +1,13 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, h, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
-import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useProxyConfig } from '@shared-composables/useProxyConfig.js';
-import DockMenuButton from '@shared/DockMenuButton.vue';
 
 const { t, locale } = useI18n();
-const { leftItems, registerLeft, clear } = useDockRegistry();
-const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { clear } = useDockRegistry();
 const { proxyConfig, OS_OPTIONS } = useProxyConfig();
 const route = useRoute();
 
@@ -18,10 +15,9 @@ const route = useRoute();
 const LEFT_MIN = 180;
 const LEFT_MAX = 400;
 const LEFT_DEFAULT = 220;
-// Dock strip from the screen edge: 24px _ViewComposer padding + 72px AppDock
-// = 96px. The page clears it via padding (see .extensions-page), so divider
-// drags must subtract it from the pointer's page-relative x.
-const PAGE_PAD = 96;
+// Left page padding (see .extensions-page): divider drags must subtract it
+// from the pointer's page-relative x.
+const PAGE_PAD = 24;
 const leftWidth = ref(LEFT_DEFAULT);
 const isDragging = ref(false);
 
@@ -270,41 +266,17 @@ const currentSubcategories = computed(() => {
 
 /* ─── Page + dock registration ─── */
 onMounted(() => {
-  registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'routeplanning', nameKey: 'aerialview.page_routeplanning', route: '/route-planning' });
-  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-
-  registerLeft({
-    id: 'router',
-    render: () => h(DockMenuButton, {
-      icon: 'MENU_ROUTER',
-      titleKey: 'aerialview.pages',
-      pages,
-    }),
-  });
-
   // Handle deep-link query params (e.g. /extensions?cat=software&ext=simple-squid-proxy)
   applyQueryParams();
 });
 
 onUnmounted(() => {
   clear();
-  unregisterPage('aerial');
-  unregisterPage('realdrone');
-  unregisterPage('map');
-  unregisterPage('routeplanning');
-  unregisterPage('myspace');
-  unregisterPage('chat');
-  unregisterPage('extensions');
 });
 </script>
 
 <template>
   <ViewComposer
-    :left-items="leftItems"
     :right-items="[]"
     :show-flight="false"
     :show-camera="false"
@@ -460,11 +432,9 @@ onUnmounted(() => {
   background: #ffffff;
   user-select: none;
   z-index: 6;
-  /* Clear the LEFT dock strip only: 24px _ViewComposer padding + 72px
-     AppDock = 96px. The page registers no right dock buttons, and the
-     ViewComposer skips rendering an empty right dock, so the content
-     (and its scrollbar) runs to the right screen edge. */
-  padding: 0 0 0 96px;
+  /* The global shell (AppShell) hosts navigation; the page only keeps a
+     small left gutter. */
+  padding: 0 0 0 24px;
   box-sizing: border-box;
 }
 

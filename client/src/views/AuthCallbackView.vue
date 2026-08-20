@@ -17,7 +17,7 @@ const state = ref('pending');
 onMounted(async () => {
   try {
     await handleOAuthCallback(window.location.search);
-    router.replace('/myspace');
+    router.replace('/account');
   } catch {
     state.value = 'error';
   }
@@ -30,7 +30,7 @@ onMounted(async () => {
       <p v-if="state === 'pending'" class="auth-page__text">{{ t('authflow.callback_pending') }}</p>
       <template v-else>
         <p class="auth-page__text auth-page__text--error">{{ t('authflow.callback_error') }}</p>
-        <router-link to="/myspace" class="auth-page__link">{{ t('authflow.go_myspace') }}</router-link>
+        <router-link to="/account" class="auth-page__link">{{ t('authflow.go_myspace') }}</router-link>
       </template>
     </div>
   </div>

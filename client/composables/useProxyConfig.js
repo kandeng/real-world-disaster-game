@@ -1,6 +1,6 @@
 /**
  * useProxyConfig.js – singleton reactive store for proxy configuration.
- * Shared between ExtensionsView (editable) and SettingsView (read-only display).
+ * Used by the ExtensionsView squid-proxy configuration panel.
  */
 import { reactive, computed } from 'vue';
 

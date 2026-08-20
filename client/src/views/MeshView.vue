@@ -1,15 +1,12 @@
 <script setup>
-import { ref, onMounted, onUnmounted, h } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
-import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
-import DockMenuButton from '@shared/DockMenuButton.vue';
 import { applyNeutralSphericalHarmonics } from '@shared-composables/useTilesetSource.js';
 
 const { t } = useI18n();
-const { leftItems, registerLeft, clear } = useDockRegistry();
-const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { clear } = useDockRegistry();
 
 const loadingMessage = ref('Loading OSM Buildings…');
 
@@ -134,22 +131,6 @@ async function initMeshView() {
 }
 
 onMounted(() => {
-  registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'routeplanning', nameKey: 'aerialview.page_routeplanning', route: '/route-planning' });
-  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-
-  registerLeft({
-    id: 'router',
-    render: () => h(DockMenuButton, {
-      icon: 'MENU_ROUTER',
-      titleKey: 'aerialview.pages',
-      pages,
-    }),
-  });
-
   initMeshView();
 });
 
@@ -178,19 +159,11 @@ onUnmounted(() => {
   }
 
   clear();
-  unregisterPage('aerial');
-  unregisterPage('realdrone');
-  unregisterPage('map');
-  unregisterPage('routeplanning');
-  unregisterPage('myspace');
-  unregisterPage('chat');
-  unregisterPage('extensions');
 });
 </script>
 
 <template>
   <ViewComposer
-    :left-items="leftItems"
     :right-items="[]"
     :show-flight="false"
     :show-camera="false"

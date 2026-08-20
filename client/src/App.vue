@@ -2,6 +2,7 @@
 import { RouterView } from 'vue-router';
 import { watchEffect, onMounted } from 'vue';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
+import AppShell from '@shared/AppShell.vue';
 
 const { settings } = useAppSettings();
 
@@ -64,7 +65,9 @@ function buildFontFamily(selected) {
       fontSize: settings.fontSize,
     }"
   >
-    <RouterView />
+    <AppShell>
+      <RouterView />
+    </AppShell>
   </div>
 </template>
 

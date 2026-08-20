@@ -1,11 +1,9 @@
 <script setup>
-import { ref, computed, h, nextTick, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, nextTick, watch, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
-import DockMenuButton from '@shared/DockMenuButton.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
-import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useMatrixClient } from '@shared-composables/useMatrixClient.js';
 import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
@@ -16,8 +14,7 @@ import { useRouter } from 'vue-router';
 
 const { t } = useI18n();
 const router = useRouter();
-const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
-const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { rightItems, registerRight, clear } = useDockRegistry();
 const { isAuthenticated, user, fetchMe } = useAuth();
 const {
   ready: chatReady, error: chatError,
@@ -30,10 +27,11 @@ const {
 const LEFT_MIN = 280;
 const LEFT_MAX = 600;
 const LEFT_DEFAULT = 40; // percentage
-// The dock strips overlay the page on both sides (see .community-page
-// padding): 24px _ViewComposer padding + 72px AppDock = 96px from each
-// screen edge. The draggable area is the content box between them.
-const DOCK_STRIP = 96;
+// The right dock strip overlays the page (24px _ViewComposer padding + 72px
+// AppDock = 96px from the right screen edge); the left side only keeps a
+// small gutter now that navigation lives in the global shell.
+const LEFT_PAD = 24;
+const RIGHT_STRIP = 96;
 const leftWidthPct = ref(LEFT_DEFAULT);
 const isDragging = ref(false);
 
@@ -49,8 +47,8 @@ function onDividerPointerMove(e) {
   const panel = document.querySelector('.community-page');
   if (!panel) return;
   const rect = panel.getBoundingClientRect();
-  const usable = rect.width - DOCK_STRIP * 2;
-  const x = e.clientX - rect.left - DOCK_STRIP;
+  const usable = rect.width - LEFT_PAD - RIGHT_STRIP;
+  const x = e.clientX - rect.left - LEFT_PAD;
   const pct = (x / usable) * 100;
   const minPct = (LEFT_MIN / usable) * 100;
   const maxPct = (LEFT_MAX / usable) * 100;
@@ -506,51 +504,38 @@ const typingText = computed(() => {
 });
 
 onMounted(() => {
-  registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'routeplanning', nameKey: 'aerialview.page_routeplanning', route: '/route-planning' });
-  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-
-  // Register dock sidebar buttons
-  registerLeft({
-    id: 'pages',
-    render: () => h(DockMenuButton, {
-      icon: 'MENU_ROUTER',
-      titleKey: 'chatview.nav_pages',
-      pages,
-    }),
-  });
-  registerLeft({
+  // Register right dock buttons — navigation first, then the same
+  // Screenshot / Screen Recording / Fullscreen trio as the Real Drone
+  // Livestream Host right sidebar.
+  registerRight({
     id: 'livestream_viewer',
     icon: 'MENU_LIVESTREAM_VIEWER',
     titleKey: 'chatview.nav_livestream',
     active: computed(() => selectedNav.value === 'livestream'),
     onClick: () => { selectedNav.value = 'livestream'; },
   });
-  registerLeft({
+  registerRight({
     id: 'gallery',
     icon: 'MENU_GALLARY',
     titleKey: 'chatview.nav_gallery',
     active: computed(() => selectedNav.value === 'gallery'),
     onClick: () => { selectedNav.value = 'gallery'; },
   });
-  registerLeft({
+  registerRight({
     id: 'chat',
     icon: 'MENU_CHAT',
     titleKey: 'chatview.nav_chat',
     active: computed(() => selectedNav.value === 'chat'),
     onClick: () => { selectedNav.value = 'chat'; },
   });
-  registerLeft({
+  registerRight({
     id: 'contacts',
     icon: 'MENU_CONTACTS',
     titleKey: 'chatview.nav_contacts',
     active: computed(() => selectedNav.value === 'contacts'),
     onClick: () => { selectedNav.value = 'contacts'; },
   });
-  registerLeft({
+  registerRight({
     id: 'customer_service',
     icon: 'MENU_CUSTOMER_SERVICE',
     titleKey: 'chatview.nav_customer_service',
@@ -558,8 +543,6 @@ onMounted(() => {
     onClick: () => { router.push('/customer-service'); },
   });
 
-  // Register right dock buttons — same Screenshot / Screen Recording /
-  // Fullscreen trio as the Real Drone Livestream Host right sidebar.
   registerRight({
     id: 'screenshot',
     icon: 'MENU_PHOTO',
@@ -608,20 +591,12 @@ onUnmounted(() => {
   // NOTE: an active browser broadcast is NOT stopped here — it lives in a
   // module-level singleton and survives navigation by design.
   clear();
-  unregisterPage('aerial');
-  unregisterPage('realdrone');
-  unregisterPage('map');
-  unregisterPage('routeplanning');
-  unregisterPage('myspace');
-  unregisterPage('chat');
-  unregisterPage('extensions');
 });
 </script>
 
 <template>
   <ViewComposer
     :class="{ 'live-fullscreen-active': liveFullscreen }"
-    :left-items="leftItems"
     :right-items="rightItems"
     :show-flight="false"
     :show-camera="false"
@@ -899,23 +874,23 @@ onUnmounted(() => {
     </template>
 
     <template #top-overlay>
-      <!-- Login reminder for Screenshot / Recorder (same gate as Real Drone) -->
-      <div
-        v-if="captureAuthNotice"
-        class="top-center-message top-center-message--auth"
-      >
-        {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
-      </div>
-      <!-- Green progress pill while a stream connection / broadcast is set up -->
-      <div v-if="liveLoading || bcState === 'connecting'" class="top-center-message asset-loading">
-        <span>{{ t('aerialview.loading_livestream') }}</span>
-        <div class="asset-loading__track">
-          <div
-            class="asset-loading__fill"
-            :style="{ width: ((bcState === 'connecting' ? bcProgress : liveProgress) * 100).toFixed(1) + '%' }"
-          />
+      <!-- Reminders live centered in the shell top bar. -->
+      <Teleport to="#shell-notices">
+        <!-- Login reminder for Screenshot / Recorder (same gate as Real Drone) -->
+        <div v-if="captureAuthNotice" class="shell-notice">
+          {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
         </div>
-      </div>
+        <!-- Progress while a stream connection / broadcast is set up -->
+        <div v-if="liveLoading || bcState === 'connecting'" class="shell-notice asset-loading">
+          <span>{{ t('aerialview.loading_livestream') }}</span>
+          <div class="asset-loading__track">
+            <div
+              class="asset-loading__fill"
+              :style="{ width: ((bcState === 'connecting' ? bcProgress : liveProgress) * 100).toFixed(1) + '%' }"
+            />
+          </div>
+        </div>
+      </Teleport>
     </template>
   </ViewComposer>
 </template>
@@ -929,11 +904,10 @@ onUnmounted(() => {
   background: #ffffff;
   user-select: none;
   z-index: 6;
-  /* Clear the dock strips on both sides: 24px _ViewComposer padding + 72px
-     AppDock = 96px. The docks (z-index 10, pointer-events auto) overlay the
-     page, so any interactive content in the outer 96px would have its clicks
-     eaten by the dock container. */
-  padding: 0 96px;
+  /* Clear the right dock strip (24px _ViewComposer padding + 72px AppDock =
+     96px); the left side only keeps a small gutter now that navigation
+     lives in the global shell. */
+  padding: 0 96px 0 24px;
   box-sizing: border-box;
 }
 
@@ -1524,50 +1498,26 @@ onUnmounted(() => {
   display: block; /* pixel width/height set by fitViewerVideo() */
 }
 
-/* ─── Livestream connection progress pill (mirrors RealDroneView) ─── */
-.top-center-message {
-  position: fixed;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  padding: 12px 28px;
-  border-radius: 8px;
-  font-family: Calibri, 'Segoe UI', sans-serif;
-  font-size: 0.77rem;
-  font-weight: 700;
-  color: #ffffff;
-  white-space: nowrap;
-  pointer-events: none;
-  text-align: center;
-}
-
-.top-center-message--auth {
-  background: rgba(34, 197, 94, 0.92);
-  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
-}
-
+/* ─── Livestream connection progress (teleported into the shell top bar) ─── */
 .asset-loading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  background: rgba(34, 197, 94, 0.88);
-  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
+  gap: 6px;
 }
 
 .asset-loading__track {
   width: 240px;
   height: 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.12);
   overflow: hidden;
 }
 
 .asset-loading__fill {
   height: 100%;
   border-radius: 3px;
-  background: #ffffff;
+  background: #22c55e;
   transition: width 0.15s linear;
 }
 

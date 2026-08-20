@@ -6,10 +6,8 @@ import { useDrone } from '@shared-composables/useDrone.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useFlightPhysics } from '@shared-composables/useFlightPhysics.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
-import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useWaypointPicker } from '@shared-composables/useWaypointPicker.js';
 import { useConnectionStatus, checkGoogleConnection } from '@shared-composables/useConnectionStatus.js';
-import DockMenuButton from '@shared/DockMenuButton.vue';
 import WaypointButton from '@shared/WaypointButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
 
@@ -25,8 +23,7 @@ const {
   stopKeyboard,
 } = useFlightCommands();
 const { step: stepFlightPhysics } = useFlightPhysics();
-const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
-const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { rightItems, registerRight, clear } = useDockRegistry();
 const { isPicking, isPanelOpen, setPicked, openPanel, commitOrigin, setNearbyPois, setRouteResult, clearRouteResult, setRouteError, clearRouteError, pickedLocation, activeWaypointId, originDraft, waypoints } = useWaypointPicker();
 
 const mapViewRef = ref(null);
@@ -204,24 +201,7 @@ onMounted(() => {
     checkGoogleConnection();
   }, 10000);
 
-  // Register pages for the router menu
-  registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'routeplanning', nameKey: 'aerialview.page_routeplanning', route: '/route-planning' });
-  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-
-  registerLeft({
-    id: 'router',
-    render: () => h(DockMenuButton, {
-      icon: 'MENU_ROUTER',
-      titleKey: 'aerialview.pages',
-      pages,
-      onBeforeOpen: () => { showFlight.value = false; },
-    }),
-  });
-  registerLeft({
+  registerRight({
     id: 'waypoint',
     render: () => h(WaypointButton, {
       onBeforeOpen: () => { showFlight.value = false; },
@@ -245,19 +225,11 @@ onUnmounted(() => {
   if (rafId) cancelAnimationFrame(rafId);
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
   clear();
-  unregisterPage('aerial');
-  unregisterPage('realdrone');
-  unregisterPage('map');
-  unregisterPage('routeplanning');
-  unregisterPage('myspace');
-  unregisterPage('chat');
-  unregisterPage('extensions');
 });
 </script>
 
 <template>
   <ViewComposer
-    :left-items="leftItems"
     :right-items="rightItems"
     :show-flight="showFlight"
     :show-camera="false"

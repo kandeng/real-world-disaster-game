@@ -61,11 +61,11 @@ async function submit() {
       </template>
       <template v-else-if="state === 'success'">
         <p class="auth-page__text auth-page__text--ok">{{ t('authflow.reset_success') }}</p>
-        <router-link to="/myspace" class="auth-page__link">{{ t('authflow.go_myspace') }}</router-link>
+        <router-link to="/account" class="auth-page__link">{{ t('authflow.go_myspace') }}</router-link>
       </template>
       <template v-else>
         <p class="auth-page__text auth-page__text--error">{{ t('authflow.reset_error') }}</p>
-        <router-link to="/myspace" class="auth-page__link">{{ t('authflow.go_myspace') }}</router-link>
+        <router-link to="/account" class="auth-page__link">{{ t('authflow.go_myspace') }}</router-link>
       </template>
     </div>
   </div>

@@ -8,10 +8,8 @@ import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
-import { usePageRegistry } from '@shared-composables/usePageRegistry.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import { useAuth } from '@shared-composables/useAuth.js';
-import DockMenuButton from '@shared/DockMenuButton.vue';
 import DockButton from '@shared/DockButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
@@ -52,8 +50,7 @@ const controlsLocked = computed(() => routeScene.previewActive.value || routeSce
 // Flight disk on this page cycles M (move lat/lon) -> H (height) ->
 // V (velocity), unlike 3D Aerial's M/R/H.
 const FLIGHT_MODES = ['M', 'H', 'V'];
-const { leftItems, rightItems, registerLeft, registerRight, clear } = useDockRegistry();
-const { pages, registerPage, unregisterPage } = usePageRegistry();
+const { rightItems, registerRight, clear } = useDockRegistry();
 
 const { googleReady, cesiumReady, googleError, cesiumError } = useConnectionStatus();
 const connectionMessage = computed(() => {
@@ -70,20 +67,13 @@ let connectionCheckInterval = null;
 // Active background of this page:
 //   'street' – 2D Google street map (default; the `Waypoint` view)
 //   '3d'     – Google Earth 3D tiles (the shared global Cesium viewer)
-// The left `Map` button and the right `Waypoint` button both return to
-// the 2D street map (the entry state).
+// The `Search` and `Waypoint` buttons both return to the 2D street map
+// (the entry state).
 const viewMode = ref('street');
 const showRoutePanel = ref(false);
 const showSearchPanel = ref(false);
 
 const mapTypeId = computed(() => 'roadmap');
-
-// The Map button returns to the 2D street map — the page's entry state.
-// Leaving 3D runs the watch(is3d) cleanup (stop loop, hide overlay, and
-// convert the camera altitude back to the 2D map model altitude).
-function onClickMap() {
-  viewMode.value = 'street';
-}
 
 // Only one of Search / Waypoint / Route may be visible at a time: opening
 // one hides the others' popups. In 3D, opening the list stops any preview
@@ -449,6 +439,16 @@ function registerRightDock() {
     active: showRoutePanel.value,
     onClick: onClickRoute,
   });
+  registerRight({
+    // The single Preview button sits below Route: renders the whole route
+    // on screen at exact 30 fps (offline pass, every frame fully rendered)
+    // and saves it as a 16:9 mp4.
+    id: 'preview',
+    icon: 'MENU_PREVIEW',
+    titleKey: 'routeplanningview.preview',
+    active: routeScene.saving.value,
+    onClick: onClickSave,
+  });
 }
 
 // ── Steer mode: 3D nadir overview + two-stage waypoint focus ──────────────
@@ -683,57 +683,21 @@ onMounted(() => {
     checkCesiumConnection();
   }, 10000);
 
-  // Register pages for the router menu (Route Planning is the third page).
-  registerPage({ id: 'aerial', nameKey: 'aerialview.page_aerial', route: '/' });
-  registerPage({ id: 'routeplanning', nameKey: 'aerialview.page_routeplanning', route: '/route-planning' });
-  registerPage({ id: 'realdrone', nameKey: 'aerialview.page_realdrone', route: '/real-drone' });
-  registerPage({ id: 'extensions', nameKey: 'aerialview.page_extensions', route: '/extensions' });
-  registerPage({ id: 'chat', nameKey: 'aerialview.page_chat', route: '/chat' });
-  registerPage({ id: 'myspace', nameKey: 'aerialview.page_myspace', route: '/myspace' });
-
-  registerLeft({
-    id: 'router',
-    render: () => h(DockMenuButton, {
-      icon: 'MENU_ROUTER',
-      titleKey: 'aerialview.pages',
-      pages,
-    }),
-  });
-  registerLeft({
-    id: 'map',
-    icon: 'MENU_MAP',
-    titleKey: 'routeplanningview.map',
-    active: viewMode.value !== '3d',
-    onClick: onClickMap,
-  });
-  registerLeft({
-    // The single Preview button: renders the whole route on screen at
-    // exact 30 fps (offline pass, every frame fully rendered) and saves
-    // it as a 16:9 mp4.
-    id: 'preview',
-    icon: 'MENU_PREVIEW',
-    titleKey: 'routeplanningview.preview',
-    active: routeScene.saving.value,
-    onClick: onClickSave,
-  });
-
-  // The right sidebar (Search + Waypoint + Steer + Route) is the same in
-  // every view mode, so it is registered once and never swapped.
+  // The right sidebar (Search + Waypoint + Steer + Route + Preview) is the
+  // same in every view mode, so it is registered once and never swapped.
+  // (The old Map button is gone: Search and Waypoint already return to the
+  // 2D street map, the page's entry state.)
   registerRightDock();
 
-  // Keep dock buttons' active (green-border) state in sync. At most ONE
-  // button per sidebar may be green:
-  //   left  — Save while it settles/downloads the clip, otherwise Preview
-  //           while a preview flight runs, otherwise Map in the 2D modes;
-  //   right — Search / Waypoint / Steer / Route are mutually exclusive by
-  //           construction (each handler closes the others' panels).
+  // Keep dock buttons' active (green-border) state in sync. Preview greens
+  // while settling / downloading the clip; Search / Waypoint / Steer / Route
+  // are mutually exclusive by construction (each handler closes the others'
+  // panels).
   watch(
     [viewMode, showRoutePanel, showSearchPanel, showWaypointHint, previewActive, routeScene.showFlight, routeScene.showCamera, routeScene.saving],
     () => {
       const savingNow = routeScene.saving.value;
-      const bm = leftItems.find((i) => i.id === 'map');
-      if (bm) bm.active = viewMode.value !== '3d' && !savingNow;
-      const bsv = leftItems.find((i) => i.id === 'preview');
+      const bsv = rightItems.find((i) => i.id === 'preview');
       if (bsv) bsv.active = savingNow;
 
       const bs = rightItems.find((i) => i.id === 'search');
@@ -844,19 +808,11 @@ onUnmounted(() => {
   // they never linger on the other pages after leaving Route Planning.
   routeScene.hideRouteOverlay();
   clear();
-  unregisterPage('aerial');
-  unregisterPage('map');
-  unregisterPage('routeplanning');
-  unregisterPage('realdrone');
-  unregisterPage('myspace');
-  unregisterPage('chat');
-  unregisterPage('extensions');
 });
 </script>
 
 <template>
   <ViewComposer
-    :left-items="leftItems"
     :right-items="rightItems"
     :show-flight="showFlightDisk"
     :show-camera="showCameraDisk"
@@ -874,21 +830,24 @@ onUnmounted(() => {
     <template #top-overlay>
       <ConnectionError :visible="showConnectionError" :message="connectionMessage" />
 
-      <!-- Green top-center reminder while waypoint picking is armed -->
-      <div v-if="showWaypointHint" class="top-center-message top-center-message--success">
-        {{ t('routeplanningview.waypoint_hint') }}
-      </div>
+      <!-- Reminders live centered in the shell top bar. -->
+      <Teleport to="#shell-notices">
+        <!-- Reminder while waypoint picking is armed -->
+        <div v-if="showWaypointHint" class="shell-notice">
+          {{ t('routeplanningview.waypoint_hint') }}
+        </div>
 
-      <!-- Green top-center reminder: preview needs >= 2 waypoints -->
-      <div v-if="showPreviewHint" class="top-center-message top-center-message--success">
-        {{ t('routeplanningview.preview_need_waypoints') }}
-      </div>
+        <!-- Reminder: preview needs >= 2 waypoints -->
+        <div v-if="showPreviewHint" class="shell-notice">
+          {{ t('routeplanningview.preview_need_waypoints') }}
+        </div>
 
-      <!-- Green top-center reminder: the preview video needs a login
-           (same gate as 3D Exploration -> 3D Aerial) -->
-      <div v-if="showAuthNotice" class="top-center-message top-center-message--auth">
-        {{ t('routeplanningview.auth_notice_preview') }}
-      </div>
+        <!-- Reminder: the preview video needs a login
+             (same gate as 3D Exploration -> 3D Aerial) -->
+        <div v-if="showAuthNotice" class="shell-notice">
+          {{ t('routeplanningview.auth_notice_preview') }}
+        </div>
+      </Teleport>
 
       <!-- Spinning circle: the preview/save flight is stuck waiting for
            the Google 3D tiles of the current view to download + render;
@@ -1416,35 +1375,5 @@ onUnmounted(() => {
   .search-panel {
     right: 96px;
   }
-}
-
-/* Green top-center reminder — same style as the 3D Exploration page. */
-.top-center-message {
-  position: fixed;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 100;
-  padding: 12px 28px;
-  border-radius: 8px;
-  font-family: Calibri, 'Segoe UI', sans-serif;
-  font-size: 0.77rem;
-  font-weight: 700;
-  color: #ffffff;
-  white-space: nowrap;
-  pointer-events: none;
-  text-align: center;
-  letter-spacing: 0.02em;
-}
-
-.top-center-message--success {
-  background: rgba(34, 197, 94, 0.9);
-  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
-}
-
-/* Login-gate reminder — same style as the 3D Exploration page. */
-.top-center-message--auth {
-  background: rgba(34, 197, 94, 0.92);
-  box-shadow: 0 0 18px rgba(34, 197, 94, 0.6);
 }
 </style>

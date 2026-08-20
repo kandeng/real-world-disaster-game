@@ -13,7 +13,7 @@ client/                     # Vite project root
 │   ├── App.vue             # Root Vue component
 │   ├── main.js             # Vue app initialization
 │   ├── router/             # Vue Router routes
-│   ├── views/              # Page components (AerialView, Satellite2DView, RoutePlanningView, ChatView, SettingsView)
+│   ├── views/              # Page components (AerialView, Satellite2DView, RoutePlanningView, ChatView, MySpaceView)
 │   ├── components/         # App-specific components (CollisionWarning, StreetViewPane)
 │   ├── composables/        # App-specific composables (useAltitudeGate)
 │   ├── config/             # IconConfig.js — centralized SVG icon registry
@@ -189,10 +189,10 @@ npm run dev
 Open http://localhost:5173.
 
 - `/` — 3D aerial view with collision detection, auto takeoff/landing, flight/gimbal disks, and the HUD.
-- `/map` — 2D Google Map centered on the drone.
+- `/route-planning` — Waypoint picking on the 2D map plus 3D route preview/render.
 - `/satellite` — 2D Google Satellite view.
 - `/chat` — Mission-control chat interface.
-- `/settings` — App settings (language, font, flight configuration).
+- `/account`, `/wallet`, `/content` — My Space subpages (login/register; blank placeholders).
 
 Use the left and right sidebar docks to toggle disks, navigate between pages, take off/land, or open chat.
 
