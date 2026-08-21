@@ -11,10 +11,44 @@ const { user } = useAuth();
 // The assistant opens the conversation with the tutorial-video card.
 const messages = ref([{ role: 'ai', kind: 'video', text: '' }]);
 const text = ref('');
-const pendingFile = ref(null);
+let attachSeq = 0;
+
+// Full-size viewer state: { kind, url, poster } — null = closed.
+const viewer = ref(null);
 
 const listRef = ref(null);
 const fileInput = ref(null);
+
+/* ─── Bottom-border drag: adjust the panel height ─── */
+// null = CSS default (62%); once the user drags, an explicit px height.
+const layerRef = ref(null);
+const dialogRef = ref(null);
+const dialogHeight = ref(null);
+const RESIZE_MIN = 240;
+let resizeStartY = 0;
+let resizeStartH = 0;
+
+function onResizePointerDown(e) {
+  e.preventDefault();
+  resizeStartY = e.clientY;
+  resizeStartH = dialogRef.value.getBoundingClientRect().height;
+  document.addEventListener('pointermove', onResizePointerMove);
+  document.addEventListener('pointerup', onResizePointerUp);
+}
+
+function onResizePointerMove(e) {
+  const layer = layerRef.value;
+  if (!layer) return;
+  // Keep the layer's 24px top/bottom padding visible at full stretch.
+  const maxH = layer.clientHeight - 48;
+  const h = Math.min(maxH, Math.max(RESIZE_MIN, resizeStartH + (e.clientY - resizeStartY)));
+  dialogHeight.value = Math.round(h);
+}
+
+function onResizePointerUp() {
+  document.removeEventListener('pointermove', onResizePointerMove);
+  document.removeEventListener('pointerup', onResizePointerUp);
+}
 
 function scrollBottom() {
   const el = listRef.value;
@@ -28,18 +62,89 @@ function openFilePicker() {
 }
 
 function onFileChange(e) {
-  const f = e.target.files && e.target.files[0];
-  pendingFile.value = f ? f.name : null;
-  // Allow re-selecting the same file after removing the chip.
+  const files = Array.from(e.target.files || []);
+  // Each uploaded file becomes its own right-aligned row with the user
+  // avatar, exactly like a sent textual message.
+  for (const f of files) {
+    messages.value.push({ role: 'user', kind: 'text', text: '', files: [makeAttachment(f)] });
+  }
   e.target.value = '';
+  nextTick(scrollBottom);
+}
+
+function makeAttachment(file) {
+  const kind = file.type.startsWith('image/')
+    ? 'image'
+    : file.type.startsWith('video/')
+      ? 'video'
+      : 'file';
+  const att = { id: ++attachSeq, name: file.name, kind, url: null, videoUrl: null };
+  if (kind === 'image') {
+    att.url = URL.createObjectURL(file);
+  } else if (kind === 'video') {
+    // Kept for the click-to-play popup; the poster is captured below.
+    att.videoUrl = URL.createObjectURL(file);
+    captureVideoPoster(file).then((url) => {
+      att.url = url;
+    });
+  }
+  return att;
+}
+
+// Seek a muted off-screen <video> to its first frame and draw it onto a
+// canvas; returns a small JPEG data-URL (null on failure).
+function captureVideoPoster(file) {
+  return new Promise((resolve) => {
+    const src = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    const fail = () => {
+      URL.revokeObjectURL(src);
+      resolve(null);
+    };
+    video.addEventListener('error', fail);
+    video.addEventListener('loadeddata', () => {
+      try {
+        video.currentTime = Math.min(0.1, (video.duration || 1) / 2);
+      } catch {
+        fail();
+      }
+    });
+    video.addEventListener('seeked', () => {
+      try {
+        const w = video.videoWidth || 320;
+        const h = video.videoHeight || 180;
+        const scale = Math.min(1, 320 / w);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      } catch {
+        fail();
+      } finally {
+        URL.revokeObjectURL(src);
+      }
+    });
+    video.src = src;
+  });
+}
+
+function openViewer(a) {
+  viewer.value = { kind: a.kind, url: a.kind === 'video' ? a.videoUrl : a.url, poster: a.url };
+}
+
+function closeViewer() {
+  viewer.value = null;
 }
 
 function send() {
   const body = text.value.trim();
-  if (!body && !pendingFile.value) return;
-  messages.value.push({ role: 'user', kind: 'text', text: body, fileName: pendingFile.value });
+  if (!body) return;
+  messages.value.push({ role: 'user', kind: 'text', text: body });
   text.value = '';
-  pendingFile.value = null;
   nextTick(scrollBottom);
 }
 </script>
@@ -48,8 +153,12 @@ function send() {
   <!-- Semi-transparent layer, same recipe as the Flight disk inner circle
        (rgba(255,255,255,0.55) + blur(6px)): the page below is barely
        visible while the dialog stays crisp. -->
-  <div class="chatbot-layer">
-    <section class="chatbot-dialog">
+  <div ref="layerRef" class="chatbot-layer">
+    <section
+      ref="dialogRef"
+      class="chatbot-dialog"
+      :style="dialogHeight ? { height: dialogHeight + 'px' } : null"
+    >
       <!-- Messages -->
       <div ref="listRef" class="chatbot-messages">
         <div
@@ -66,9 +175,38 @@ function send() {
           <div v-if="m.kind === 'video'" class="chatbot-video">
             {{ t('chatbotoverlay.tutorial_video') }}
           </div>
-          <div v-else class="chatbot-bubble">
+          <div
+            v-else
+            class="chatbot-bubble"
+            :class="{ 'chatbot-bubble--plain': !m.text && m.files && m.files.length }"
+          >
             <span v-if="m.text">{{ m.text }}</span>
-            <span v-if="m.fileName" class="chatbot-file">📎 {{ m.fileName }}</span>
+            <template v-if="m.files && m.files.length">
+              <template v-for="a in m.files" :key="a.id">
+                <!-- Video: first-frame poster + play glyph; click = player -->
+                <button
+                  v-if="a.kind === 'video'"
+                  type="button"
+                  class="chatbot-attach"
+                  :title="a.name"
+                  @click="openViewer(a)"
+                >
+                  <img v-if="a.url" class="chatbot-attach__img" :src="a.url" :alt="a.name" />
+                  <span v-else class="chatbot-attach__loading"></span>
+                  <span class="chatbot-attach__play">▶</span>
+                </button>
+                <!-- Image: fixed-width thumbnail; click = raw-size viewer -->
+                <img
+                  v-else-if="a.kind === 'image' && a.url"
+                  class="chatbot-attach__img"
+                  :src="a.url"
+                  :alt="a.name"
+                  :title="a.name"
+                  @click="openViewer(a)"
+                />
+                <span v-else class="chatbot-file">📎 {{ a.name }}</span>
+              </template>
+            </template>
           </div>
 
           <!-- User avatar: uploaded avatar, or the user glyph in a circle -->
@@ -85,14 +223,6 @@ function send() {
         </div>
       </div>
 
-      <!-- Pending attachment chip -->
-      <div v-if="pendingFile" class="chatbot-chip">
-        <span class="chatbot-chip__name">📎 {{ pendingFile }}</span>
-        <button class="chatbot-chip__x" aria-label="Remove" @click="pendingFile = null">
-          ×
-        </button>
-      </div>
-
       <!-- Input row: [upload] [input] [send] -->
       <div class="chatbot-input-row">
         <button
@@ -103,7 +233,7 @@ function send() {
         >
           <ConfigurableIcon name="MENU_FILE_FOLDER" :size="20" />
         </button>
-        <input ref="fileInput" type="file" class="chatbot-file-input" @change="onFileChange" />
+        <input ref="fileInput" type="file" multiple class="chatbot-file-input" @change="onFileChange" />
 
         <input
           v-model="text"
@@ -121,7 +251,25 @@ function send() {
           <ConfigurableIcon name="CHAT_SEND" :size="30" />
         </button>
       </div>
+
+      <!-- Drag this bottom border up/down to resize the panel -->
+      <div class="chatbot-resize" @pointerdown="onResizePointerDown" />
     </section>
+
+    <!-- Full-size viewer: raw-size image (shrunk to fit, ratio kept) or a
+         video player; click the backdrop to close. -->
+    <div v-if="viewer" class="chatbot-viewer" @click="closeViewer">
+      <video
+        v-if="viewer.kind === 'video'"
+        class="chatbot-viewer__media"
+        :src="viewer.url"
+        :poster="viewer.poster"
+        controls
+        autoplay
+        @click.stop
+      ></video>
+      <img v-else class="chatbot-viewer__media" :src="viewer.url" alt="" @click.stop />
+    </div>
   </div>
 </template>
 
@@ -129,7 +277,8 @@ function send() {
 .chatbot-layer {
   position: absolute;
   inset: 0;
-  z-index: 30;
+  /* Above every page-internal stack (the 3D HUD dashboard uses z-50). */
+  z-index: 60;
   pointer-events: auto;
   background: rgba(255, 255, 255, 0.55);
   backdrop-filter: blur(6px);
@@ -141,9 +290,10 @@ function send() {
 }
 
 .chatbot-dialog {
+  position: relative;
   width: 100%;
   height: 62%;
-  min-height: 320px;
+  min-height: 240px;
   background: #ffffff;
   border: 1px solid #8e8e93;
   box-sizing: border-box;
@@ -226,6 +376,13 @@ function send() {
   background: #e8f1ff;
 }
 
+/* File-only messages: no bubble chrome, just the thumbnail + avatar. */
+.chatbot-bubble--plain,
+.chatbot-row--user .chatbot-bubble--plain {
+  background: transparent;
+  padding: 0;
+}
+
 .chatbot-file {
   display: block;
   margin-top: 6px;
@@ -233,40 +390,71 @@ function send() {
   color: #007aff;
 }
 
-/* ─── Attachment chip ─── */
-.chatbot-chip {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: #f2f2f7;
-  border: 1px solid #d1d1d6;
-  border-radius: 999px;
-  padding: 4px 12px;
-  align-self: flex-start;
-  font-size: 0.8rem;
-  color: #111827;
-}
-
-.chatbot-chip__name {
-  max-width: 320px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chatbot-chip__x {
+.chatbot-attach {
+  position: relative;
+  display: block;
+  margin-top: 8px;
+  padding: 0;
   border: none;
   background: none;
   cursor: pointer;
-  font-size: 1rem;
-  line-height: 1;
-  color: #6e6e73;
-  padding: 0 2px;
 }
 
-.chatbot-chip__x:hover {
-  color: #111827;
+/* Consistent width across files; height follows each file's own ratio. */
+.chatbot-attach__img {
+  display: block;
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin-top: 8px;
+  cursor: pointer;
+}
+
+.chatbot-attach .chatbot-attach__img {
+  margin-top: 0;
+  cursor: pointer;
+}
+
+.chatbot-attach__loading {
+  display: block;
+  width: 220px;
+  height: 124px;
+  background: #d1d1d6;
+  border-radius: 6px;
+}
+
+.chatbot-attach__play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 26px;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+
+/* ─── Full-size viewer (image / video popup) ─── */
+.chatbot-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Natural size when it fits; shrink-to-fit (ratio kept) when larger. */
+.chatbot-viewer__media {
+  max-width: calc(100% - 64px);
+  max-height: calc(100% - 64px);
+  width: auto;
+  height: auto;
+  border-radius: 8px;
+  background: #000000;
 }
 
 /* ─── Input row ─── */
@@ -317,5 +505,21 @@ function send() {
 .chatbot-input:focus {
   border-color: #007aff;
   background: #ffffff;
+}
+
+/* ─── Bottom-border resize handle ─── */
+.chatbot-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 10px;
+  cursor: ns-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.chatbot-resize:hover {
+  background: rgba(0, 122, 255, 0.12);
 }
 </style>
