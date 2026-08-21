@@ -45,8 +45,10 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     verification_token_secret = SECRET
 
     async def on_after_register(self, user: User, request=None) -> None:
-        # Fire the verification email right after sign-up.
-        await self.request_verify(user, request)
+        # Fire the verification email right after sign-up. OAuth-created
+        # users (e.g. Google) are already verified — skip the pointless email.
+        if not user.is_verified:
+            await self.request_verify(user, request)
         # Provision the hidden Synapse chat account. Failure must NEVER block
         # registration — the token endpoint lazily re-ensures on first use.
         try:

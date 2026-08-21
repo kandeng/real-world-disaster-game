@@ -2,8 +2,10 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 
-# fastapi-users with the SQLAlchemy adapter (FastAPIUsers, JWT strategy, OAuth routers)
-fastapi-users[sqlalchemy]>=12.1
+# fastapi-users with the SQLAlchemy adapter (FastAPIUsers, JWT strategy, OAuth routers).
+# Pinned to v15: v13+ added the OAuth CSRF cookie flow the client relies on
+# (see credentials: 'include' in useAuth.js); a v16 upgrade needs re-testing.
+fastapi-users[sqlalchemy]>=15,<16
 
 # Database drivers
 sqlalchemy[asyncio]>=2.0

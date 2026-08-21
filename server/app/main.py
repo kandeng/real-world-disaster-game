@@ -78,6 +78,11 @@ if google_oauth_client.client_id:
             google_oauth_client,
             auth_backend,
             CONFIG["secret"],
+            # Explicit SPA callback page: without this fastapi-users resolves
+            # the API endpoint URL via url_for(), which (a) is not registered
+            # in the Google Cloud Console and (b) mismatches between the
+            # authorize and token-exchange steps -> redirect_uri_mismatch.
+            redirect_url=CONFIG["frontend_base_url"].rstrip("/") + "/auth/callback",
             associate_by_email=True,
             is_verified_by_default=True,  # Google emails are pre-verified
         ),
