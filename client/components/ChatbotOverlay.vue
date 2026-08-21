@@ -150,9 +150,8 @@ function send() {
 </script>
 
 <template>
-  <!-- Semi-transparent layer, same recipe as the Flight disk inner circle
-       (rgba(255,255,255,0.55) + blur(6px)): the page below is barely
-       visible while the dialog stays crisp. -->
+  <!-- Transparent click-through container: only the dialog itself is
+       drawn, so the page underneath stays crystal clear outside it. -->
   <div ref="layerRef" class="chatbot-layer">
     <section
       ref="dialogRef"
@@ -279,10 +278,9 @@ function send() {
   inset: 0;
   /* Above every page-internal stack (the 3D HUD dashboard uses z-50). */
   z-index: 60;
-  pointer-events: auto;
-  background: rgba(255, 255, 255, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  /* Click-through: everything outside the dialog keeps its raw view. */
+  pointer-events: none;
+  background: transparent;
   display: flex;
   align-items: flex-start;
   padding: 24px 32px;
@@ -291,6 +289,7 @@ function send() {
 
 .chatbot-dialog {
   position: relative;
+  pointer-events: auto;
   width: 100%;
   height: 62%;
   min-height: 240px;
@@ -300,6 +299,7 @@ function send() {
   display: flex;
   flex-direction: column;
   padding: 24px 28px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
 }
 
 /* ─── Messages ─── */
@@ -441,6 +441,7 @@ function send() {
   position: absolute;
   inset: 0;
   z-index: 10;
+  pointer-events: auto;
   background: rgba(0, 0, 0, 0.45);
   display: flex;
   align-items: center;
