@@ -68,5 +68,10 @@
   "profile_avatar": "头像",
   "profile_avatar_upload": "从本地磁盘上传图片",
   "profile_save": "保存",
-  "profile_saved": "资料已保存。"
+  "profile_saved": "资料已保存。",
+  "avatar_crop_title": "自定义头像",
+  "avatar_crop_zoom": "缩放",
+  "avatar_crop_cancel": "取消",
+  "avatar_crop_done": "完成",
+  "avatar_bad_file": "无法读取该图片，请选择其他文件。"
 }

@@ -68,5 +68,10 @@
   "profile_avatar": "Avatar",
   "profile_avatar_upload": "Upload image from local disk",
   "profile_save": "Save",
-  "profile_saved": "Profile saved."
+  "profile_saved": "Profile saved.",
+  "avatar_crop_title": "Customize picture",
+  "avatar_crop_zoom": "Zoom",
+  "avatar_crop_cancel": "Cancel",
+  "avatar_crop_done": "Done",
+  "avatar_bad_file": "Could not read that image. Please choose another file."
 }

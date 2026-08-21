@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAuth } from '@shared-composables/useAuth.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
+import AvatarCropper from './AvatarCropper.vue';
 
 const { t } = useI18n();
 const {
@@ -41,10 +42,24 @@ const avatarInitial = computed(() => {
 /* ── Profile editor (verified users) ─────────────────────────────────── */
 const profileName = ref('');
 const profilePassword = ref('');
+const profilePasswordConfirm = ref('');
+const showProfilePassword = ref(false);
+const showProfilePasswordConfirm = ref(false);
 const avatarPending = ref(''); // locally picked data-URI, '' = keep stored
 const avatarInput = ref(null);
 
 const avatarPreview = computed(() => avatarPending.value || user.value?.avatar || '');
+
+// Save turns blue only while something actually differs from the stored
+// profile; otherwise it stays grey like the Sign Out button.
+const profileDirty = computed(() => {
+  if (!user.value) return false;
+  return (
+    profileName.value !== (user.value.display_name || '') ||
+    profilePassword.value !== '' ||
+    profilePasswordConfirm.value !== ''
+  );
+});
 
 // Prefill once when the profile arrives (first load / right after login);
 // later refreshes must not clobber what the user is typing.
@@ -54,46 +69,32 @@ watch(
     if (!u || prev) return;
     profileName.value = u.display_name || '';
     profilePassword.value = '';
+    profilePasswordConfirm.value = '';
     avatarPending.value = '';
   },
   { immediate: true }
 );
 
-// Center-crop + downscale to 128×128 JPEG in the browser so the stored
-// avatar stays tiny (the server has no image processing).
-function readAndScale(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      const SIZE = 128;
-      const canvas = document.createElement('canvas');
-      canvas.width = SIZE;
-      canvas.height = SIZE;
-      const ctx = canvas.getContext('2d');
-      const scale = Math.max(SIZE / img.width, SIZE / img.height);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      ctx.drawImage(img, (SIZE - w) / 2, (SIZE - h) / 2, w, h);
-      URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/jpeg', 0.85));
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('unreadable image'));
-    };
-    img.src = url;
-  });
-}
+// Picking a file opens the Google-style crop modal; the upload happens only
+// after the user confirms the crop (Done).
+const cropFile = ref(null);
 
-async function onAvatarPicked(e) {
+function onAvatarPicked(e) {
   const file = e.target.files && e.target.files[0];
   e.target.value = ''; // allow re-picking the same file
   if (!file) return;
   resetFeedback();
+  if (!file.type.startsWith('image/')) {
+    errorKey.value = 'authflow.avatar_bad_file';
+    return;
+  }
+  cropFile.value = file;
+}
+
+async function onCropDone(dataUri) {
+  cropFile.value = null;
+  avatarPending.value = dataUri;
   try {
-    const dataUri = await readAndScale(file);
-    avatarPending.value = dataUri;
     await updateProfile({ avatar: dataUri });
     avatarPending.value = ''; // stored on the account now
     noticeKey.value = 'authflow.profile_saved';
@@ -103,15 +104,26 @@ async function onAvatarPicked(e) {
   }
 }
 
+function onCropCancel() {
+  cropFile.value = null;
+}
+
 async function submitProfile() {
   if (busy.value) return;
-  busy.value = true;
   resetFeedback();
+  if (profilePassword.value || profilePasswordConfirm.value) {
+    if (profilePassword.value !== profilePasswordConfirm.value) {
+      errorKey.value = 'authflow.error_password_mismatch';
+      return;
+    }
+  }
+  busy.value = true;
   try {
     const fields = { display_name: profileName.value.trim() };
     if (profilePassword.value) fields.password = profilePassword.value;
     await updateProfile(fields);
     profilePassword.value = '';
+    profilePasswordConfirm.value = '';
     noticeKey.value = 'authflow.profile_saved';
   } catch (err) {
     showError(err);
@@ -331,13 +343,44 @@ async function submitVerify() {
           />
 
           <label class="auth-label">{{ t('authflow.profile_password') }}</label>
-          <input
-            v-model="profilePassword"
-            type="password"
-            class="auth-input"
-            autocomplete="new-password"
-            :placeholder="t('authflow.profile_password_placeholder')"
-          />
+          <div class="auth-password">
+            <input
+              v-model="profilePassword"
+              :type="showProfilePassword ? 'text' : 'password'"
+              class="auth-input auth-input--password"
+              autocomplete="new-password"
+              :placeholder="t('authflow.profile_password_placeholder')"
+            />
+            <button
+              type="button"
+              class="auth-password__toggle"
+              :title="t(showProfilePassword ? 'authflow.password_hide' : 'authflow.password_show')"
+              :aria-label="t(showProfilePassword ? 'authflow.password_hide' : 'authflow.password_show')"
+              @click="showProfilePassword = !showProfilePassword"
+            >
+              <ConfigurableIcon :name="showProfilePassword ? 'PASSWORD_SHOW' : 'PASSWORD_HIDE'" :size="20" />
+            </button>
+          </div>
+
+          <label class="auth-label">{{ t('authflow.confirm_password') }}</label>
+          <div class="auth-password">
+            <input
+              v-model="profilePasswordConfirm"
+              :type="showProfilePasswordConfirm ? 'text' : 'password'"
+              class="auth-input auth-input--password"
+              autocomplete="new-password"
+              :placeholder="t('authflow.confirm_password_placeholder')"
+            />
+            <button
+              type="button"
+              class="auth-password__toggle"
+              :title="t(showProfilePasswordConfirm ? 'authflow.password_hide' : 'authflow.password_show')"
+              :aria-label="t(showProfilePasswordConfirm ? 'authflow.password_hide' : 'authflow.password_show')"
+              @click="showProfilePasswordConfirm = !showProfilePasswordConfirm"
+            >
+              <ConfigurableIcon :name="showProfilePasswordConfirm ? 'PASSWORD_SHOW' : 'PASSWORD_HIDE'" :size="20" />
+            </button>
+          </div>
 
           <label class="auth-label">{{ t('authflow.profile_email') }}</label>
           <input :value="user.email" type="email" class="auth-input" readonly />
@@ -358,7 +401,12 @@ async function submitVerify() {
             </button>
           </div>
 
-          <button type="submit" class="auth-button" :disabled="busy">
+          <button
+            type="submit"
+            class="auth-button"
+            :class="{ 'auth-button--secondary': !profileDirty }"
+            :disabled="busy"
+          >
             {{ busy ? t('authflow.busy') : t('authflow.profile_save') }}
           </button>
         </form>
@@ -541,6 +589,9 @@ async function submitVerify() {
         </button>
       </template>
     </div>
+
+    <!-- Google-style crop modal (pan + zoom, circular stencil) -->
+    <AvatarCropper v-if="cropFile" :file="cropFile" @done="onCropDone" @cancel="onCropCancel" />
   </div>
 </template>
 
