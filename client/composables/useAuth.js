@@ -161,7 +161,10 @@ export function useAuth() {
     // credentials: 'include' — fastapi-users >= 13 sets a CSRF cookie on
     // /authorize that /callback must see again. Same-origin in production;
     // required cross-origin (5173 -> 8000) in local dev.
-    const res = await fetch(`${API_BASE}/api/auth/google/authorize`, {
+    // Tell the backend which origin we started from (www vs apex) so the
+    // Google round-trip brings us back to the very same host.
+    const origin = encodeURIComponent(window.location.origin);
+    const res = await fetch(`${API_BASE}/api/auth/google/authorize?origin=${origin}`, {
       credentials: 'include',
     });
     if (!res.ok) throw authError('google_unavailable');
@@ -173,9 +176,14 @@ export function useAuth() {
   // SPA Google callback: forwards `code`/`state` to the API callback, which
   // returns the JWT as JSON (BearerTransport login response).
   async function handleOAuthCallback(search) {
-    const res = await fetch(`${API_BASE}/api/auth/google/callback${search}`, {
-      credentials: 'include', // send back the OAuth CSRF cookie (see googleLogin)
-    });
+    const origin = encodeURIComponent(window.location.origin);
+    const joiner = search ? '&' : '?';
+    const res = await fetch(
+      `${API_BASE}/api/auth/google/callback${search}${joiner}origin=${origin}`,
+      {
+        credentials: 'include', // send back the OAuth CSRF cookie (see googleLogin)
+      }
+    );
     if (!res.ok) throw authError('callback_error');
     const data = await res.json();
     if (!data.access_token) throw authError('callback_error');
