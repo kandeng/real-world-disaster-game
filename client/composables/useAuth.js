@@ -82,6 +82,21 @@ export function useAuth() {
     return res.json(); // fastapi-users does NOT log in on register
   }
 
+  // Profile editor: display_name / password / avatar (data-URI).
+  async function updateProfile(fields) {
+    const res = await fetch(`${API_BASE}/api/users/me`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify(fields),
+    });
+    if (!res.ok) throw authError('error_generic');
+    user.value = await res.json();
+    return user.value;
+  }
+
   async function logout() {
     try {
       await fetch(`${API_BASE}/api/auth/jwt/logout`, {
@@ -176,6 +191,7 @@ export function useAuth() {
     fetchMe,
     login,
     register,
+    updateProfile,
     logout,
     requestPasswordReset,
     resetPassword,

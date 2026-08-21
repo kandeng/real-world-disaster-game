@@ -47,6 +47,8 @@
   "page_chat": "Community",
   "page_customer_service": "Customer Service",
   "page_extensions": "Extensions",
+  "topbar_customer_service": "Customer Service",
+  "topbar_user": "User",
   
   "calibrating": "Calibrating...",
   "preparing_takeoff": "Preparing takeoff...",

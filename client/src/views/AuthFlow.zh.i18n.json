@@ -56,5 +56,17 @@
   "reset_error": "重置失败，链接可能已过期——请重新申请。",
   "callback_pending": "正在通过 Google 登录…",
   "callback_error": "Google 登录失败，请重试。",
-  "go_myspace": "进入 My Space"
+  "go_myspace": "进入 My Space",
+  "acct_tab_login": "登录",
+  "acct_tab_consumption": "消费",
+  "acct_tab_income": "收益",
+  "acct_tab_placeholder": "暂无内容。",
+  "profile_login_name": "登录名",
+  "profile_password": "登录密码",
+  "profile_password_placeholder": "留空则保持当前密码",
+  "profile_email": "邮箱",
+  "profile_avatar": "头像",
+  "profile_avatar_upload": "从本地磁盘上传图片",
+  "profile_save": "保存",
+  "profile_saved": "资料已保存。"
 }

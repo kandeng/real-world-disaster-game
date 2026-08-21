@@ -9,7 +9,7 @@ from datetime import datetime
 
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import JSON, DateTime, ForeignKey, String, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,6 +30,9 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     verification_code_expires: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Profile picture as a data-URI (the SPA downscales to 128x128 before
+    # upload, so this stays small); NULL means "use the default icon".
+    avatar: Mapped[str | None] = mapped_column(Text, nullable=True)
     oauth_accounts: Mapped[list[OAuthAccount]] = relationship("OAuthAccount", lazy="joined")
 
 

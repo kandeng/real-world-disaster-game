@@ -55,8 +55,8 @@ const routes = [
   {
     path: '/wallet',
     name: 'Wallet',
-    component: MySpaceView,
-    props: { sub: 'wallet' },
+    // Wallet concepts (Consumption / Income) now live as tabs on Account.
+    redirect: '/account',
   },
   {
     path: '/content',

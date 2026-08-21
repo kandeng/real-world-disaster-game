@@ -1,11 +1,15 @@
 <script setup>
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { useAuth } from '@shared-composables/useAuth.js';
+import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import bannerUrl from '../assets/media/drone_earth.png';
 
 const { t, locale } = useI18n();
 const router = useRouter();
+const route = useRoute();
+const { user, isAuthenticated, fetchMe } = useAuth();
 
 /* ─── Left-panel navigation ─── */
 // Integrated pages navigate on click; the remaining names stay plain text
@@ -13,6 +17,16 @@ const router = useRouter();
 function go(path) {
   if (router.currentRoute.value.path !== path) router.push(path);
 }
+
+// The entry for the page currently on screen turns blue.
+function isActive(path) {
+  return route.path === path;
+}
+
+onMounted(() => {
+  // The top-bar user button shows the uploaded avatar when signed in.
+  if (isAuthenticated.value && !user.value) fetchMe().catch(() => {});
+});
 
 /* ─── Panel open/close state ─── */
 // Starts collapsed (mockup left state); the circular toggle flips the
@@ -49,8 +63,9 @@ function onDividerPointerUp() {
 }
 
 /* ─── Language pill (top right) ─── */
-// Shows the *other* language; clicking switches locale and persists the
-// choice exactly like the old LanguageSelector / Settings language tab.
+// Shows the *current* language (EN / 中文); clicking switches locale and
+// persists the choice exactly like the old LanguageSelector / Settings
+// language tab. Adding a language later only means extending this label.
 function toggleLocale() {
   locale.value = locale.value === 'en' ? 'zh' : 'en';
   localStorage.setItem('user-lang', locale.value);
@@ -71,10 +86,18 @@ function toggleLocale() {
       />
 
       <!-- Top group, aligned to the top -->
-      <div class="shell-nav__item shell-nav__item--link" @click="go('/')">
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/') }"
+        @click="go('/')"
+      >
         {{ t('aerialview.page_aerial') }}
       </div>
-      <div class="shell-nav__item shell-nav__item--link" @click="go('/route-planning')">
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/route-planning') }"
+        @click="go('/route-planning')"
+      >
         {{ t('aerialview.page_routeplanning') }}
       </div>
       <div class="shell-nav__item">{{ t('aerialview.page_extensions') }}</div>
@@ -83,13 +106,18 @@ function toggleLocale() {
       <div class="shell-left__divider" />
 
       <!-- Bottom group (My Space), aligned to the bottom -->
-      <div class="shell-nav__item shell-nav__item--link" @click="go('/account')">
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/account') }"
+        @click="go('/account')"
+      >
         {{ t('aerialview.subpage_account') }}
       </div>
-      <div class="shell-nav__item shell-nav__item--link" @click="go('/wallet')">
-        {{ t('aerialview.subpage_wallet') }}
-      </div>
-      <div class="shell-nav__item shell-nav__item--link" @click="go('/content')">
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/content') }"
+        @click="go('/content')"
+      >
         {{ t('aerialview.subpage_content') }}
       </div>
     </aside>
@@ -105,37 +133,68 @@ function toggleLocale() {
     <!-- ── Right column: top bar starts right of the divider ── -->
     <div class="shell-right">
       <header class="shell-topbar">
-        <button
-          class="shell-toggle"
-          :aria-label="open ? 'Collapse navigation' : 'Expand navigation'"
-          @click="open = !open"
-        >
-          <svg
-            class="shell-toggle__arrow"
-            :class="{ 'shell-toggle__arrow--flipped': open }"
-            width="16"
-            height="16"
-            viewBox="0 0 16 16"
+        <div class="shell-topbar__left">
+          <button
+            class="shell-toggle"
+            :aria-label="open ? 'Collapse navigation' : 'Expand navigation'"
+            @click="open = !open"
           >
-            <path
-              d="M6 3l5 5-5 5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
+            <svg
+              class="shell-toggle__arrow"
+              :class="{ 'shell-toggle__arrow--flipped': open }"
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+            >
+              <path
+                d="M6 3l5 5-5 5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+
+          <!-- Customer service (no action wired yet) -->
+          <button
+            class="shell-round"
+            :title="t('aerialview.topbar_customer_service')"
+            :aria-label="t('aerialview.topbar_customer_service')"
+          >
+            <ConfigurableIcon name="MENU_CUSTOMER_SERVICE" :size="20" />
+          </button>
+        </div>
 
         <!-- Canonical slot for every page's reminders / warnings: pages
              <Teleport> their .shell-notice divs here (centered; the bar
              grows when a notice wraps onto multiple lines). -->
         <div id="shell-notices" class="shell-topbar__notices"></div>
 
-        <button class="shell-lang" @click="toggleLocale">
-          {{ locale === 'en' ? '中文' : 'EN' }}
-        </button>
+        <div class="shell-topbar__right">
+          <!-- User: uploaded avatar when signed in, default glyph otherwise -->
+          <button
+            class="shell-round"
+            :title="t('aerialview.topbar_user')"
+            :aria-label="t('aerialview.topbar_user')"
+          >
+            <img
+              v-if="user && user.avatar"
+              class="shell-round__avatar"
+              :src="user.avatar"
+              alt=""
+              draggable="false"
+            />
+            <ConfigurableIcon v-else name="MENU_USER" :size="20" />
+          </button>
+
+          <!-- Shows the *current* language; clicking switches locale and
+               persists the choice (ready for more languages later). -->
+          <button class="shell-lang" @click="toggleLocale">
+            {{ locale === 'en' ? 'EN' : '中文' }}
+          </button>
+        </div>
       </header>
 
       <!-- Main panel: pages fill exactly this area -->
@@ -181,6 +240,47 @@ function toggleLocale() {
 
 .shell-lang {
   justify-self: end;
+}
+
+/* ── Top-bar left / right clusters ── */
+.shell-topbar__left {
+  justify-self: start;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shell-topbar__right {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shell-round {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1.5px solid #374151;
+  background: transparent;
+  color: #111827;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.shell-round:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.shell-round__avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .shell-left__banner {
@@ -259,6 +359,11 @@ function toggleLocale() {
 }
 
 .shell-nav__item--link:hover {
+  color: #007aff;
+}
+
+.shell-nav__item--active,
+.shell-nav__item--active:hover {
   color: #007aff;
 }
 

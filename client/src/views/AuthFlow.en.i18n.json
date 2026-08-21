@@ -56,5 +56,17 @@
   "reset_error": "Reset failed. The link may have expired — request a new one.",
   "callback_pending": "Signing you in with Google…",
   "callback_error": "Google sign-in failed. Please try again.",
-  "go_myspace": "Go to My Space"
+  "go_myspace": "Go to My Space",
+  "acct_tab_login": "Login",
+  "acct_tab_consumption": "Consumption",
+  "acct_tab_income": "Income",
+  "acct_tab_placeholder": "Nothing here yet.",
+  "profile_login_name": "Login name",
+  "profile_password": "Login password",
+  "profile_password_placeholder": "Leave blank to keep the current password",
+  "profile_email": "Email",
+  "profile_avatar": "Avatar",
+  "profile_avatar_upload": "Upload image from local disk",
+  "profile_save": "Save",
+  "profile_saved": "Profile saved."
 }

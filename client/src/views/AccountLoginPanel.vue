@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useAuth } from '@shared-composables/useAuth.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
@@ -16,6 +16,7 @@ const {
   googleLogin,
   requestVerificationCode,
   verifyEmailCode,
+  updateProfile,
 } = useAuth();
 
 /* 'login' | 'register' | 'forgot' | 'verify' */
@@ -36,6 +37,88 @@ const avatarInitial = computed(() => {
   const src = user.value?.display_name || user.value?.email || '';
   return src ? src.trim().charAt(0).toUpperCase() : '?';
 });
+
+/* ── Profile editor (verified users) ─────────────────────────────────── */
+const profileName = ref('');
+const profilePassword = ref('');
+const avatarPending = ref(''); // locally picked data-URI, '' = keep stored
+const avatarInput = ref(null);
+
+const avatarPreview = computed(() => avatarPending.value || user.value?.avatar || '');
+
+// Prefill once when the profile arrives (first load / right after login);
+// later refreshes must not clobber what the user is typing.
+watch(
+  user,
+  (u, prev) => {
+    if (!u || prev) return;
+    profileName.value = u.display_name || '';
+    profilePassword.value = '';
+    avatarPending.value = '';
+  },
+  { immediate: true }
+);
+
+// Center-crop + downscale to 128×128 JPEG in the browser so the stored
+// avatar stays tiny (the server has no image processing).
+function readAndScale(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const SIZE = 128;
+      const canvas = document.createElement('canvas');
+      canvas.width = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext('2d');
+      const scale = Math.max(SIZE / img.width, SIZE / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      ctx.drawImage(img, (SIZE - w) / 2, (SIZE - h) / 2, w, h);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('unreadable image'));
+    };
+    img.src = url;
+  });
+}
+
+async function onAvatarPicked(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // allow re-picking the same file
+  if (!file) return;
+  resetFeedback();
+  try {
+    const dataUri = await readAndScale(file);
+    avatarPending.value = dataUri;
+    await updateProfile({ avatar: dataUri });
+    avatarPending.value = ''; // stored on the account now
+    noticeKey.value = 'authflow.profile_saved';
+  } catch (err) {
+    avatarPending.value = '';
+    showError(err);
+  }
+}
+
+async function submitProfile() {
+  if (busy.value) return;
+  busy.value = true;
+  resetFeedback();
+  try {
+    const fields = { display_name: profileName.value.trim() };
+    if (profilePassword.value) fields.password = profilePassword.value;
+    await updateProfile(fields);
+    profilePassword.value = '';
+    noticeKey.value = 'authflow.profile_saved';
+  } catch (err) {
+    showError(err);
+  } finally {
+    busy.value = false;
+  }
+}
 
 onMounted(() => {
   if (isAuthenticated.value && !user.value) fetchMe().catch(() => {});
@@ -230,12 +313,55 @@ async function submitVerify() {
         </button>
       </template>
 
-      <!-- Verified: profile card -->
+      <!-- Verified: profile editor -->
       <template v-else>
-        <div class="auth-avatar">{{ avatarInitial }}</div>
-        <h2 class="auth-title">{{ user.display_name || user.email }}</h2>
+        <h2 class="auth-title">{{ t('authflow.profile_title') }}</h2>
         <p class="auth-subtitle">{{ user.email }}</p>
-        <span class="auth-chip auth-chip--ok">{{ t('authflow.status_verified') }}</span>
+
+        <p v-if="errorKey" class="auth-banner auth-banner--error">{{ t(errorKey) }}</p>
+        <p v-if="noticeKey" class="auth-banner auth-banner--notice">{{ t(noticeKey) }}</p>
+
+        <form class="auth-form" @submit.prevent="submitProfile">
+          <label class="auth-label">{{ t('authflow.profile_login_name') }}</label>
+          <input
+            v-model="profileName"
+            type="text"
+            class="auth-input"
+            :placeholder="t('authflow.display_name_placeholder')"
+          />
+
+          <label class="auth-label">{{ t('authflow.profile_password') }}</label>
+          <input
+            v-model="profilePassword"
+            type="password"
+            class="auth-input"
+            autocomplete="new-password"
+            :placeholder="t('authflow.profile_password_placeholder')"
+          />
+
+          <label class="auth-label">{{ t('authflow.profile_email') }}</label>
+          <input :value="user.email" type="email" class="auth-input" readonly />
+
+          <label class="auth-label">{{ t('authflow.profile_avatar') }}</label>
+          <div class="auth-avatar-row">
+            <img
+              v-if="avatarPreview"
+              class="auth-avatar-img"
+              :src="avatarPreview"
+              alt=""
+              draggable="false"
+            />
+            <div v-else class="auth-avatar">{{ avatarInitial }}</div>
+            <input ref="avatarInput" type="file" accept="image/*" class="auth-avatar-file" @change="onAvatarPicked" />
+            <button type="button" class="auth-button auth-button--secondary auth-button--upload" @click="avatarInput.click()">
+              {{ t('authflow.profile_avatar_upload') }}
+            </button>
+          </div>
+
+          <button type="submit" class="auth-button" :disabled="busy">
+            {{ busy ? t('authflow.busy') : t('authflow.profile_save') }}
+          </button>
+        </form>
         <button class="auth-button auth-button--secondary" :disabled="busy" @click="submitLogout">
           {{ t('authflow.logout') }}
         </button>
@@ -673,6 +799,40 @@ async function submitVerify() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.auth-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.auth-avatar-row .auth-avatar {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.auth-avatar-img {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.auth-avatar-file {
+  display: none;
+}
+
+.auth-button--upload {
+  margin-top: 0;
+  padding: 9px 16px;
+  font-size: 0.85rem;
+}
+
+.auth-input[readonly] {
+  background: #f5f5f7;
+  color: #6e6e73;
 }
 
 .auth-chip {

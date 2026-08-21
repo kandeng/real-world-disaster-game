@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class UserRead(schemas.BaseUser[uuid.UUID]):
     display_name: str | None = None
+    avatar: str | None = None
 
 
 class UserCreate(schemas.BaseUserCreate):
@@ -16,6 +17,8 @@ class UserCreate(schemas.BaseUserCreate):
 
 class UserUpdate(schemas.BaseUserUpdate):
     display_name: str | None = None
+    # Data-URI profile picture; capped so a rogue client cannot bloat the DB.
+    avatar: str | None = Field(default=None, max_length=300_000)
 
 
 # ─── Settings document (mirrors client/composables/useAppSettings.js) ────────
