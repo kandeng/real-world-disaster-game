@@ -15,6 +15,22 @@
 (async function () {
   'use strict';
 
+  // ── Route-aware splash ──
+  // The video splash only makes sense on Cesium-backed pages. On every other
+  // route (Account, Chat, auth callbacks, ...) remove the overlay immediately
+  // so e.g. a post-login page load lands on the UI instantly instead of
+  // waiting for 3D tiles that the page never uses.
+  const SPLASH_ROUTE_PREFIXES = ['/real-drone', '/mesh', '/satellite', '/route-planning'];
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  const needsSplash =
+    path === '/' || SPLASH_ROUTE_PREFIXES.some((p) => path.startsWith(p));
+  if (!needsSplash) {
+    const overlayNow = document.getElementById('splash-overlay');
+    if (overlayNow) overlayNow.remove();
+    console.log('[splash] skipped on non-3D route: ' + path);
+    return;
+  }
+
   // ── Splash media config ──
   // The first clip is always played. Remaining clips are shuffled and played
   // without repetition; once all have played, a new shuffle begins.
