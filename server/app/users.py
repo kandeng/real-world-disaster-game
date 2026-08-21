@@ -2,11 +2,13 @@
 
 Auth model:
   - Bearer JWT transport (SPA sends ``Authorization: Bearer <token>``).
-  - Email+password registration automatically triggers a verification email.
+  - Email+password registration emails a 6-digit activation code; login is
+    refused until the code is confirmed (see app/verification.py).
   - Google OAuth via httpx-oauth; ``associate_by_email`` links a Google login
-    to an existing account with the same email. New providers (Facebook,
-    GitHub, Instagram, ...) only need another client in ``OAUTH_CLIENTS`` and
-    a matching router in main.py.
+    to an existing account with the same email, and a Google login proves
+    email ownership so it auto-activates unverified accounts. New providers
+    (Facebook, GitHub, Instagram, ...) only need another client in
+    ``OAUTH_CLIENTS`` and a matching router in main.py.
 """
 
 import logging
@@ -28,6 +30,7 @@ from .db import async_session_maker, get_async_session
 from .email import send_password_reset_email, send_verification_email
 from .matrix_admin import ensure_user as ensure_matrix_user
 from .models import OAuthAccount, User
+from .verification import issue_and_email_code
 
 log = logging.getLogger(__name__)
 
@@ -45,10 +48,11 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     verification_token_secret = SECRET
 
     async def on_after_register(self, user: User, request=None) -> None:
-        # Fire the verification email right after sign-up. OAuth-created
-        # users (e.g. Google) are already verified — skip the pointless email.
+        # Email+password sign-ups start locked: email the 6-digit activation
+        # code. OAuth-created users (e.g. Google) are already verified, so
+        # they never get a code email.
         if not user.is_verified:
-            await self.request_verify(user, request)
+            await issue_and_email_code(user)
         # Provision the hidden Synapse chat account. Failure must NEVER block
         # registration — the token endpoint lazily re-ensures on first use.
         try:
@@ -56,6 +60,16 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
                 await ensure_matrix_user(user, session)
         except Exception:
             log.exception("matrix provisioning failed for user %s", user.id)
+
+    async def on_after_login(self, user: User, request=None, response=None) -> None:
+        # A Google login proves ownership of the email address, so it
+        # auto-activates an existing unverified account that was linked via
+        # associate_by_email (no code round-trip needed).
+        if not user.is_verified and any(
+            oa.oauth_name == "google" for oa in (user.oauth_accounts or [])
+        ):
+            await self.user_db.update(user, {"is_verified": True})
+            log.info("auto-verified %s via Google login", user.email)
 
     async def on_after_request_verify(self, user: User, token: str, request=None) -> None:
         await send_verification_email(user.email, token)

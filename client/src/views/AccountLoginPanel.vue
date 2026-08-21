@@ -14,14 +14,18 @@ const {
   logout,
   requestPasswordReset,
   googleLogin,
+  requestVerificationCode,
+  verifyEmailCode,
 } = useAuth();
 
-/* 'login' | 'register' | 'forgot' */
+/* 'login' | 'register' | 'forgot' | 'verify' */
 const mode = ref('login');
 const email = ref('');
 const password = ref('');
 const confirmPassword = ref('');
 const displayName = ref('');
+const code = ref('');
+const codeSent = ref(false);
 const showPassword = ref(false);
 const showConfirmPassword = ref(false);
 const busy = ref(false);
@@ -35,6 +39,7 @@ const avatarInitial = computed(() => {
 
 onMounted(() => {
   if (isAuthenticated.value && !user.value) fetchMe().catch(() => {});
+  if (user.value && !user.value.is_verified) email.value = user.value.email;
 });
 
 function resetFeedback() {
@@ -58,7 +63,14 @@ async function submitLogin() {
   try {
     await login(email.value.trim(), password.value);
   } catch (err) {
-    showError(err);
+    if (err.code === 'error_unverified') {
+      // Account exists but was never activated: jump straight into the
+      // code flow ("Resend code" covers an expired code).
+      goVerify();
+      requestCode();
+    } else {
+      showError(err);
+    }
   } finally {
     busy.value = false;
   }
@@ -75,10 +87,14 @@ async function submitRegister() {
   resetFeedback();
   try {
     await register(email.value.trim(), password.value, displayName.value.trim());
-    noticeKey.value = 'authflow.register_success';
-    mode.value = 'login';
+    // The backend already emailed the 6-digit activation code
+    // (on_after_register) — jump straight to the code-entry screen.
     password.value = '';
     confirmPassword.value = '';
+    code.value = '';
+    codeSent.value = true;
+    switchMode('verify');
+    noticeKey.value = 'authflow.code_sent';
   } catch (err) {
     showError(err);
   } finally {
@@ -119,8 +135,57 @@ async function submitLogout() {
     await logout();
   } finally {
     busy.value = false;
+    codeSent.value = false;
+    code.value = '';
     resetFeedback();
     switchMode('login');
+  }
+}
+
+/* ── Email activation via 6-digit secret code ──────────────────────────── */
+
+function goVerify() {
+  // Anonymous entry point ("Verify my email" under the login form): no code
+  // has been sent yet, so the user confirms their email first.
+  code.value = '';
+  codeSent.value = false;
+  switchMode('verify');
+}
+
+async function requestCode() {
+  if (busy.value) return;
+  busy.value = true;
+  resetFeedback();
+  try {
+    await requestVerificationCode(email.value.trim());
+    codeSent.value = true;
+    code.value = '';
+    noticeKey.value = 'authflow.code_sent';
+  } catch (err) {
+    showError(err);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function submitVerify() {
+  if (busy.value) return;
+  busy.value = true;
+  resetFeedback();
+  try {
+    await verifyEmailCode(email.value.trim(), code.value.trim());
+    code.value = '';
+    codeSent.value = false;
+    if (isAuthenticated.value) {
+      await fetchMe(); // is_verified flips -> the profile card shows up
+    } else {
+      switchMode('login');
+      noticeKey.value = 'authflow.verify_success';
+    }
+  } catch (err) {
+    showError(err);
+  } finally {
+    busy.value = false;
   }
 }
 </script>
@@ -129,24 +194,58 @@ async function submitLogout() {
   <div class="auth-panel">
     <!-- ─── Authenticated: profile card ─── -->
     <div v-if="isAuthenticated && user" class="auth-card">
-      <div class="auth-avatar">{{ avatarInitial }}</div>
-      <h2 class="auth-title">{{ user.display_name || user.email }}</h2>
-      <p class="auth-subtitle">{{ user.email }}</p>
-      <span
-        class="auth-chip"
-        :class="user.is_verified ? 'auth-chip--ok' : 'auth-chip--warn'"
-      >
-        {{ user.is_verified ? t('authflow.status_verified') : t('authflow.status_unverified') }}
-      </span>
-      <button class="auth-button auth-button--secondary" :disabled="busy" @click="submitLogout">
-        {{ t('authflow.logout') }}
-      </button>
+      <!-- Unverified: account is locked until the emailed code is confirmed -->
+      <template v-if="!user.is_verified">
+        <h2 class="auth-title">{{ t('authflow.verify_title') }}</h2>
+        <p class="auth-subtitle">{{ user.email }}</p>
+        <span class="auth-chip auth-chip--warn">{{ t('authflow.status_unverified') }}</span>
+        <p v-if="errorKey" class="auth-banner auth-banner--error">{{ t(errorKey) }}</p>
+        <p v-if="noticeKey" class="auth-banner auth-banner--notice">{{ t(noticeKey) }}</p>
+        <form class="auth-form" @submit.prevent="submitVerify">
+          <template v-if="codeSent">
+            <p class="auth-hint">{{ t('authflow.verify_hint', { email: user.email }) }}</p>
+            <label class="auth-label">{{ t('authflow.code_label') }}</label>
+            <input
+              v-model="code"
+              class="auth-input auth-input--code"
+              maxlength="6"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              required
+              :placeholder="t('authflow.code_placeholder')"
+            />
+            <button type="submit" class="auth-button" :disabled="busy || code.length < 6">
+              {{ busy ? t('authflow.busy') : t('authflow.code_submit') }}
+            </button>
+          </template>
+          <button v-else type="button" class="auth-button" :disabled="busy" @click="requestCode">
+            {{ busy ? t('authflow.busy') : t('authflow.code_send') }}
+          </button>
+        </form>
+        <button v-if="codeSent" type="button" class="auth-link" :disabled="busy" @click="requestCode">
+          {{ t('authflow.code_resend') }}
+        </button>
+        <button class="auth-button auth-button--secondary" :disabled="busy" @click="submitLogout">
+          {{ t('authflow.logout') }}
+        </button>
+      </template>
+
+      <!-- Verified: profile card -->
+      <template v-else>
+        <div class="auth-avatar">{{ avatarInitial }}</div>
+        <h2 class="auth-title">{{ user.display_name || user.email }}</h2>
+        <p class="auth-subtitle">{{ user.email }}</p>
+        <span class="auth-chip auth-chip--ok">{{ t('authflow.status_verified') }}</span>
+        <button class="auth-button auth-button--secondary" :disabled="busy" @click="submitLogout">
+          {{ t('authflow.logout') }}
+        </button>
+      </template>
     </div>
 
     <!-- ─── Anonymous: login / register / forgot ─── -->
     <div v-else class="auth-card">
       <!-- Tabs -->
-      <div v-if="mode !== 'forgot'" class="auth-tabs">
+      <div v-if="mode !== 'forgot' && mode !== 'verify'" class="auth-tabs">
         <button
           class="auth-tab"
           :class="{ 'auth-tab--active': mode === 'login' }"
@@ -165,6 +264,7 @@ async function submitLogout() {
 
       <h2 v-if="mode === 'forgot'" class="auth-title">{{ t('authflow.forgot_title') }}</h2>
       <p v-if="mode === 'forgot'" class="auth-hint">{{ t('authflow.forgot_hint') }}</p>
+      <h2 v-if="mode === 'verify'" class="auth-title">{{ t('authflow.verify_title') }}</h2>
 
       <!-- Feedback banners -->
       <p v-if="errorKey" class="auth-banner auth-banner--error">{{ t(errorKey) }}</p>
@@ -198,6 +298,9 @@ async function submitLogout() {
         </button>
         <button type="button" class="auth-link" @click="switchMode('forgot')">
           {{ t('authflow.forgot_link') }}
+        </button>
+        <button type="button" class="auth-link" @click="goVerify()">
+          {{ t('authflow.verify_link') }}
         </button>
       </form>
 
@@ -250,8 +353,46 @@ async function submitLogout() {
         </button>
       </form>
 
+      <!-- Email activation (6-digit code) form -->
+      <form
+        v-else-if="mode === 'verify'"
+        class="auth-form"
+        @submit.prevent="codeSent ? submitVerify() : requestCode()"
+      >
+        <template v-if="!codeSent">
+          <p class="auth-hint">{{ t('authflow.verify_email_hint') }}</p>
+          <label class="auth-label">{{ t('authflow.email') }}</label>
+          <input v-model="email" type="email" required class="auth-input" :placeholder="t('authflow.email_placeholder')" />
+          <button type="submit" class="auth-button" :disabled="busy">
+            {{ busy ? t('authflow.busy') : t('authflow.code_send') }}
+          </button>
+        </template>
+        <template v-else>
+          <p class="auth-hint">{{ t('authflow.verify_hint', { email }) }}</p>
+          <label class="auth-label">{{ t('authflow.code_label') }}</label>
+          <input
+            v-model="code"
+            class="auth-input auth-input--code"
+            maxlength="6"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            required
+            :placeholder="t('authflow.code_placeholder')"
+          />
+          <button type="submit" class="auth-button" :disabled="busy || code.length < 6">
+            {{ busy ? t('authflow.busy') : t('authflow.code_submit') }}
+          </button>
+          <button type="button" class="auth-link" :disabled="busy" @click="requestCode">
+            {{ t('authflow.code_resend') }}
+          </button>
+        </template>
+        <button type="button" class="auth-link" @click="switchMode('login')">
+          {{ t('authflow.back_to_login') }}
+        </button>
+      </form>
+
       <!-- Forgot-password form -->
-      <form v-else class="auth-form" @submit.prevent="submitForgot">
+      <form v-else-if="mode === 'forgot'" class="auth-form" @submit.prevent="submitForgot">
         <label class="auth-label">{{ t('authflow.email') }}</label>
         <input v-model="email" type="email" required class="auth-input" :placeholder="t('authflow.email_placeholder')" />
         <button type="submit" class="auth-button" :disabled="busy">
@@ -263,7 +404,7 @@ async function submitLogout() {
       </form>
 
       <!-- Google OAuth -->
-      <template v-if="mode !== 'forgot'">
+      <template v-if="mode !== 'forgot' && mode !== 'verify'">
         <div class="auth-divider">
           <span class="auth-divider__line" />
           <span class="auth-divider__text">{{ t('authflow.or_divider') }}</span>
@@ -396,6 +537,13 @@ async function submitLogout() {
   box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
 }
 
+.auth-input--code {
+  text-align: center;
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 0.35em;
+}
+
 /* Password visibility toggle */
 .auth-password {
   position: relative;
@@ -485,6 +633,12 @@ async function submitLogout() {
 
 .auth-link:hover {
   text-decoration: underline;
+}
+
+.auth-link:disabled {
+  color: #a0a0a5;
+  cursor: default;
+  text-decoration: none;
 }
 
 /* Divider */

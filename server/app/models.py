@@ -23,6 +23,13 @@ class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, Base):
 class User(SQLAlchemyBaseUserTableUUID, Base):
     # Pilot display name / callsign; will feed the Matrix display name later.
     display_name: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
+    # Email activation via 6-digit secret code (see app/verification.py).
+    # The code is stored as a SHA-256 hash with a short expiry; a successful
+    # verification flips is_verified and clears both columns.
+    verification_code_hash: Mapped[str | None] = mapped_column(String(length=128), nullable=True)
+    verification_code_expires: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     oauth_accounts: Mapped[list[OAuthAccount]] = relationship("OAuthAccount", lazy="joined")
 
 

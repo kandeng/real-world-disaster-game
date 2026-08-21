@@ -25,6 +25,7 @@ from .settings import router as settings_router
 from .stream import router as stream_router
 from .telemetry import router as telemetry_router
 from .users import auth_backend, fastapi_users, google_oauth_client
+from .verification import router as verification_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -50,8 +51,10 @@ app.add_middleware(
 )
 
 # --- Auth: email + password (JWT) ------------------------------------------
+# requires_verification: unverified accounts can never obtain a JWT — login
+# only succeeds once the email activation code has been confirmed.
 app.include_router(
-    fastapi_users.get_auth_router(auth_backend),
+    fastapi_users.get_auth_router(auth_backend, requires_verification=True),
     prefix="/api/auth/jwt",
     tags=["auth"],
 )
@@ -68,6 +71,11 @@ app.include_router(
 app.include_router(
     fastapi_users.get_verify_router(UserRead),
     prefix="/api/auth",
+    tags=["auth"],
+)
+app.include_router(
+    verification_router,
+    prefix="/api/auth/code",
     tags=["auth"],
 )
 

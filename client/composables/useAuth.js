@@ -56,8 +56,14 @@ export function useAuth() {
       body: new URLSearchParams({ username: email, password }),
     });
     if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch { /* non-JSON */ }
       throw authError(
-        res.status === 400 ? 'error_invalid_credentials' : 'error_generic',
+        detail === 'LOGIN_USER_NOT_VERIFIED'
+          ? 'error_unverified'
+          : res.status === 400
+            ? 'error_invalid_credentials'
+            : 'error_generic',
       );
     }
     const data = await res.json();
@@ -115,6 +121,27 @@ export function useAuth() {
     return res.json();
   }
 
+  // Email activation via 6-digit secret code (see server/app/verification.py).
+  async function requestVerificationCode(email) {
+    const res = await fetch(`${API_BASE}/api/auth/code/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    if (res.status === 429) throw authError('code_too_soon');
+    if (!res.ok) throw authError('code_request_failed');
+  }
+
+  async function verifyEmailCode(email, code) {
+    const res = await fetch(`${API_BASE}/api/auth/code/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code }),
+    });
+    if (!res.ok) throw authError('code_invalid');
+    return res.json();
+  }
+
   async function googleLogin() {
     // credentials: 'include' — fastapi-users >= 13 sets a CSRF cookie on
     // /authorize that /callback must see again. Same-origin in production;
@@ -153,6 +180,8 @@ export function useAuth() {
     requestPasswordReset,
     resetPassword,
     verifyEmail,
+    requestVerificationCode,
+    verifyEmailCode,
     googleLogin,
     handleOAuthCallback,
   };

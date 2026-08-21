@@ -54,6 +54,18 @@ async def send_verification_email(to: str, token: str) -> None:
     )
 
 
+async def send_verification_code(to: str, code: str) -> None:
+    await send_email(
+        to,
+        "Your Drone Navigation verification code",
+        "Welcome aboard, pilot!\n\n"
+        f"Your email verification code is: {code}\n\n"
+        "Enter it on the verification page to activate your account.\n"
+        "The code expires in 10 minutes.\n\n"
+        "If you did not register, you can ignore this message.",
+    )
+
+
 async def send_password_reset_email(to: str, token: str) -> None:
     link = _frontend_link("/reset-password", token)
     await send_email(
