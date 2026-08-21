@@ -95,6 +95,11 @@ const routes = [
     name: 'Extensions',
     component: ExtensionsView,
   },
+  {
+    path: '/gallery',
+    name: 'Gallery',
+    component: () => import('@/views/GalleryView.vue'),
+  },
 ];
 
 const router = createRouter({

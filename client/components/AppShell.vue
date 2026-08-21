@@ -100,7 +100,20 @@ function toggleLocale() {
       >
         {{ t('aerialview.page_routeplanning') }}
       </div>
-      <div class="shell-nav__item">{{ t('aerialview.page_extensions') }}</div>
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/gallery') }"
+        @click="go('/gallery')"
+      >
+        {{ t('aerialview.page_gallery') }}
+      </div>
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/extensions') }"
+        @click="go('/extensions')"
+      >
+        {{ t('aerialview.page_extensions') }}
+      </div>
 
       <div class="shell-left__spacer" />
       <div class="shell-left__divider" />

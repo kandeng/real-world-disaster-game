@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
+import TabBar from '@shared/TabBar.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { useProxyConfig } from '@shared-composables/useProxyConfig.js';
 
@@ -11,40 +12,8 @@ const { clear } = useDockRegistry();
 const { proxyConfig, OS_OPTIONS } = useProxyConfig();
 const route = useRoute();
 
-/* ─── Left-column width drag ─── */
-const LEFT_MIN = 180;
-const LEFT_MAX = 400;
-const LEFT_DEFAULT = 220;
-// Left page padding (see .extensions-page): divider drags must subtract it
-// from the pointer's page-relative x.
-const PAGE_PAD = 24;
-const leftWidth = ref(LEFT_DEFAULT);
-const isDragging = ref(false);
-
-function onDividerPointerDown(e) {
-  e.preventDefault();
-  isDragging.value = true;
-  document.addEventListener('pointermove', onDividerPointerMove);
-  document.addEventListener('pointerup', onDividerPointerUp);
-}
-
-function onDividerPointerMove(e) {
-  if (!isDragging.value) return;
-  const panel = document.querySelector('.extensions-page');
-  if (!panel) return;
-  const rect = panel.getBoundingClientRect();
-  const x = e.clientX - rect.left - PAGE_PAD;
-  leftWidth.value = Math.min(LEFT_MAX, Math.max(LEFT_MIN, x));
-}
-
-function onDividerPointerUp() {
-  isDragging.value = false;
-  document.removeEventListener('pointermove', onDividerPointerMove);
-  document.removeEventListener('pointerup', onDividerPointerUp);
-}
-
-/* ─── Selected category ─── */
-const selectedId = ref('real_drone');
+/* ─── Selected category (top tabs) ─── */
+const selectedId = ref('drone');
 const searchQuery = ref('');
 
 /* ─── Extension registry ─── */
@@ -63,7 +32,7 @@ function resolveManifestPath(ext) {
 }
 
 const EXTENSIONS_DATA = {
-  real_drone: {
+  drone: {
 subcategories: [
       {
         id: 'single_drone',
@@ -207,7 +176,9 @@ const activeExtension = ref(null);
 
 /* ─── Deep-link support: /extensions?cat=software&ext=simple-squid-proxy ─── */
 function applyQueryParams() {
-  const cat = route.query.cat;
+  const rawCat = route.query.cat;
+  // Legacy id from the old left-sidebar layout.
+  const cat = rawCat === 'real_drone' ? 'drone' : rawCat;
   const ext = route.query.ext;
   if (cat && EXTENSIONS_LIST.some((c) => c.id === cat)) {
     selectedId.value = cat;
@@ -241,21 +212,27 @@ function selectCategory(id) {
 
 /* ─── Breadcrumb ─── */
 const EXTENSIONS_LIST = [
-  { id: 'real_drone', labelKey: 'aerialview.extensions_real_drone' },
-  { id: 'hardware', labelKey: 'aerialview.extensions_hardware' },
-  { id: 'software', labelKey: 'aerialview.extensions_software' },
+  { id: 'drone', labelKey: 'aerialview.extensions_tab_drone' },
+  { id: 'robot', labelKey: 'aerialview.extensions_tab_robot' },
+  { id: 'vehicle', labelKey: 'aerialview.extensions_tab_vehicle' },
+  { id: 'digital_asset', labelKey: 'aerialview.extensions_tab_digital_asset' },
+  { id: 'hardware', labelKey: 'aerialview.extensions_tab_hardware' },
+  { id: 'software', labelKey: 'aerialview.extensions_tab_software' },
 ];
+
+const tabs = computed(() => EXTENSIONS_LIST.map((c) => ({ id: c.id, label: t(c.labelKey) })));
 
 const breadcrumb = computed(() => {
   const selected = EXTENSIONS_LIST.find((c) => c.id === selectedId.value);
   const catLabel = selected ? t(selected.labelKey) : '';
+  const root = t('aerialview.page_extensions');
   if (activeExtension.value) {
     const ext = activeExtension.value;
     const subLabel = ext.subcategoryLabel || '';
     const extLabel = t(ext.labelKey);
-    return `Extensions > ${catLabel} > ${subLabel} > ${extLabel}`;
+    return `${root} > ${catLabel} > ${subLabel} > ${extLabel}`;
   }
-  return `Extensions > ${catLabel}`;
+  return `${root} > ${catLabel}`;
 });
 
 /* ─── Current category data ─── */
@@ -286,29 +263,14 @@ onUnmounted(() => {
   >
     <template #background>
       <div class="extensions-page">
-        <!-- Left sidebar -->
-        <nav
-          class="extensions-sidebar"
-          :style="{ width: leftWidth + 'px' }"
-        >
-          <div
-            v-for="item in EXTENSIONS_LIST"
-            :key="item.id"
-            class="extensions-sidebar__item"
-            :class="{ 'extensions-sidebar__item--active': selectedId === item.id }"
-            @click="selectCategory(item.id)"
-          >
-            {{ t(item.labelKey) }}
-          </div>
-        </nav>
-
-        <!-- Divider (draggable) -->
-        <div
-          class="extensions-divider"
-          @pointerdown="onDividerPointerDown"
+        <!-- Category tabs (Account style; overflow collapses into ») -->
+        <TabBar
+          :model-value="selectedId"
+          :tabs="tabs"
+          @update:model-value="selectCategory"
         />
 
-        <!-- Right content area -->
+        <!-- Content area -->
         <div class="extensions-content">
           <!-- Breadcrumb -->
           <div class="extensions-breadcrumb">
@@ -319,23 +281,6 @@ onUnmounted(() => {
             >&larr;</span>
             {{ breadcrumb }}
           </div>
-
-          <!-- Search bar (visible in list view only, above separator) -->
-          <div v-if="!activeExtension" class="extensions-search-bar">
-            <svg class="extensions-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <input
-              v-model="searchQuery"
-              type="text"
-              class="extensions-search-input"
-              :placeholder="t('aerialview.extensions_search_placeholder')"
-            />
-          </div>
-
-          <!-- Separator -->
-          <div class="extensions-separator" />
 
           <!-- Detail view (manifest) -->
           <div v-if="activeExtension" class="extensions-manifest">
@@ -399,7 +344,25 @@ onUnmounted(() => {
           </div>
 
           <!-- List view -->
-          <div v-else class="extensions-results">
+          <template v-else-if="currentSubcategories.length">
+            <!-- Search bar (above separator) -->
+            <div class="extensions-search-bar">
+              <svg class="extensions-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input
+                v-model="searchQuery"
+                type="text"
+                class="extensions-search-input"
+                :placeholder="t('aerialview.extensions_search_placeholder')"
+              />
+            </div>
+
+            <!-- Separator -->
+            <div class="extensions-separator" />
+
+            <div class="extensions-results">
             <!-- Subcategories -->
             <div
               v-for="sub in currentSubcategories"
@@ -417,6 +380,10 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
+          </template>
+
+          <!-- Empty category -->
+          <p v-else class="extensions-empty">{{ t('aerialview.extensions_empty') }}</p>
         </div>
       </div>
     </template>
@@ -428,71 +395,30 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   pointer-events: auto;
   background: #ffffff;
   user-select: none;
   z-index: 6;
-  /* The global shell (AppShell) hosts navigation; the page only keeps a
-     small left gutter. */
-  padding: 0 0 0 24px;
   box-sizing: border-box;
 }
 
-/* ─── Left sidebar ─── */
-.extensions-sidebar {
-  flex-shrink: 0;
-  padding: 20px 0;
-  overflow-y: auto;
-  background: #f5f5f7;
-}
-
-.extensions-sidebar__item {
-  padding: 9px 20px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: #1d1d1f;
-  cursor: pointer;
-  border-radius: 6px;
-  margin: 2px 8px;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.extensions-sidebar__item:hover {
-  background: rgba(0, 0, 0, 0.04);
-}
-
-.extensions-sidebar__item--active {
-  background: #007aff;
-  color: #ffffff;
-}
-
-.extensions-sidebar__item--active:hover {
-  background: #0066d6;
-}
-
-/* ─── Divider ─── */
-.extensions-divider {
-  width: 4px;
-  flex-shrink: 0;
-  background: #e5e5ea;
-  cursor: col-resize;
-  transition: background 0.15s ease;
-}
-
-.extensions-divider:hover,
-.extensions-divider:active {
-  background: #007aff;
-}
-
-/* ─── Right content ─── */
+/* ─── Content ─── */
 .extensions-content {
   flex: 1;
+  min-height: 0;
   min-width: 0;
-  padding: 24px 32px;
+  padding: 8px 48px 32px;
   overflow-y: auto;
   background: #ffffff;
   display: flex;
   flex-direction: column;
+}
+
+.extensions-empty {
+  padding: 24px 0;
+  font-size: 0.9rem;
+  color: #6e6e73;
 }
 
 .extensions-breadcrumb {

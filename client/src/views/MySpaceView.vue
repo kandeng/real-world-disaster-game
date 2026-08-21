@@ -1,6 +1,7 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
+import TabBar from '@shared/TabBar.vue';
 import AccountLoginPanel from '@/views/AccountLoginPanel.vue';
 
 // 'account' | 'content' — provided by the router. The shell's left panel
@@ -14,34 +15,17 @@ const { t } = useI18n();
 
 /* 'login' | 'consumption' | 'income' */
 const tab = ref('login');
+const tabs = computed(() => [
+  { id: 'login', label: t('authflow.acct_tab_login') },
+  { id: 'consumption', label: t('authflow.acct_tab_consumption') },
+  { id: 'income', label: t('authflow.acct_tab_income') },
+]);
 </script>
 
 <template>
   <div class="myspace-page">
     <template v-if="sub === 'account'">
-      <div class="myspace-tabs">
-        <button
-          class="myspace-tab"
-          :class="{ 'myspace-tab--active': tab === 'login' }"
-          @click="tab = 'login'"
-        >
-          {{ t('authflow.acct_tab_login') }}
-        </button>
-        <button
-          class="myspace-tab"
-          :class="{ 'myspace-tab--active': tab === 'consumption' }"
-          @click="tab = 'consumption'"
-        >
-          {{ t('authflow.acct_tab_consumption') }}
-        </button>
-        <button
-          class="myspace-tab"
-          :class="{ 'myspace-tab--active': tab === 'income' }"
-          @click="tab = 'income'"
-        >
-          {{ t('authflow.acct_tab_income') }}
-        </button>
-      </div>
+      <TabBar v-model="tab" :tabs="tabs" />
 
       <AccountLoginPanel v-if="tab === 'login'" />
       <p v-else class="myspace-placeholder">{{ t('authflow.acct_tab_placeholder') }}</p>
@@ -58,33 +42,6 @@ const tab = ref('login');
   pointer-events: auto;
   background: #ffffff;
   user-select: none;
-}
-
-.myspace-tabs {
-  display: flex;
-  gap: 64px;
-  padding: 32px 48px 0;
-}
-
-.myspace-tab {
-  border: none;
-  background: none;
-  padding: 0 2px 10px;
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: #111827;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-}
-
-.myspace-tab:hover {
-  color: #007aff;
-}
-
-.myspace-tab--active,
-.myspace-tab--active:hover {
-  color: #007aff;
-  border-bottom-color: #007aff;
 }
 
 .myspace-placeholder {
