@@ -24,7 +24,8 @@ from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
 from .stream import router as stream_router
 from .telemetry import router as telemetry_router
-from .users import auth_backend, fastapi_users, google_oauth_client
+from .oauth_router import get_resilient_oauth_router
+from .users import auth_backend, fastapi_users, get_user_manager, google_oauth_client
 from .verification import router as verification_router
 
 logging.basicConfig(level=logging.INFO)
@@ -82,9 +83,10 @@ app.include_router(
 # --- Auth: Google OAuth -----------------------------------------------------
 if google_oauth_client.client_id:
     app.include_router(
-        fastapi_users.get_oauth_router(
+        get_resilient_oauth_router(
             google_oauth_client,
             auth_backend,
+            get_user_manager,
             CONFIG["secret"],
             # Explicit SPA callback page: without this fastapi-users resolves
             # the API endpoint URL via url_for(), which (a) is not registered

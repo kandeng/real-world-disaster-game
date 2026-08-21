@@ -6,7 +6,7 @@ import { useAuth } from '@shared-composables/useAuth.js';
 
 // Landing page for the Google OAuth flow: Google redirects here with
 // ?code=...&state=..., we forward them to the API callback which returns
-// the JWT as JSON, then drop the user into My Space.
+// the JWT as JSON, then drop the user into the Account page.
 const { t } = useI18n();
 const router = useRouter();
 const { handleOAuthCallback } = useAuth();
@@ -30,7 +30,7 @@ onMounted(async () => {
       <p v-if="state === 'pending'" class="auth-page__text">{{ t('authflow.callback_pending') }}</p>
       <template v-else>
         <p class="auth-page__text auth-page__text--error">{{ t('authflow.callback_error') }}</p>
-        <router-link to="/account" class="auth-page__link">{{ t('authflow.go_myspace') }}</router-link>
+        <router-link to="/account" class="auth-page__link">{{ t('authflow.go_account') }}</router-link>
       </template>
     </div>
   </div>
@@ -45,6 +45,8 @@ onMounted(async () => {
   justify-content: center;
   background: #ffffff;
   z-index: 6;
+  /* shell-main is pointer-events:none; restore interactivity for the card */
+  pointer-events: auto;
 }
 
 .auth-page__card {

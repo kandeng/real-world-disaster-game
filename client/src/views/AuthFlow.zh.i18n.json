@@ -56,7 +56,7 @@
   "reset_error": "重置失败，链接可能已过期——请重新申请。",
   "callback_pending": "正在通过 Google 登录…",
   "callback_error": "Google 登录失败，请重试。",
-  "go_myspace": "进入 My Space",
+  "go_account": "进入账户",
   "acct_tab_login": "登录",
   "acct_tab_consumption": "消费",
   "acct_tab_income": "收益",
