@@ -82,6 +82,10 @@ const waitingTiles = ref(false);
 // frame boundary (Pages / Map / Preview all call stopPreview to abort).
 let offlineAbort = false;
 const renderProgress = ref(null);
+// Phase code of the running Save render pass ('' idle, 'start', 'tiles',
+// 'render', 'mux', 'fly') so external UIs (the Content -> Route -> Video
+// dialog) can show a live blue status line while frames are generated.
+const renderStatus = ref('');
 // 0..1 distance traveled along the route while a preview / capture flight
 // is airborne (drives progress UIs when the offline frame counter is not
 // active, i.e. during the MediaRecorder fallback save).
@@ -421,11 +425,13 @@ function stepPreviewFrame(dt) {
     if (!ready) {
       readyStreak = 0;
       waitingTiles.value = true;
+      if (captureMode) renderStatus.value = 'tiles';
       return;
     }
     readyStreak += 1;
     if (readyStreak < READY_HOLD) {
       waitingTiles.value = true;
+      if (captureMode) renderStatus.value = 'tiles';
       return;
     }
     flightReleased = true;
@@ -443,8 +449,10 @@ function stepPreviewFrame(dt) {
   } else {
     readyStreak = 0;
     waitingTiles.value = true;
+    if (captureMode) renderStatus.value = 'tiles';
     return; // hard stop until the missing tiles arrive
   }
+  if (captureMode) renderStatus.value = 'fly';
   // Save: start the recorder only once the first view is fully rendered,
   // so the mp4 contains no blurry pre-roll frames.
   if (captureMode && !mediaRecorder) startRecording();
@@ -935,6 +943,7 @@ async function tryOfflineSave(waypoints) {
       const s = sampleAtDistance(dist);
       const st = interpWpStateAt(dist);
       if (!s || !st) return false;
+      renderStatus.value = 'tiles';
       drone.lat = s.lat;
       drone.lon = s.lng;
       drone.alt = st.alt;
@@ -947,6 +956,7 @@ async function tryOfflineSave(waypoints) {
       // Quality gate with no grace window: waiting is free here — every
       // encoded frame must be fully rendered.
       if (!(await awaitTilesStable(3))) return false; // aborted while waiting
+      renderStatus.value = 'render';
       if (!(await grabCroppedFrame(crop))) return false;
       const vf = new VideoFrame(mirrorCanvas, {
         timestamp: Math.round((k * 1e6) / RECORDING_FPS),
@@ -958,6 +968,7 @@ async function tryOfflineSave(waypoints) {
         await new Promise((r) => setTimeout(r, 10));
       }
     }
+    renderStatus.value = 'mux';
     await encoder.flush();
     if (offlineAbort || encoderError) return false;
     muxer.finalize();
@@ -997,6 +1008,7 @@ async function saveClip(waypoints) {
   if (previewActive.value) stopPreview(); // a live preview is canceled
   offlineAbort = false;
   saving.value = true;
+  renderStatus.value = 'start';
   try {
     const offline = await tryOfflineSave(waypoints);
     if (offline !== null) return offline;
@@ -1011,6 +1023,7 @@ async function saveClip(waypoints) {
   } finally {
     saving.value = false;
     renderProgress.value = null;
+    renderStatus.value = '';
   }
 }
 
@@ -1247,6 +1260,7 @@ export function useRouteScene3D() {
     saving,
     waitingTiles,
     renderProgress,
+    renderStatus,
     flightProgress,
     peekMirrorCanvas,
     startLoop,

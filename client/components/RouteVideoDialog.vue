@@ -23,13 +23,36 @@ const videoUrl = ref('');
 let clipBlob = null;
 const title = ref(props.route.title);
 const description = ref('');
-const createdAt = ref(new Date());
+// Creation time is copied from the route (the video card shows the same).
+const createdAt = computed(() => new Date(props.route.created_at));
 const publish = ref(true);
+const deletePrevious = ref(true);
 const published = ref(false);
 const publishFailed = ref(false);
+const publishing = ref(false);
 let blitRaf = null;
 let finished = false;
 
+// Blue live status line at the top of the dialog, driven by the
+// renderer's phase code (same 0.95rem blue as the top-bar reminders).
+const statusText = computed(() => {
+  if (state.value !== 'rendering') return '';
+  switch (scene.renderStatus.value) {
+    case 'tiles': return t('routevideodialog.status_tiles');
+    case 'render': return t('routevideodialog.status_render');
+    case 'mux': return t('routevideodialog.status_mux');
+    case 'fly': return t('routevideodialog.status_fly');
+    default: return t('routevideodialog.status_start');
+  }
+});
+
+// Errors surface as the red pulsing warning line (same style as the
+// 3D Exploration collision warning).
+const errorMsg = computed(() => {
+  if (state.value === 'failed') return t('routevideodialog.failed');
+  if (publishFailed.value) return t('routevideodialog.publish_failed');
+  return '';
+});
 // Offline pass: { frame, total }; fallback capture flight: distance %.
 const progress = computed(() => {
   const rp = scene.renderProgress.value;
@@ -83,19 +106,6 @@ onMounted(async () => {
     clipBlob = clip.blob;
     videoUrl.value = URL.createObjectURL(clip.blob);
     state.value = 'done';
-    if (publish.value) {
-      try {
-        const minted = await publishVideo({
-          route_id: props.route.id,
-          title: title.value.trim() || props.route.title,
-          description: description.value,
-        });
-        if (minted && minted.created_at) createdAt.value = new Date(minted.created_at);
-        published.value = true;
-      } catch {
-        publishFailed.value = true;
-      }
-    }
   } else {
     state.value = 'failed';
   }
@@ -111,11 +121,28 @@ function onClose() {
   emit('close');
 }
 
-// Native "Save As" when available, plain download anchor otherwise (same
-// pattern as Route Planning's Save).
+// Clicking the (blue, ready) button: 1) publish the video card when the
+// checkbox is on (optionally deleting the previous video of this route),
+// 2) pop the native "Save As" dialog for the mp4.
 async function onDownload() {
   const blob = clipBlob;
-  if (!blob) return;
+  if (!blob || publishing.value) return;
+  if (publish.value && !published.value) {
+    publishing.value = true;
+    try {
+      await publishVideo({
+        route_id: props.route.id,
+        title: title.value.trim() || props.route.title,
+        description: description.value,
+        delete_previous: deletePrevious.value,
+      });
+      published.value = true;
+    } catch {
+      publishFailed.value = true;
+    } finally {
+      publishing.value = false;
+    }
+  }
   const ext = 'mp4';
   const pad = (n) => String(n).padStart(2, '0');
   const d = new Date();
@@ -147,6 +174,14 @@ async function onDownload() {
   <div class="vd-mask">
     <div class="vd" role="dialog" aria-modal="true">
       <div class="vd__head">
+        <div class="vd__notice">
+          <div v-if="errorMsg" class="vd__error">
+            <span class="vd__error-icon">⚠</span>
+            <span class="vd__error-text">{{ errorMsg }}</span>
+            <span class="vd__error-icon">⚠</span>
+          </div>
+          <div v-else-if="state === 'rendering'" class="vd__status">{{ statusText }}</div>
+        </div>
         <button class="vd__close" :title="t('routevideodialog.close')" @click="onClose">&times;</button>
       </div>
 
@@ -161,7 +196,6 @@ async function onDownload() {
           muted
           loop
         ></video>
-        <div v-if="state === 'failed'" class="vd__failed">{{ t('routevideodialog.failed') }}</div>
       </div>
 
       <div class="vd__field">
@@ -191,11 +225,14 @@ async function onDownload() {
       </div>
 
       <label class="vd__publish">
-        <input v-model="publish" type="checkbox" :disabled="state !== 'rendering'" />
+        <input v-model="publish" type="checkbox" :disabled="published" />
         <span>{{ t('routevideodialog.publish') }}</span>
       </label>
+      <label class="vd__publish vd__publish--sub">
+        <input v-model="deletePrevious" type="checkbox" :disabled="published" />
+        <span>{{ t('routevideodialog.delete_previous') }}</span>
+      </label>
       <div v-if="published" class="vd__published">{{ t('routevideodialog.published') }}</div>
-      <div v-else-if="publishFailed" class="vd__publish-failed">{{ t('routevideodialog.publish_failed') }}</div>
 
       <button
         class="vd__download"
@@ -234,8 +271,55 @@ async function onDownload() {
 .vd__head {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  gap: 16px;
   margin-bottom: 12px;
+}
+
+/* The live status / warning line, centered in the remaining head space. */
+.vd__notice {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  text-align: center;
+}
+
+/* Blue like the top-bar reminder notices (0.95rem regular). */
+.vd__status {
+  color: #007aff;
+  font-size: 0.95rem;
+  font-weight: 400;
+}
+
+/* Red warning, same style as the 3D Exploration collision warning. */
+.vd__error {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #dc143c;
+  font-family: Calibri, 'Segoe UI', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 400;
+  animation: vdWarningPulse 1s ease-in-out infinite;
+}
+
+.vd__error-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.vd__error-text {
+  letter-spacing: 0.02em;
+}
+
+@keyframes vdWarningPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 .vd__close {
@@ -270,11 +354,6 @@ async function onDownload() {
   height: 100%;
   display: block;
   object-fit: contain;
-}
-
-.vd__failed {
-  font-size: 0.95rem;
-  color: #f5f5f7;
 }
 
 /* Title row under the panel: label + editable input. */
@@ -376,6 +455,10 @@ async function onDownload() {
   user-select: none;
 }
 
+.vd__publish--sub {
+  margin-top: 10px;
+}
+
 .vd__publish input {
   width: 16px;
   height: 16px;
@@ -387,12 +470,6 @@ async function onDownload() {
   margin-top: 8px;
   font-size: 0.85rem;
   color: #34a853;
-}
-
-.vd__publish-failed {
-  margin-top: 8px;
-  font-size: 0.85rem;
-  color: #dc143c;
 }
 
 /* Grey like the Account -> Login Save button until the clip is ready. */

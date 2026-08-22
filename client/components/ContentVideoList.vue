@@ -72,6 +72,31 @@ function providerLabel(p) {
   return PROVIDER_LABELS[p] || p;
 }
 
+// Embed URL of the primary (lowest-position) playable source, so the card
+// tops with a real video displaying window. Returns null when nothing
+// parseable is configured yet (black placeholder panel instead).
+function embedUrl(v) {
+  const src = [...(v.sources || [])]
+    .sort((a, b) => a.position - b.position)
+    .find((s) => s.url && s.url.trim());
+  if (!src) return null;
+  const url = src.url.trim();
+  if (src.provider === 'youtube') {
+    const m = url.match(/(?:youtu\.be\/|[?/]v=|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)
+      || url.match(/^([A-Za-z0-9_-]{6,})$/);
+    if (m) return `https://www.youtube-nocookie.com/embed/${m[1]}`;
+  } else if (src.provider === 'bilibili') {
+    const bv = url.match(/(BV[0-9A-Za-z]+)/);
+    const av = url.match(/av(\d+)/i);
+    if (bv) return `https://player.bilibili.com/player.html?bvid=${bv[1]}&autoplay=0&high_quality=1`;
+    if (av) return `https://player.bilibili.com/player.html?aid=${av[1]}&autoplay=0&high_quality=1`;
+  } else if (src.provider === 'vimeo') {
+    const m = url.match(/vimeo\.com\/(\d+)/);
+    if (m) return `https://player.vimeo.com/video/${m[1]}`;
+  }
+  return null;
+}
+
 function addSource(v) {
   const used = new Set(v.sources.map((s) => s.provider));
   const provider = PROVIDERS.find((p) => !used.has(p));
@@ -89,12 +114,14 @@ async function onSave(v) {
   try {
     const updated = await saveVideo(v.id, {
       title: v.title,
+      description: v.description || '',
       waypoints: v.waypoints,
       sources: v.sources
         .filter((s) => s.url.trim())
         .map((s, i) => ({ provider: s.provider, url: s.url.trim(), position: i })),
     });
     v.title = updated.title;
+    v.description = updated.description;
     v.waypoints = updated.waypoints;
     v.sources = updated.sources;
     flash(v.id, 'saved');
@@ -128,17 +155,11 @@ function flash(id, kind) {
       class="vlist__entry"
     >
       <div class="vlist__head">
-        <div class="vlist__meta">
-          <input
-            v-if="expanded[v.id]"
-            v-model="v.title"
-            class="vlist__title-input"
-            type="text"
-            maxlength="200"
-          />
-          <div v-else class="vlist__title">{{ v.title }}</div>
+        <div v-if="!expanded[v.id]" class="vlist__meta">
+          <div class="vlist__title">{{ v.title }}</div>
           <div class="vlist__date">{{ fmtDate(v.created_at) }}</div>
         </div>
+        <div v-else class="vlist__spacer"></div>
         <button
           class="vlist__toggle"
           :title="expanded[v.id] ? t('contentvideolist.collapse') : t('contentvideolist.expand')"
@@ -153,6 +174,38 @@ function flash(id, kind) {
       </div>
 
       <template v-if="expanded[v.id]">
+        <div class="vlist__screen">
+          <iframe
+            v-if="embedUrl(v)"
+            :src="embedUrl(v)"
+            class="vlist__iframe"
+            frameborder="0"
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowfullscreen
+          ></iframe>
+          <div v-else class="vlist__screen-empty">{{ t('contentvideolist.no_source') }}</div>
+        </div>
+
+        <div class="vlist__field">
+          <span class="vlist__label">{{ t('contentvideolist.title_label') }}</span>
+          <input
+            v-model="v.title"
+            class="vlist__title-input"
+            type="text"
+            maxlength="200"
+          />
+        </div>
+
+        <div class="vlist__created">{{ t('contentvideolist.created_at') }} {{ fmtDate(v.created_at) }}</div>
+
+        <textarea
+          v-model="v.description"
+          class="vlist__desc"
+          rows="3"
+          maxlength="2000"
+          :placeholder="t('contentvideolist.description_ph')"
+        ></textarea>
+
         <WaypointCards :waypoints="v.waypoints" @edit="onEditWp(v, $event)" />
 
         <div class="vlist__sources">
@@ -201,12 +254,11 @@ function flash(id, kind) {
 
         <div class="vlist__actions">
           <button
-            class="vlist__action"
-            :title="t('contentvideolist.save')"
+            class="vlist__save"
             :disabled="savingId === v.id"
             @click="onSave(v)"
           >
-            <ConfigurableIcon name="MENU_SAVE" :size="26" />
+            {{ t('contentvideolist.save') }}
           </button>
           <span v-if="savedId === v.id" class="vlist__saved">{{ t('contentvideolist.saved') }}</span>
           <span v-else-if="failedId === v.id" class="vlist__failed">{{ t('contentvideolist.save_failed') }}</span>
@@ -247,6 +299,10 @@ function flash(id, kind) {
   gap: 14px;
 }
 
+.vlist__spacer {
+  flex: 1;
+}
+
 .vlist__title {
   font-size: 1.15rem;
   font-weight: 600;
@@ -256,12 +312,13 @@ function flash(id, kind) {
 /* Editable title while the entry is expanded. */
 .vlist__title-input {
   box-sizing: border-box;
-  max-width: 480px;
+  flex: 1;
+  min-width: 0;
   padding: 6px 12px;
   border: 1px solid #8e8e93;
   border-radius: 8px;
   background: #ffffff;
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   font-weight: 600;
   color: #111827;
 }
@@ -274,6 +331,75 @@ function flash(id, kind) {
 .vlist__date {
   font-size: 0.95rem;
   color: #1d1d1f;
+}
+
+/* The video displaying window: embedded primary playback URL. */
+.vlist__screen {
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  background: #000000;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vlist__iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+.vlist__screen-empty {
+  font-size: 0.9rem;
+  color: #f5f5f7;
+  text-align: center;
+  padding: 0 24px;
+}
+
+/* Title row: label + editable input. */
+.vlist__field {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 640px;
+}
+
+.vlist__label {
+  flex-shrink: 0;
+  font-size: 0.95rem;
+  color: #1d1d1f;
+}
+
+.vlist__created {
+  margin-top: 12px;
+  font-size: 0.95rem;
+  color: #1d1d1f;
+}
+
+.vlist__desc {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 640px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid #8e8e93;
+  border-radius: 8px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #111827;
+  resize: vertical;
+  min-height: 72px;
+}
+
+.vlist__desc:focus,
+.vlist__title-input:focus {
+  outline: 1px solid rgba(37, 99, 235, 0.5);
 }
 
 .vlist__toggle {
@@ -391,22 +517,23 @@ function flash(id, kind) {
   gap: 22px;
 }
 
-.vlist__action {
+.vlist__save {
+  padding: 8px 26px;
   border: none;
-  background: none;
-  padding: 2px;
+  border-radius: 8px;
+  background: #007aff;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  color: #515151;
 }
 
-.vlist__action:hover:not(:disabled) {
-  color: #007aff;
+.vlist__save:hover:not(:disabled) {
+  background: #0066d6;
 }
 
-.vlist__action:disabled {
-  opacity: 0.4;
+.vlist__save:disabled {
+  opacity: 0.5;
   cursor: default;
 }
 

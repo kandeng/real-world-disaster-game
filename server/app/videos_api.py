@@ -38,6 +38,7 @@ class VideoCreate(BaseModel):
     route_id: uuid.UUID
     title: str | None = Field(default=None, max_length=200)
     description: str = Field(default="", max_length=2000)
+    delete_previous: bool = False
 
 
 class VideoUpdate(BaseModel):
@@ -180,12 +181,22 @@ async def create_video(
     route = (await session.execute(stmt)).scalar_one_or_none()
     if route is None:
         raise HTTPException(status_code=404, detail="ROUTE_NOT_FOUND")
+    if body.delete_previous:
+        old = (
+            await session.execute(
+                select(Video).where(Video.user_id == user.id, Video.route_id == route.id)
+            )
+        ).scalars().all()
+        for ov in old:
+            await session.execute(delete(VideoSource).where(VideoSource.video_id == ov.id))
+            await session.delete(ov)
     video = Video(
         user_id=user.id,
         route_id=route.id,
         title=body.title if body.title else route.title,
         description=body.description,
         waypoints=[dict(w) for w in route.waypoints],
+        created_at=route.created_at,  # the card shows the route's creation time
     )
     session.add(video)
     await session.commit()
