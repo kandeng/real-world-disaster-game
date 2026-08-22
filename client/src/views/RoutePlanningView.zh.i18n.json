@@ -12,8 +12,10 @@
   "position": "位置",
   "speed": "速度",
   "steer": "操控",
-  "preview": "预览",
+  "video": "视频",
   "save": "保存",
-  "preview_need_waypoints": "请至少添加两个航点后再预览",
-  "auth_notice_preview": "请先登录，然后再保存预览视频。"
+  "save_route_new": "保存这条新路线",
+  "save_route_update": "更新该路线",
+  "preview_need_waypoints": "请至少添加两个航点后再生成视频文件",
+  "auth_notice_preview": "请先登录，然后再保存路线和生成视频。"
 }

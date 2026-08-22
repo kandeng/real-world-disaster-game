@@ -10,10 +10,11 @@ import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import { useAuth } from '@shared-composables/useAuth.js';
-import { takeRouteHandoff } from '@shared-composables/useRoutes.js';
+import { takeRouteHandoff, useRoutes } from '@shared-composables/useRoutes.js';
 import DockButton from '@shared/DockButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
+import RouteVideoDialog from '@shared/RouteVideoDialog.vue';
 import cancelIcon from '../../icons/cancel.svg';
 
 const { t } = useI18n();
@@ -21,6 +22,7 @@ const { drone, gimbal } = useDrone();
 // Login state: the finished preview video is only handed out to logged-in
 // users (same gate as the captures on 3D Exploration -> 3D Aerial).
 const { isAuthenticated } = useAuth();
+const { saveRoute, createRoute } = useRoutes();
 
 // 3D subpage scene controller: sim loop, Flight/Gimbal disk state and the
 // first-person preview flight + recording (singleton composable).
@@ -441,14 +443,15 @@ function registerRightDock() {
     onClick: onClickRoute,
   });
   registerRight({
-    // The single Preview button sits below Route: renders the whole route
-    // on screen at exact 30 fps (offline pass, every frame fully rendered)
-    // and saves it as a 16:9 mp4.
-    id: 'preview',
-    icon: 'MENU_PREVIEW',
-    titleKey: 'routeplanningview.preview',
-    active: routeScene.saving.value,
-    onClick: onClickSave,
+    // The Video button sits below Route: it saves the current route to
+    // Content -> Route (new route -> POST, route carried by Steer -> PUT)
+    // and opens the same video generation dialog as Content -> Route ->
+    // Video, which renders the whole route at exact 30 fps into a 16:9 mp4.
+    id: 'video',
+    icon: 'MENU_RECORDER',
+    titleKey: 'routeplanningview.video',
+    active: routeScene.saving.value || !!videoRoute.value,
+    onClick: onClickVideo,
   });
 }
 
@@ -601,49 +604,78 @@ function onOverlayWpClick(id) {
 const showPreviewHint = ref(false);
 let previewHintTimer = null;
 
-// Green top-center login reminder after the render completes (same style
-// and content pattern as 3D Exploration -> 3D Aerial).
+// Green top-center login reminder (same style and content pattern as
+// 3D Exploration -> 3D Aerial): saving the route + publishing the video
+// both need a login.
 const showAuthNotice = ref(false);
 let authNoticeTimer = null;
 
-// Ask the user where to save the clip: the native "Save As" dialog of the
-// File System Access API; browsers without it fall back to a plain download
-// anchor. A cancelled dialog keeps nothing — the render can simply be
-// started again (the tile cache makes reruns fast).
-async function saveClipToFile(clip) {
-  const pad = (n) => String(n).padStart(2, '0');
-  const d = new Date();
-  const name = `route-preview-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${clip.ext}`;
-  const mime = clip.ext === 'mp4' ? 'video/mp4' : 'video/webm';
-  if (typeof window.showSaveFilePicker === 'function') {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: name,
-        types: [{ description: 'Video', accept: { [mime]: [`.${clip.ext}`] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(clip.blob);
-      await writable.close();
-      return;
-    } catch (err) {
-      if (err && err.name === 'AbortError') return; // user cancelled
-      // Any other failure falls through to the anchor download below.
+// Id of the saved route this editing session belongs to. Null = brand-new
+// route (Case 1); set by the Steer handoff (Case 2) or after the first
+// successful save, so later saves update instead of duplicating.
+const sourceRouteId = ref(null);
+// True while a POST/PUT /api/routes request is in flight (Save/Update
+// button in the Route panel stays disabled meanwhile).
+const routeSaving = ref(false);
+// Saved route object handed to the video dialog (null = dialog closed).
+const videoRoute = ref(null);
+
+// Label of the Save/Update button in the Route panel: Case 1 (no saved
+// route yet) vs Case 2 (Steer handoff or already saved once).
+const saveRouteLabel = computed(() =>
+  t(sourceRouteId.value != null ? 'routeplanningview.save_route_update' : 'routeplanningview.save_route_new')
+);
+
+// Shared Case 1 / Case 2 save used by the Route panel's Save/Update
+// button and by the Video button. Returns the saved route, or null on
+// failure (API unavailable).
+async function saveCurrentRoute() {
+  if (routeSaving.value) return null;
+  const wps = waypoints.value.map((w) => ({
+    lat: w.lat,
+    lng: w.lng,
+    alt: w.alt,
+    speed: w.speed,
+    camYaw: w.camYaw,
+    camPitch: w.camPitch,
+    camRoll: w.camRoll,
+  }));
+  routeSaving.value = true;
+  let saved = null;
+  try {
+    if (sourceRouteId.value != null) {
+      // Case 2 — modified version of an existing route (the user arrived
+      // via Content -> Route -> Steer, or an earlier save minted the id):
+      // update it in place, keeping its title (the server refreshes the
+      // Creation Time). A 404 (route deleted meanwhile) falls back to a
+      // new one.
+      try {
+        saved = await saveRoute(sourceRouteId.value, { waypoints: wps });
+      } catch {
+        saved = await createRoute({ waypoints: wps });
+        sourceRouteId.value = saved.id;
+      }
+    } else {
+      // Case 1 — brand-new route: save it as new with the current time
+      // stamp (the server mints the default title) and remember the id
+      // so later clicks update instead of creating a duplicate.
+      saved = await createRoute({ waypoints: wps });
+      sourceRouteId.value = saved.id;
     }
+  } catch {
+    saved = null;
+  } finally {
+    routeSaving.value = false;
   }
-  const url = URL.createObjectURL(clip.blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return saved;
 }
 
-async function onClickSave() {
-  if (routeScene.saving.value) return;
+// Save/Update button under the waypoint list in the Route panel: writes
+// the current route to Content -> Route (and the database) without
+// opening the video dialog.
+async function onClickSaveRoute() {
+  if (controlsLocked.value) return;
   if (waypoints.value.length < 2) {
-    // Same green reminder as Preview: a route needs >= 2 waypoints.
     showPreviewHint.value = true;
     clearTimeout(previewHintTimer);
     previewHintTimer = setTimeout(() => {
@@ -651,29 +683,49 @@ async function onClickSave() {
     }, 2500);
     return;
   }
-  // The offline renderer walks the 3D camera along the route: enter 3D so
-  // the render pass (and its frame-counter overlay) is visible.
-  if (!is3d.value) viewMode.value = '3d';
-  // Preview renders the whole route (origin -> destination) at exact 30 fps
-  // into a 16:9 mp4 (MediaRecorder capture flight only as a fallback when
-  // WebCodecs is unavailable).
-  const ok = await routeScene.saveClip(waypoints.value);
-  // The flight hid the route overlay; restore it in the 3D overview.
-  if (is3d.value && !routeScene.previewActive.value) {
-    routeScene.showRouteOverlay(waypoints.value, null);
-  }
-  if (!ok) return; // aborted or failed: no clip was produced
-  const clip = routeScene.takeLastClip();
-  if (!clip) return;
-  // Login gate: once the render is done, anonymous users get the green
-  // top-center reminder instead of the video file.
   if (!isAuthenticated.value) {
     showAuthNotice.value = true;
     clearTimeout(authNoticeTimer);
     authNoticeTimer = setTimeout(() => { showAuthNotice.value = false; }, 6000);
     return;
   }
-  await saveClipToFile(clip);
+  await saveCurrentRoute();
+}
+
+// Video button: first save the current route to Content -> Route, then
+// open the same video generation dialog as Content -> Route -> Video.
+async function onClickVideo() {
+  if (controlsLocked.value || videoRoute.value) return;
+  if (waypoints.value.length < 2) {
+    // Same green reminder: a route needs >= 2 waypoints.
+    showPreviewHint.value = true;
+    clearTimeout(previewHintTimer);
+    previewHintTimer = setTimeout(() => {
+      showPreviewHint.value = false;
+    }, 2500);
+    return;
+  }
+  // Saving the route (and publishing the video) needs a login.
+  if (!isAuthenticated.value) {
+    showAuthNotice.value = true;
+    clearTimeout(authNoticeTimer);
+    authNoticeTimer = setTimeout(() => { showAuthNotice.value = false; }, 6000);
+    return;
+  }
+  const saved = await saveCurrentRoute();
+  if (!saved) return;
+  // The offline render walks the 3D camera along the route: enter 3D so
+  // the render pass (and its frame-counter overlay) is visible.
+  if (!is3d.value) viewMode.value = '3d';
+  videoRoute.value = saved;
+}
+
+function onVideoClose() {
+  videoRoute.value = null;
+  // The render flight hid the route overlay; restore it in the 3D overview.
+  if (is3d.value && !routeScene.previewActive.value && !routeScene.saving.value) {
+    routeScene.showRouteOverlay(waypoints.value, null);
+  }
 }
 
 onMounted(() => {
@@ -684,17 +736,20 @@ onMounted(() => {
     checkCesiumConnection();
   }, 10000);
 
-  // The right sidebar (Search + Waypoint + Steer + Route + Preview) is the
+  // The right sidebar (Search + Waypoint + Steer + Route + Video) is the
   // same in every view mode, so it is registered once and never swapped.
   // (The old Map button is gone: Search and Waypoint already return to the
   // 2D street map, the page's entry state.)
   registerRightDock();
 
   // Content -> Route -> Steer handoff: list the carried route's waypoints
-  // and pop the Route panel so the user lands on exactly that route.
+  // and pop the Route panel so the user lands on exactly that route. The
+  // carried id marks this session as Case 2 (modified existing route): the
+  // Video flow then updates that route instead of creating a new one.
   const handoff = takeRouteHandoff();
-  if (handoff && handoff.length) {
-    waypoints.value = handoff.map((w, i) => ({ ...w, id: ++wpSeq, index: i + 1 }));
+  if (handoff && Array.isArray(handoff.waypoints) && handoff.waypoints.length) {
+    sourceRouteId.value = handoff.id != null ? handoff.id : null;
+    waypoints.value = handoff.waypoints.map((w, i) => ({ ...w, id: ++wpSeq, index: i + 1 }));
     ensureWaypointDefaults();
     showRoutePanel.value = true;
     showSearchPanel.value = false;
@@ -702,16 +757,18 @@ onMounted(() => {
     mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
   }
 
-  // Keep dock buttons' active (green-border) state in sync. Preview greens
-  // while settling / downloading the clip; Search / Waypoint / Steer / Route
-  // are mutually exclusive by construction (each handler closes the others'
-  // panels).
+  // Keep dock buttons' active (green-border) state in sync. Video greens
+  // while its dialog is open (incl. settling / downloading the clip);
+  // Search / Waypoint / Steer / Route are mutually exclusive by
+  // construction (each handler closes the others' panels).
   watch(
-    [viewMode, showRoutePanel, showSearchPanel, showWaypointHint, previewActive, routeScene.showFlight, routeScene.showCamera, routeScene.saving],
+    [viewMode, showRoutePanel, showSearchPanel, showWaypointHint, previewActive, routeScene.showFlight, routeScene.showCamera, routeScene.saving, videoRoute],
     () => {
-      const savingNow = routeScene.saving.value;
-      const bsv = rightItems.find((i) => i.id === 'preview');
-      if (bsv) bsv.active = savingNow;
+      const bv = rightItems.find((i) => i.id === 'video');
+      if (bv) {
+        bv.active = routeScene.saving.value || !!videoRoute.value;
+        bv.disabled = controlsLocked.value;
+      }
 
       const bs = rightItems.find((i) => i.id === 'search');
       if (bs) {
@@ -850,17 +907,19 @@ onUnmounted(() => {
           {{ t('routeplanningview.waypoint_hint') }}
         </div>
 
-        <!-- Reminder: preview needs >= 2 waypoints -->
+        <!-- Reminder: the video needs >= 2 waypoints -->
         <div v-if="showPreviewHint" class="shell-notice">
           {{ t('routeplanningview.preview_need_waypoints') }}
         </div>
 
-        <!-- Reminder: the preview video needs a login
-             (same gate as 3D Exploration -> 3D Aerial) -->
+        <!-- Reminder: saving the route + the video needs a login -->
         <div v-if="showAuthNotice" class="shell-notice">
           {{ t('routeplanningview.auth_notice_preview') }}
         </div>
       </Teleport>
+
+      <!-- Video generation dialog (same as Content -> Route -> Video) -->
+      <RouteVideoDialog v-if="videoRoute" :route="videoRoute" @close="onVideoClose" />
 
       <!-- Spinning circle: the preview/save flight is stuck waiting for
            the Google 3D tiles of the current view to download + render;
@@ -1006,6 +1065,17 @@ onUnmounted(() => {
           </div>
         </div>
         <div v-else class="route-panel__empty">{{ t('routeplanningview.no_waypoints') }}</div>
+        <!-- Save the route to Content -> Route: Case 1 (no saved route
+             yet) creates a new one, Case 2 (Steer handoff / already
+             saved once) updates it. Same blue as Account -> Login. -->
+        <button
+          v-if="waypoints.length"
+          class="route-panel__save"
+          :disabled="routeSaving || waypoints.length < 2"
+          @click="onClickSaveRoute"
+        >
+          {{ saveRouteLabel }}
+        </button>
       </div>
     </template>
     <template #background>
@@ -1270,6 +1340,29 @@ onUnmounted(() => {
 .route-panel__empty {
   font-size: 0.85rem;
   color: rgba(30, 40, 60, 0.75);
+}
+
+/* Save / Update button under the waypoint list: same blue background
+   and white text as the Account -> Login -> Save button. */
+.route-panel__save {
+  padding: 11px 0;
+  border: none;
+  border-radius: 8px;
+  background: #007aff;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.route-panel__save:hover:not(:disabled) {
+  background: #0066d6;
+}
+
+.route-panel__save:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .route-panel__title {

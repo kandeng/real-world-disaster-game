@@ -12,8 +12,10 @@
   "position": "Position",
   "speed": "Speed",
   "steer": "Steer",
-  "preview": "Preview",
+  "video": "Video",
   "save": "Save",
-  "preview_need_waypoints": "Add at least two waypoints before preview.",
-  "auth_notice_preview": "Please log in before saving the preview video."
+  "save_route_new": "Save this new route",
+  "save_route_update": "Update the route",
+  "preview_need_waypoints": "Add at least two waypoints before generating video file",
+  "auth_notice_preview": "Please log in before saving the route and generating the video."
 }

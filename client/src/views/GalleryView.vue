@@ -2,28 +2,25 @@
 import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { useAuth } from '@shared-composables/useAuth.js';
 import { useVideos } from '@shared-composables/useVideos.js';
 
 // Gallery (展厅): a grid of equal-width rounded cards, one per published
 // video — embedded player on top (YouTube / Bilibili), then title, creation
 // time, author and description, and an "explore in 3D" button that jumps to
-// the 3D Exploration page. Layout only for now; the public feed and the
-// 3D scene workflow land later.
+// the 3D Exploration page. The feed is public: anonymous visitors see the
+// same cards as logged-in users (Content stays owner-only).
 const { t, locale } = useI18n();
 const router = useRouter();
-const { isAuthenticated } = useAuth();
-const { listVideos } = useVideos();
+const { listPublicVideos } = useVideos();
 
 const videos = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 
 onMounted(async () => {
-  if (!isAuthenticated.value) return;
   loading.value = true;
   try {
-    videos.value = await listVideos();
+    videos.value = await listPublicVideos();
   } catch {
     loadError.value = true;
   } finally {
@@ -73,8 +70,7 @@ function onExplore() {
 
 <template>
   <div class="gallery-page">
-    <p v-if="!isAuthenticated" class="gallery__note">{{ t('galleryview.sign_in') }}</p>
-    <p v-else-if="loadError" class="gallery__note">{{ t('galleryview.error') }}</p>
+    <p v-if="loadError" class="gallery__note">{{ t('galleryview.error') }}</p>
     <p v-else-if="!loading && !videos.length" class="gallery__note">{{ t('galleryview.empty') }}</p>
 
     <div v-if="videos.length" class="gallery__grid">

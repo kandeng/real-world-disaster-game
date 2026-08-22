@@ -244,12 +244,16 @@ function toggleLocale() {
   flex-direction: column;
 }
 
-/* ── Top bar ── */
+/* ── Top bar ──
+   Flexbox (not grid) on purpose: the notices' max-width percentage must
+   resolve against the BAR's definite width. In a `1fr auto 1fr` grid the
+   percentage resolved against the item's own auto track (sized from the
+   message content), so long notices always wrapped at a fraction of
+   their own one-line width. */
 .shell-topbar {
   flex-shrink: 0;
   min-height: 64px; /* grows when a teleported notice wraps to more lines */
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
   column-gap: 12px;
   padding: 8px 24px;
@@ -266,17 +270,18 @@ function toggleLocale() {
 
 /* ── Top-bar left / right clusters ── */
 .shell-topbar__left {
-  justify-self: start;
+  flex: 1 1 0; /* equal shares keep the notices centered */
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
 .shell-topbar__right {
-  justify-self: end;
+  flex: 1 1 0;
   display: flex;
   align-items: center;
   gap: 12px;
+  justify-content: flex-end;
 }
 
 .shell-round {
@@ -437,9 +442,10 @@ function toggleLocale() {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  min-width: 0;
-  /* Cap the middle grid column so long messages wrap onto multiple
-     lines instead of squeezing the left/right top-bar clusters. */
+  min-width: 0; /* let long messages wrap instead of overflowing */
+  flex: 0 1 auto;
+  /* 60% of the bar's width (definite in flexbox), so it tracks window
+     resizes automatically. */
   max-width: 60%;
 }
 

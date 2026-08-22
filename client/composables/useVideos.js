@@ -27,6 +27,14 @@ export function useVideos() {
     return res.json();
   }
 
+  /** GET /api/videos/public — the Gallery feed: every user's published
+   *  videos, most recent first. Anonymous callers allowed. */
+  async function listPublicVideos() {
+    const res = await fetch(`${API_BASE}/api/videos/public`);
+    if (!res.ok) throw new Error('videos_unavailable');
+    return res.json();
+  }
+
   /** PUT /api/videos/{id} — replace title + waypoint snapshot + sources. */
   async function saveVideo(id, payload) {
     const res = await fetch(`${API_BASE}/api/videos/${id}`, {
@@ -51,5 +59,5 @@ export function useVideos() {
     return res.json();
   }
 
-  return { listVideos, saveVideo, publishVideo };
+  return { listVideos, listPublicVideos, saveVideo, publishVideo };
 }

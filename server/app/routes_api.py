@@ -3,7 +3,13 @@
 GET /api/routes        -> the caller's routes, most recent first. A brand
                           new account is seeded with a few demo routes on
                           Stanford campus so the list is never empty.
-PUT /api/routes/{id}   -> replace a route's title and/or waypoint list.
+POST /api/routes       -> save a new route (the Route Planning Video flow,
+                          case 1: a brand-new route).
+PUT /api/routes/{id}   -> replace a route's waypoint list and/or title
+                          (title optional: omitted = kept, which is what
+                          the Route Planning Video flow case 2 wants).
+                          Also refreshes created_at so Content -> Route
+                          shows the fresh Creation Time.
 
 Both require an active user (Bearer JWT), matching the rest of the API.
 """
@@ -34,7 +40,11 @@ class WaypointIn(BaseModel):
 
 
 class RouteUpdate(BaseModel):
-    title: str = Field(max_length=200)
+    title: str | None = Field(default=None, max_length=200)
+    waypoints: list[WaypointIn]
+
+
+class RouteCreate(BaseModel):
     waypoints: list[WaypointIn]
 
 
@@ -131,8 +141,28 @@ async def update_route(
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="ROUTE_NOT_FOUND")
-    row.title = body.title
+    if body.title is not None:
+        row.title = body.title
     row.waypoints = [w.model_dump() for w in body.waypoints]
+    # Update flow (Route Planning case 2): the route in Content -> Route
+    # shows the fresh Creation Time. updated_at follows via onupdate.
+    row.created_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(row)
+    return _serialize(row)
+
+
+@router.post("/routes", status_code=201)
+async def create_route(
+    body: RouteCreate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    if not body.waypoints:
+        raise HTTPException(status_code=400, detail="WAYPOINTS_REQUIRED")
+    wps = [w.model_dump() for w in body.waypoints]
+    row = Route(user_id=user.id, title=_default_title(wps[0]), waypoints=wps)
+    session.add(row)
     await session.commit()
     await session.refresh(row)
     return _serialize(row)

@@ -5,6 +5,9 @@ GET /api/videos        -> the caller's videos, most recent first, each with
                           new account is seeded with a couple of demo videos
                           minted from its demo routes (title + waypoints
                           copied once, route_id recorded as provenance).
+GET /api/videos/public -> the Gallery feed: every user's published videos,
+                          most recent first, with author names. Open to
+                          anonymous callers (the Gallery page is public).
 PUT /api/videos/{id}   -> replace title / waypoint snapshot / sources.
 
 Ownership is enforced purely at this layer: every statement is scoped by
@@ -166,6 +169,21 @@ async def list_videos(
             for v in videos:
                 await session.refresh(v)
     return [await _serialize(session, v, user.display_name) for v in videos]
+
+
+@router.get("/videos/public")
+async def list_public_videos(
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    """Gallery feed for every visitor (incl. anonymous): all published
+    videos of all users, most recent first, with the author display name."""
+    stmt = (
+        select(Video, User.display_name)
+        .outerjoin(User, Video.user_id == User.id)
+        .order_by(Video.created_at.desc())
+    )
+    rows = (await session.execute(stmt)).all()
+    return [await _serialize(session, v, name) for v, name in rows]
 
 
 @router.post("/videos", status_code=201)

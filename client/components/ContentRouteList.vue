@@ -87,9 +87,11 @@ function onVideo(r) {
   if (!videoRoute.value) videoRoute.value = r;
 }
 
-// Jump to Route Planning with this route's waypoints listed.
+// Jump to Route Planning with this route's waypoints listed; the id rides
+// along so the Video flow there updates THIS route instead of minting a
+// new one.
 function onSteer(r) {
-  setRouteHandoff(r.waypoints.map((w) => ({ ...w })));
+  setRouteHandoff({ id: r.id, waypoints: r.waypoints.map((w) => ({ ...w })) });
   router.push({ name: 'RoutePlanning' });
 }
 </script>

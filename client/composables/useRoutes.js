@@ -8,18 +8,20 @@ import { useAuth } from './useAuth.js';
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
-// One-shot handoff: Content -> Steer stores a deep copy of the route's
-// waypoints here; Route Planning consumes (and clears) them on mount.
-let handoffWaypoints = null;
+// One-shot handoff: Content -> Steer stores { id, waypoints } here (the id
+// lets Route Planning tell "modified existing route" from "brand-new
+// route" when its Video flow saves back to Content -> Route); Route
+// Planning consumes (and clears) the payload on mount.
+let handoff = null;
 
-export function setRouteHandoff(waypoints) {
-  handoffWaypoints = waypoints;
+export function setRouteHandoff(payload) {
+  handoff = payload;
 }
 
 export function takeRouteHandoff() {
-  const w = handoffWaypoints;
-  handoffWaypoints = null;
-  return w;
+  const h = handoff;
+  handoff = null;
+  return h;
 }
 
 export function useRoutes() {
@@ -40,7 +42,8 @@ export function useRoutes() {
     return res.json();
   }
 
-  /** PUT /api/routes/{id} — replace title + waypoint list. */
+  /** PUT /api/routes/{id} — replace the waypoint list (and the title too
+   *  when provided; omitted title is kept server-side). */
   async function saveRoute(id, payload) {
     const res = await fetch(`${API_BASE}/api/routes/${id}`, {
       method: 'PUT',
@@ -51,5 +54,17 @@ export function useRoutes() {
     return res.json();
   }
 
-  return { listRoutes, saveRoute };
+  /** POST /api/routes — save a brand-new route (server mints the default
+   *  "Route at: (lat, lon, alt)" title). */
+  async function createRoute(payload) {
+    const res = await fetch(`${API_BASE}/api/routes`, {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error('route_save_failed');
+    return res.json();
+  }
+
+  return { listRoutes, saveRoute, createRoute };
 }
