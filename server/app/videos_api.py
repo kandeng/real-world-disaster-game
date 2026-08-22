@@ -34,6 +34,10 @@ class SourceIn(BaseModel):
     position: int = 0
 
 
+class VideoCreate(BaseModel):
+    route_id: uuid.UUID
+
+
 class VideoUpdate(BaseModel):
     title: str = Field(max_length=200)
     waypoints: list[WaypointIn]
@@ -157,6 +161,31 @@ async def list_videos(
             for v in videos:
                 await session.refresh(v)
     return [await _serialize(session, v, user.display_name) for v in videos]
+
+
+@router.post("/videos", status_code=201)
+async def create_video(
+    body: VideoCreate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Mint a video from one of the caller's routes: title and waypoints
+    are copied once (frozen snapshot) and route_id kept as provenance.
+    Playback sources start empty; the owner adds them later via PUT."""
+    stmt = select(Route).where(Route.id == body.route_id, Route.user_id == user.id)
+    route = (await session.execute(stmt)).scalar_one_or_none()
+    if route is None:
+        raise HTTPException(status_code=404, detail="ROUTE_NOT_FOUND")
+    video = Video(
+        user_id=user.id,
+        route_id=route.id,
+        title=route.title,
+        waypoints=[dict(w) for w in route.waypoints],
+    )
+    session.add(video)
+    await session.commit()
+    await session.refresh(video)
+    return await _serialize(session, video, user.display_name)
 
 
 @router.put("/videos/{video_id}")

@@ -123,6 +123,9 @@ function onEdit(event, pos, field) {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Same vertical breathing room above the cards (below the timestamp)
+     as the actions row keeps below them. */
+  margin-top: 18px;
 }
 
 .wpcards__row {

@@ -82,6 +82,10 @@ const waitingTiles = ref(false);
 // frame boundary (Pages / Map / Preview all call stopPreview to abort).
 let offlineAbort = false;
 const renderProgress = ref(null);
+// 0..1 distance traveled along the route while a preview / capture flight
+// is airborne (drives progress UIs when the offline frame counter is not
+// active, i.e. during the MediaRecorder fallback save).
+const flightProgress = ref(0);
 
 // ── Recording state ────────────────────────────────────────────────────────
 let mediaRecorder = null;
@@ -455,6 +459,8 @@ function stepPreviewFrame(dt) {
   const speed = Math.max(0.1, Math.abs(st.speed));
   previewHudSpeed = flightDir < 0 ? -speed : speed;
   previewCursorM += flightDir * speed * dt;
+  const traveled = flightDir < 0 ? pathTotalM - previewCursorM : previewCursorM;
+  flightProgress.value = pathTotalM > 0 ? Math.max(0, Math.min(1, traveled / pathTotalM)) : 0;
   const done = previewCursorM <= 0 || previewCursorM >= pathTotalM;
   const s = sampleAtDistance(Math.max(0, Math.min(previewCursorM, pathTotalM)));
   if (!s) {
@@ -534,6 +540,7 @@ function startPreview(waypoints, opts = {}) {
   previewActive.value = true;
   captureMode = Boolean(opts.capture);
   captureCompleted = false;
+  flightProgress.value = 0;
   showFlight.value = false;
   showCamera.value = false;
   hideRouteOverlay();
@@ -559,6 +566,7 @@ function startPreview(waypoints, opts = {}) {
 
 function stopPreview() {
   offlineAbort = true; // also interrupts a running offline Save render pass
+  flightProgress.value = 0;
   if (!previewActive.value) return;
   previewActive.value = false;
   waitingTiles.value = false;
@@ -1006,6 +1014,13 @@ async function saveClip(waypoints) {
   }
 }
 
+// The 16:9 mirror canvas the offline renderer / capture flight draws every
+// finished frame into. Exposed so external progress UIs (the Content ->
+// Route -> Video dialog) can blit the frames being generated live.
+function peekMirrorCanvas() {
+  return mirrorCanvas;
+}
+
 // Hand off the clip produced by saveClip() ({ blob, ext }) and clear it.
 // Returns null when there is nothing to take.
 function takeLastClip() {
@@ -1232,6 +1247,8 @@ export function useRouteScene3D() {
     saving,
     waitingTiles,
     renderProgress,
+    flightProgress,
+    peekMirrorCanvas,
     startLoop,
     stopLoop,
     startPreview,

@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
+import RouteVideoDialog from '@shared/RouteVideoDialog.vue';
 import WaypointCards from '@shared/WaypointCards.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useRoutes, setRouteHandoff } from '@shared-composables/useRoutes.js';
@@ -21,6 +22,7 @@ const routes = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 const expanded = ref({}); // routeId -> bool
+const videoRoute = ref(null); // route whose Video dialog is open
 const savingId = ref(null);
 const savedId = ref(null); // transient "Saved" hint next to the buttons
 let savedTimer = null;
@@ -80,8 +82,10 @@ async function onSave(r) {
   }
 }
 
-// Video generation along the route — handled later.
-function onVideo() {}
+// Video generation along the route: pop the render dialog.
+function onVideo(r) {
+  if (!videoRoute.value) videoRoute.value = r;
+}
 
 // Jump to Route Planning with this route's waypoints listed.
 function onSteer(r) {
@@ -137,7 +141,7 @@ function onSteer(r) {
           >
             <ConfigurableIcon name="MENU_SAVE" :size="26" />
           </button>
-          <button class="rlist__action" :title="t('contentroutelist.video')" @click="onVideo">
+          <button class="rlist__action" :title="t('contentroutelist.video')" @click="onVideo(r)">
             <ConfigurableIcon name="MENU_RECORDER" :size="26" />
           </button>
           <button class="rlist__action" :title="t('contentroutelist.steer')" @click="onSteer(r)">
@@ -147,6 +151,12 @@ function onSteer(r) {
         </div>
       </template>
     </div>
+
+    <RouteVideoDialog
+      v-if="videoRoute"
+      :route="videoRoute"
+      @close="videoRoute = null"
+    />
   </div>
 </template>
 

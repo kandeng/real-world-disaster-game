@@ -38,5 +38,17 @@ export function useVideos() {
     return res.json();
   }
 
-  return { listVideos, saveVideo };
+  /** POST /api/videos — mint a video entry from one of the caller's
+   *  routes (title + waypoint snapshot copied server-side). */
+  async function publishVideo(routeId) {
+    const res = await fetch(`${API_BASE}/api/videos`, {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ route_id: routeId }),
+    });
+    if (!res.ok) throw new Error('video_publish_failed');
+    return res.json();
+  }
+
+  return { listVideos, saveVideo, publishVideo };
 }

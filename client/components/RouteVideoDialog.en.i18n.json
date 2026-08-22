@@ -1,0 +1,8 @@
+{
+  "close": "Close",
+  "failed": "Video generation failed.",
+  "publish": "Publish to the gallery",
+  "published": "Published to the gallery",
+  "publish_failed": "Publish failed",
+  "download": "Download the mp4 video file"
+}
