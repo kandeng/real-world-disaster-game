@@ -11,7 +11,7 @@ import uuid
 
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -126,3 +126,67 @@ class Route(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class Video(Base):
+    """A published flight video (Content -> Video). Minted from a route:
+    title and waypoints are copied once at creation and then diverge
+    independently (the waypoints stay a frozen snapshot). route_id is
+    provenance only — deleting the route keeps the video (SET NULL),
+    deleting the author removes it (CASCADE), same as route.
+    """
+
+    __tablename__ = "video"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    route_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID,
+        ForeignKey("route.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    title: Mapped[str] = mapped_column(String(length=200), nullable=False)
+    waypoints: Mapped[list] = mapped_column(
+        JSONB().with_variant(JSON, "sqlite"),
+        nullable=False,
+        default=list,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class VideoSource(Base):
+    """One playback URL of a video (YouTube primary, Bilibili second,
+    future providers freely added). position 0 is the primary source;
+    one row per provider per video.
+    """
+
+    __tablename__ = "video_source"
+    __table_args__ = (
+        UniqueConstraint("video_id", "provider", name="uq_video_source_provider"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    video_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("video.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(length=32), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(nullable=False, default=0)

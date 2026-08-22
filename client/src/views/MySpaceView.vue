@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import TabBar from '@shared/TabBar.vue';
 import AccountLoginPanel from '@/views/AccountLoginPanel.vue';
 import ContentRouteList from '@shared/ContentRouteList.vue';
+import ContentVideoList from '@shared/ContentVideoList.vue';
 
 // 'account' | 'content' — provided by the router. The shell's left panel
 // owns the navigation; this page renders the body. Account carries three
@@ -43,7 +44,7 @@ const contentTabs = computed(() => [
       <TabBar v-model="contentTab" :tabs="contentTabs" />
 
       <ContentRouteList v-if="contentTab === 'route'" />
-      <p v-else class="myspace-placeholder">{{ t('authflow.acct_tab_placeholder') }}</p>
+      <ContentVideoList v-else-if="contentTab === 'video'" />
     </template>
   </div>
 </template>

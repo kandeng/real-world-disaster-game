@@ -28,6 +28,7 @@ from .oauth_router import get_resilient_oauth_router
 from .routes_api import router as routes_router
 from .users import auth_backend, fastapi_users, get_user_manager, google_oauth_client
 from .verification import router as verification_router
+from .videos_api import router as videos_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -113,6 +114,9 @@ app.include_router(settings_router, prefix="/api")
 
 # --- Per-user saved flight routes (GET /api/routes, PUT /api/routes/{id}) ---
 app.include_router(routes_router, prefix="/api")
+
+# --- Per-user published flight videos (GET /api/videos, PUT /api/videos/{id})
+app.include_router(videos_router, prefix="/api")
 
 # --- Community chat: Matrix token brokering + user directory ----------------
 app.include_router(matrix_router, prefix="/api")

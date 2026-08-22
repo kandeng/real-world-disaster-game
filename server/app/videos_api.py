@@ -1,0 +1,194 @@
+"""Per-user published flight videos (Content -> Video).
+
+GET /api/videos        -> the caller's videos, most recent first, each with
+                          its playback sources ordered by position. A brand
+                          new account is seeded with a couple of demo videos
+                          minted from its demo routes (title + waypoints
+                          copied once, route_id recorded as provenance).
+PUT /api/videos/{id}   -> replace title / waypoint snapshot / sources.
+
+Ownership is enforced purely at this layer: every statement is scoped by
+the JWT caller's id and foreign ids surface as 404 (API-only hardening,
+per the CMS schema decision).
+"""
+
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .db import get_async_session
+from .models import Route, User, Video, VideoSource
+from .routes_api import WaypointIn, _seed_rows
+from .users import current_active_user
+
+router = APIRouter(tags=["videos"])
+
+
+class SourceIn(BaseModel):
+    provider: str = Field(max_length=32)
+    url: str = Field(max_length=2048)
+    position: int = 0
+
+
+class VideoUpdate(BaseModel):
+    title: str = Field(max_length=200)
+    waypoints: list[WaypointIn]
+    sources: list[SourceIn]
+
+
+async def _user_routes(session: AsyncSession, user_id: uuid.UUID) -> list[Route]:
+    stmt = (
+        select(Route)
+        .where(Route.user_id == user_id)
+        .order_by(Route.created_at.desc())
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+    if not rows:
+        rows = _seed_rows(user_id)
+        session.add_all(rows)
+        await session.commit()
+        for r in rows:
+            await session.refresh(r)
+        rows.sort(key=lambda r: r.created_at, reverse=True)
+    return rows
+
+
+def _seed_videos(user_id: uuid.UUID, routes: list[Route]) -> list[Video]:
+    """Demo content: two videos minted from the user's demo routes — the
+    title and waypoint snapshot are copied from the route at creation,
+    exactly what the real minting flow will do."""
+    now = datetime.now(timezone.utc)
+    videos: list[Video] = []
+    if routes:
+        first = routes[0]
+        v1 = Video(
+            user_id=user_id,
+            route_id=first.id,
+            title=first.title,
+            waypoints=[dict(w) for w in first.waypoints],
+            created_at=now - timedelta(days=1),
+            updated_at=now - timedelta(days=1),
+        )
+        videos.append(v1)
+        if len(routes) > 1:
+            last = routes[-1]
+            v2 = Video(
+                user_id=user_id,
+                route_id=last.id,
+                title=last.title,
+                waypoints=[dict(w) for w in last.waypoints],
+                created_at=now - timedelta(days=10),
+                updated_at=now - timedelta(days=10),
+            )
+            videos.append(v2)
+    return videos
+
+
+def _seed_sources(video: Video, both: bool) -> list[VideoSource]:
+    sources = [
+        VideoSource(
+            video_id=video.id,
+            provider="youtube",
+            url="https://www.youtube.com/watch?v=drone-stanford-01",
+            position=0,
+        )
+    ]
+    if both:
+        sources.append(
+            VideoSource(
+                video_id=video.id,
+                provider="bilibili",
+                url="https://www.bilibili.com/video/BV1drone01",
+                position=1,
+            )
+        )
+    return sources
+
+
+async def _serialize(
+    session: AsyncSession, video: Video, author_name: str | None
+) -> dict:
+    stmt = (
+        select(VideoSource)
+        .where(VideoSource.video_id == video.id)
+        .order_by(VideoSource.position.asc())
+    )
+    sources = (await session.execute(stmt)).scalars().all()
+    return {
+        "id": str(video.id),
+        "title": video.title,
+        "route_id": str(video.route_id) if video.route_id else None,
+        "author_name": author_name,
+        "created_at": video.created_at.isoformat(),
+        "waypoints": video.waypoints,
+        "sources": [
+            {"provider": s.provider, "url": s.url, "position": s.position}
+            for s in sources
+        ],
+    }
+
+
+@router.get("/videos")
+async def list_videos(
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    stmt = (
+        select(Video)
+        .where(Video.user_id == user.id)
+        .order_by(Video.created_at.desc())
+    )
+    videos = list((await session.execute(stmt)).scalars().all())
+    if not videos:
+        routes = await _user_routes(session, user.id)
+        videos = _seed_videos(user.id, routes)
+        if videos:
+            session.add_all(videos)
+            await session.flush()  # assigns video ids for the FK below
+            sources = []
+            for i, v in enumerate(videos):
+                sources.extend(_seed_sources(v, both=(i == 0)))
+            session.add_all(sources)
+            await session.commit()
+            for v in videos:
+                await session.refresh(v)
+    return [await _serialize(session, v, user.display_name) for v in videos]
+
+
+@router.put("/videos/{video_id}")
+async def update_video(
+    video_id: uuid.UUID,
+    body: VideoUpdate,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
+    video = (await session.execute(stmt)).scalar_one_or_none()
+    if video is None:
+        raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
+
+    providers = [s.provider for s in body.sources]
+    if len(providers) != len(set(providers)):
+        raise HTTPException(status_code=400, detail="DUPLICATE_PROVIDER")
+
+    video.title = body.title
+    video.waypoints = [w.model_dump() for w in body.waypoints]
+    await session.execute(
+        delete(VideoSource).where(VideoSource.video_id == video.id)
+    )
+    for pos, s in enumerate(body.sources):
+        session.add(
+            VideoSource(
+                video_id=video.id,
+                provider=s.provider,
+                url=s.url,
+                position=pos,
+            )
+        )
+    await session.commit()
+    await session.refresh(video)
+    return await _serialize(session, video, user.display_name)

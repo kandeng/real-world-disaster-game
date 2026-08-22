@@ -1,0 +1,15 @@
+{
+  "sign_in": "请先登录以查看您的视频。",
+  "error": "无法加载您的视频，请重试。",
+  "empty": "暂无视频。",
+  "expand": "展开",
+  "collapse": "收起",
+  "playback_urls": "播放链接",
+  "url_placeholder": "https://…",
+  "add_source": "添加播放链接",
+  "open": "打开",
+  "remove": "移除",
+  "save": "保存",
+  "saved": "已保存",
+  "save_failed": "保存失败"
+}

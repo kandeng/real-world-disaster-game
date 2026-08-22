@@ -1,0 +1,15 @@
+{
+  "sign_in": "Please sign in to view your videos.",
+  "error": "Couldn't load your videos. Please try again.",
+  "empty": "No videos yet.",
+  "expand": "Expand",
+  "collapse": "Collapse",
+  "playback_urls": "Playback URLs",
+  "url_placeholder": "https://…",
+  "add_source": "Add playback URL",
+  "open": "Open",
+  "remove": "Remove",
+  "save": "Save",
+  "saved": "Saved",
+  "save_failed": "Save failed"
+}
