@@ -438,17 +438,21 @@ function toggleLocale() {
   justify-content: center;
   gap: 2px;
   min-width: 0;
-  max-width: 100%;
+  /* Cap the middle grid column so long messages wrap onto multiple
+     lines instead of squeezing the left/right top-bar clusters. */
+  max-width: 60%;
 }
 
 .shell-notice {
   font-family: Calibri, 'Segoe UI', sans-serif;
-  font-size: 0.8rem;
+  /* Same size as the left-panel page names, regular weight, in blue. */
+  font-size: 0.95rem;
   font-weight: 400;
-  color: #111827;
+  color: #007aff;
   line-height: 1.35;
   text-align: center;
   max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 .shell-notice--warning {
