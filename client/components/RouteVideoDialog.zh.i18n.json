@@ -1,6 +1,9 @@
 {
   "close": "关闭",
   "failed": "视频生成失败。",
+  "title_label": "标题：",
+  "created_at": "创建时间：",
+  "description_ph": "描述",
   "publish": "发布到展厅",
   "published": "已发布到展厅",
   "publish_failed": "发布失败",

@@ -36,10 +36,13 @@ class SourceIn(BaseModel):
 
 class VideoCreate(BaseModel):
     route_id: uuid.UUID
+    title: str | None = Field(default=None, max_length=200)
+    description: str = Field(default="", max_length=2000)
 
 
 class VideoUpdate(BaseModel):
     title: str = Field(max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
     waypoints: list[WaypointIn]
     sources: list[SourceIn]
 
@@ -125,6 +128,7 @@ async def _serialize(
     return {
         "id": str(video.id),
         "title": video.title,
+        "description": video.description,
         "route_id": str(video.route_id) if video.route_id else None,
         "author_name": author_name,
         "created_at": video.created_at.isoformat(),
@@ -179,7 +183,8 @@ async def create_video(
     video = Video(
         user_id=user.id,
         route_id=route.id,
-        title=route.title,
+        title=body.title if body.title else route.title,
+        description=body.description,
         waypoints=[dict(w) for w in route.waypoints],
     )
     session.add(video)
@@ -205,6 +210,8 @@ async def update_video(
         raise HTTPException(status_code=400, detail="DUPLICATE_PROVIDER")
 
     video.title = body.title
+    if body.description is not None:
+        video.description = body.description
     video.waypoints = [w.model_dump() for w in body.waypoints]
     await session.execute(
         delete(VideoSource).where(VideoSource.video_id == video.id)

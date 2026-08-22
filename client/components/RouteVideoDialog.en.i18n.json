@@ -1,6 +1,9 @@
 {
   "close": "Close",
   "failed": "Video generation failed.",
+  "title_label": "Title:",
+  "created_at": "Created at:",
+  "description_ph": "Description",
   "publish": "Publish to the gallery",
   "published": "Published to the gallery",
   "publish_failed": "Publish failed",

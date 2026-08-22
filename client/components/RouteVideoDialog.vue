@@ -13,7 +13,7 @@ import { useVideos } from '@shared-composables/useVideos.js';
 const props = defineProps({ route: { type: Object, required: true } });
 const emit = defineEmits(['close']);
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const scene = useRouteScene3D();
 const { publishVideo } = useVideos();
 
@@ -21,6 +21,9 @@ const displayCanvas = ref(null);
 const state = ref('rendering'); // 'rendering' | 'done' | 'failed'
 const videoUrl = ref('');
 let clipBlob = null;
+const title = ref(props.route.title);
+const description = ref('');
+const createdAt = ref(new Date());
 const publish = ref(true);
 const published = ref(false);
 const publishFailed = ref(false);
@@ -36,6 +39,23 @@ const progress = computed(() => {
   const fp = scene.flightProgress.value;
   return { pct: fp, text: `${Math.round(fp * 100)}%` };
 });
+
+// "Aug 20, 2026, 17:30" (en) / "2026年8月20日 17:30" (zh) — same format
+// as the route / video lists.
+function fmtDate(d) {
+  if (!(d instanceof Date) || isNaN(d)) return '';
+  return d.toLocaleString(localeOf(), {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+function localeOf() {
+  return locale.value === 'zh' ? 'zh-CN' : 'en-US';
+}
 
 // Blit the frames the renderer finishes into the visible panel canvas.
 function startBlit() {
@@ -65,7 +85,12 @@ onMounted(async () => {
     state.value = 'done';
     if (publish.value) {
       try {
-        await publishVideo(props.route.id);
+        const minted = await publishVideo({
+          route_id: props.route.id,
+          title: title.value.trim() || props.route.title,
+          description: description.value,
+        });
+        if (minted && minted.created_at) createdAt.value = new Date(minted.created_at);
         published.value = true;
       } catch {
         publishFailed.value = true;
@@ -122,7 +147,6 @@ async function onDownload() {
   <div class="vd-mask">
     <div class="vd" role="dialog" aria-modal="true">
       <div class="vd__head">
-        <div class="vd__title">{{ route.title }}</div>
         <button class="vd__close" :title="t('routevideodialog.close')" @click="onClose">&times;</button>
       </div>
 
@@ -139,6 +163,21 @@ async function onDownload() {
         ></video>
         <div v-if="state === 'failed'" class="vd__failed">{{ t('routevideodialog.failed') }}</div>
       </div>
+
+      <div class="vd__field">
+        <span class="vd__label">{{ t('routevideodialog.title_label') }}</span>
+        <input v-model="title" class="vd__title-input" type="text" maxlength="200" />
+      </div>
+
+      <div class="vd__created">{{ t('routevideodialog.created_at') }} {{ fmtDate(createdAt) }}</div>
+
+      <textarea
+        v-model="description"
+        class="vd__desc"
+        rows="4"
+        maxlength="2000"
+        :placeholder="t('routevideodialog.description_ph')"
+      ></textarea>
 
       <div class="vd__progress">
         <div class="vd__progress-track">
@@ -195,19 +234,8 @@ async function onDownload() {
 .vd__head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-
-.vd__title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: #111827;
+  justify-content: flex-end;
+  margin-bottom: 12px;
 }
 
 .vd__close {
@@ -247,6 +275,63 @@ async function onDownload() {
 .vd__failed {
   font-size: 0.95rem;
   color: #f5f5f7;
+}
+
+/* Title row under the panel: label + editable input. */
+.vd__field {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vd__label {
+  flex-shrink: 0;
+  font-size: 0.95rem;
+  color: #1d1d1f;
+}
+
+.vd__title-input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 12px;
+  border: 1px solid #8e8e93;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.vd__title-input:focus {
+  outline: 1px solid rgba(37, 99, 235, 0.5);
+}
+
+/* Creation time: not editable. */
+.vd__created {
+  margin-top: 12px;
+  font-size: 0.95rem;
+  color: #1d1d1f;
+}
+
+.vd__desc {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid #8e8e93;
+  border-radius: 8px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #111827;
+  resize: vertical;
+  min-height: 96px;
+}
+
+.vd__desc:focus {
+  outline: 1px solid rgba(37, 99, 235, 0.5);
 }
 
 .vd__progress {
