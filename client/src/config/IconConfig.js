@@ -57,6 +57,8 @@ export const IconMap = {
   MENU_CONTENT: '../../icons/content.svg',
   MENU_SAVE: '../../icons/save.svg',
   MENU_PREVIEW: '../../icons/preview.svg',
+  MENU_UPWARD: '../../icons/upward.svg',
+  MENU_DOWNWARD: '../../icons/downward.svg',
 
   // Auth form icons (password visibility toggle)
   PASSWORD_SHOW: '../../icons/view.svg',

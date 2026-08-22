@@ -10,6 +10,7 @@ import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import { useAuth } from '@shared-composables/useAuth.js';
+import { takeRouteHandoff } from '@shared-composables/useRoutes.js';
 import DockButton from '@shared/DockButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
@@ -688,6 +689,18 @@ onMounted(() => {
   // (The old Map button is gone: Search and Waypoint already return to the
   // 2D street map, the page's entry state.)
   registerRightDock();
+
+  // Content -> Route -> Steer handoff: list the carried route's waypoints
+  // and pop the Route panel so the user lands on exactly that route.
+  const handoff = takeRouteHandoff();
+  if (handoff && handoff.length) {
+    waypoints.value = handoff.map((w, i) => ({ ...w, id: ++wpSeq, index: i + 1 }));
+    ensureWaypointDefaults();
+    showRoutePanel.value = true;
+    showSearchPanel.value = false;
+    showWaypointHint.value = false;
+    mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+  }
 
   // Keep dock buttons' active (green-border) state in sync. Preview greens
   // while settling / downloading the clip; Search / Waypoint / Steer / Route

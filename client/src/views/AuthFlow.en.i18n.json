@@ -61,6 +61,8 @@
   "acct_tab_consumption": "Consumption",
   "acct_tab_income": "Income",
   "acct_tab_placeholder": "Nothing here yet.",
+  "content_tab_route": "Route",
+  "content_tab_video": "Video",
   "profile_login_name": "Login name",
   "profile_password": "Login password",
   "profile_password_placeholder": "Leave blank to keep the current password",

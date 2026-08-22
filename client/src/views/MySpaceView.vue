@@ -3,10 +3,12 @@ import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import TabBar from '@shared/TabBar.vue';
 import AccountLoginPanel from '@/views/AccountLoginPanel.vue';
+import ContentRouteList from '@shared/ContentRouteList.vue';
 
 // 'account' | 'content' — provided by the router. The shell's left panel
 // owns the navigation; this page renders the body. Account carries three
-// tabs (Login / Consumption / Income); the active one is blue + underlined.
+// tabs (Login / Consumption / Income); Content carries two (Route / Video).
+// The active tab is blue + underlined.
 defineProps({
   sub: { type: String, default: 'account' },
 });
@@ -20,6 +22,13 @@ const tabs = computed(() => [
   { id: 'consumption', label: t('authflow.acct_tab_consumption') },
   { id: 'income', label: t('authflow.acct_tab_income') },
 ]);
+
+/* 'route' | 'video' */
+const contentTab = ref('route');
+const contentTabs = computed(() => [
+  { id: 'route', label: t('authflow.content_tab_route') },
+  { id: 'video', label: t('authflow.content_tab_video') },
+]);
 </script>
 
 <template>
@@ -30,7 +39,12 @@ const tabs = computed(() => [
       <AccountLoginPanel v-if="tab === 'login'" />
       <p v-else class="myspace-placeholder">{{ t('authflow.acct_tab_placeholder') }}</p>
     </template>
-    <!-- content: intentionally blank -->
+    <template v-else-if="sub === 'content'">
+      <TabBar v-model="contentTab" :tabs="contentTabs" />
+
+      <ContentRouteList v-if="contentTab === 'route'" />
+      <p v-else class="myspace-placeholder">{{ t('authflow.acct_tab_placeholder') }}</p>
+    </template>
   </div>
 </template>
 

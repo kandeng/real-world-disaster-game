@@ -25,6 +25,7 @@ from .settings import router as settings_router
 from .stream import router as stream_router
 from .telemetry import router as telemetry_router
 from .oauth_router import get_resilient_oauth_router
+from .routes_api import router as routes_router
 from .users import auth_backend, fastapi_users, get_user_manager, google_oauth_client
 from .verification import router as verification_router
 
@@ -109,6 +110,9 @@ app.include_router(
 
 # --- Per-user settings document (GET/PUT /api/users/me/settings) ------------
 app.include_router(settings_router, prefix="/api")
+
+# --- Per-user saved flight routes (GET /api/routes, PUT /api/routes/{id}) ---
+app.include_router(routes_router, prefix="/api")
 
 # --- Community chat: Matrix token brokering + user directory ----------------
 app.include_router(matrix_router, prefix="/api")

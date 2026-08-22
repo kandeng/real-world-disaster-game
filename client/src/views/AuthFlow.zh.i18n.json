@@ -61,6 +61,8 @@
   "acct_tab_consumption": "消费",
   "acct_tab_income": "收益",
   "acct_tab_placeholder": "暂无内容。",
+  "content_tab_route": "航线",
+  "content_tab_video": "视频",
   "profile_login_name": "登录名",
   "profile_password": "登录密码",
   "profile_password_placeholder": "留空则保持当前密码",

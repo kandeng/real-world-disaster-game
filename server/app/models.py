@@ -7,6 +7,8 @@ Facebook/GitHub/Instagram only need a new httpx-oauth client — no migration.
 
 from datetime import datetime
 
+import uuid
+
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
 from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
@@ -87,4 +89,40 @@ class MatrixAccount(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+
+class Route(Base):
+    """A saved flight route (Content -> Route): an editable title plus an
+    ordered waypoint list (lat/lng/alt/speed/camera angles) as a JSON
+    document. Same relationship pattern as user_settings: separate table,
+    FK to user.id, ON DELETE CASCADE. JSONB on PostgreSQL, plain JSON under
+    local SQLite dev.
+    """
+
+    __tablename__ = "route"
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(length=200), nullable=False)
+    waypoints: Mapped[list] = mapped_column(
+        JSONB().with_variant(JSON, "sqlite"),
+        nullable=False,
+        default=list,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )

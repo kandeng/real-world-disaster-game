@@ -1,0 +1,11 @@
+{
+  "sign_in": "Please sign in to view your routes.",
+  "error": "Cannot load routes.",
+  "empty": "No routes yet.",
+  "expand": "Expand",
+  "collapse": "Collapse",
+  "save": "Save",
+  "video": "Video",
+  "steer": "Open in Route Planning",
+  "saved": "Saved"
+}
