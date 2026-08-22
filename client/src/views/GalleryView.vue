@@ -122,11 +122,16 @@ function onExplore() {
   color: #6e6e73;
 }
 
-/* Equal-width rounded cards, as many per row as the viewport allows. */
+/* Equal-width rounded cards, as many per row as the viewport allows.
+   align-items:start lets each card's height hug its own content (video +
+   metadata) instead of stretching to the tallest card in the row, so no
+   blank gap is left under short cards; long titles / descriptions wrap
+   and grow the card accordingly. */
 .gallery__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 24px;
+  align-items: start;
 }
 
 .gcard {
@@ -177,10 +182,8 @@ function onExplore() {
   color: #6e6e73;
 }
 
-/* flex:1 pins the button to the card bottom so all cards align. */
 .gcard__desc {
   margin-top: 8px;
-  flex: 1;
   font-size: 0.9rem;
   color: #1d1d1f;
   white-space: pre-wrap;

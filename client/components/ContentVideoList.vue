@@ -188,12 +188,12 @@ function flash(id, kind) {
 
         <div class="vlist__field">
           <span class="vlist__label">{{ t('contentvideolist.title_label') }}</span>
-          <input
+          <textarea
             v-model="v.title"
             class="vlist__title-input"
-            type="text"
+            rows="2"
             maxlength="200"
-          />
+          ></textarea>
         </div>
 
         <div class="vlist__created">{{ t('contentvideolist.created_at') }} {{ fmtDate(v.created_at) }}</div>
@@ -314,13 +314,16 @@ function flash(id, kind) {
   box-sizing: border-box;
   flex: 1;
   min-width: 0;
-  padding: 6px 12px;
+  padding: 8px 12px;
   border: 1px solid #8e8e93;
   border-radius: 8px;
   background: #ffffff;
+  font-family: inherit;
   font-size: 1.05rem;
   font-weight: 600;
   color: #111827;
+  resize: vertical;
+  min-height: 56px;
 }
 
 .vlist__title-input:focus {
@@ -360,17 +363,19 @@ function flash(id, kind) {
   padding: 0 24px;
 }
 
-/* Title row: label + editable input. */
+/* Title row: label + editable multi-line input (same box language as the
+   description textarea: wraps and is vertically resizable). */
 .vlist__field {
   margin-top: 16px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   max-width: 640px;
 }
 
 .vlist__label {
   flex-shrink: 0;
+  padding-top: 8px;
   font-size: 0.95rem;
   color: #1d1d1f;
 }
