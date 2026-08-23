@@ -129,16 +129,14 @@ function onExplore() {
   color: #6e6e73;
 }
 
-/* Equal-width rounded cards, as many per row as the viewport allows.
-   align-items:start lets each card's height hug its own content (video +
-   metadata) instead of stretching to the tallest card in the row, so no
-   blank gap is left under short cards; long titles / descriptions wrap
-   and grow the card accordingly. */
+/* Pinterest-style masonry: equal-width columns (1.5x the old 300px card,
+   i.e. 450px) laid out with CSS multi-column so cards stack tightly down
+   each column — no blank gap under a short card the way a row-based grid
+   leaves. column-gap handles horizontal spacing; the card's margin-bottom
+   handles vertical spacing. */
 .gallery__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 24px;
-  align-items: start;
+  column-width: 450px;
+  column-gap: 24px;
 }
 
 .gcard {
@@ -149,6 +147,10 @@ function onExplore() {
   border-radius: 14px;
   background: #ffffff;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+  /* Keep a card whole within one column (never split across columns). */
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  margin-bottom: 24px;
 }
 
 .gcard__screen {
