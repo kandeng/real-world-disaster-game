@@ -20,6 +20,7 @@ const videos = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 const expanded = ref({}); // videoId -> bool
+const brokenThumbs = ref({}); // videoId -> true once the thumb image proves unusable
 const savingId = ref(null);
 const savedId = ref(null); // transient "Saved" hint next to the buttons
 const failedId = ref(null); // transient "Save failed" hint
@@ -93,6 +94,24 @@ function thumbUrl(v) {
     if (m) return `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg`;
   }
   return null;
+}
+
+// A configured URL can still point at a nonexistent video. YouTube then
+// answers the thumbnail request with its 120x90 gray "..." placeholder
+// (404 status, but a valid JPEG body, so the <img> fires @load, not
+// @error). A real hqdefault.jpg is 480x360 — a tiny naturalWidth means
+// the video is gone/invalid and the row falls back to the dark panel.
+function onThumbLoad(e, v) {
+  const w = e.target.naturalWidth;
+  if (w > 0 && w < 200) markThumbBroken(v);
+}
+
+function onThumbError(v) {
+  markThumbBroken(v);
+}
+
+function markThumbBroken(v) {
+  brokenThumbs.value = { ...brokenThumbs.value, [v.id]: true };
 }
 
 // Embed URL of the primary (lowest-position) playable source, so the card
@@ -184,13 +203,15 @@ function flash(id, kind) {
              creation time move into the expanded editor). -->
         <div v-if="!expanded[v.id]" class="vlist__thumb">
           <img
-            v-if="thumbUrl(v)"
+            v-if="thumbUrl(v) && !brokenThumbs[v.id]"
             :src="thumbUrl(v)"
             :alt="v.title"
             class="vlist__thumb-img"
             draggable="false"
+            @load="onThumbLoad($event, v)"
+            @error="onThumbError(v)"
           />
-          <div v-else class="vlist__thumb-empty">{{ t('contentvideolist.no_thumb') }}</div>
+          <div v-else class="vlist__thumb-empty">{{ t('contentvideolist.no_video') }}</div>
         </div>
         <div v-else class="vlist__spacer"></div>
         <button
