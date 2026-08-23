@@ -6,8 +6,11 @@
  */
 
 import { useAuth } from './useAuth.js';
+import { apiBaseUrl } from './wsUrl.js';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+// Prod calls are pinned to the apex origin (see wsUrl.js): the CDN edge
+// never caches /api/*, so going through it would add a wasted hop.
+const API_BASE = apiBaseUrl();
 
 // Module-level caches of the last successful list responses. The lists
 // unmount/remount on every tab switch and page change; with the caches

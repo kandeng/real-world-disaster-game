@@ -10,8 +10,11 @@
  */
 
 import { computed, ref } from 'vue';
+import { apiBaseUrl } from './wsUrl.js';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+// Prod calls are pinned to the apex origin (see wsUrl.js): the CDN edge
+// never caches /api/*, so going through it would add a wasted hop.
+const API_BASE = apiBaseUrl();
 const TOKEN_KEY = 'drone.auth.token';
 
 const token = ref(localStorage.getItem(TOKEN_KEY) || '');

@@ -7,8 +7,11 @@
  */
 
 import { useAuth } from './useAuth.js';
+import { apiBaseUrl } from './wsUrl.js';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+// Prod calls are pinned to the apex origin (see wsUrl.js): the CDN edge
+// never caches /api/*, so going through it would add a wasted hop.
+const API_BASE = apiBaseUrl();
 
 // One-shot handoff: Content -> Route stores { id, waypoints } here for
 // Steer, and the same payload plus openVideo: true for Video (the id

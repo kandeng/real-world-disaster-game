@@ -1,5 +1,5 @@
 /**
- * wsUrl.js — build a same-origin WebSocket URL for the current page.
+ * wsUrl.js — build same-origin URLs pinned to the apex origin.
  *
  * Alibaba's base CDN cannot proxy WebSocket upgrades, so when the page was
  * served through a CDN edge domain (www. / cdn.) the socket must target the
@@ -20,4 +20,27 @@ export function sameOriginWsUrl(path) {
   const scheme = protocol === 'https:' ? 'wss' : 'ws';
   const bareHost = host.replace(/^(www\.|cdn\.)/, '');
   return `${scheme}://${bareHost}${path}`;
+}
+
+/**
+ * apiBaseUrl() — base URL prefix for every REST fetch() to /api/*.
+ *
+ * Same rationale as sameOriginWsUrl(), applied to plain HTTP: the CDN edge
+ * never caches /api/* (X-Swift-CacheTime: 0), so a request made against the
+ * edge domain travels browser -> edge -> Virginia origin -> edge -> browser.
+ * Stripping the edge prefix pins API calls to the apex (one ocean round trip
+ * instead of two). The server's CORS allowlist (cors_origins in the prod
+ * config) accepts the resulting cross-origin requests from the www./cdn.
+ * pages, and apex visitors stay same-origin (no preflight at all).
+ *
+ * DEV builds keep hitting the local uvicorn server directly.
+ *
+ * Every fetch() in the app MUST be prefixed with this base — a same-origin
+ * relative fetch silently regains the CDN double hop for edge visitors.
+ */
+export function apiBaseUrl() {
+  if (import.meta.env.DEV) return 'http://localhost:8000';
+  const { protocol, origin, host } = window.location;
+  const bareHost = host.replace(/^(www\.|cdn\.)/, '');
+  return bareHost === host ? origin : `${protocol}//${bareHost}`;
 }

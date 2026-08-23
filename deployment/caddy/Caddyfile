@@ -8,9 +8,12 @@
 	# Enables verbose DEBUG logging
 	# debug
 
-	# Restrict Caddy to only offer HTTP/1.1 during TLS negotiation (Port 443)
+	# Offer HTTP/1.1 + HTTP/2 during TLS negotiation (Port 443). h2 lets
+	# apex visitors multiplex API/WS/static over one connection; the CDN
+	# edge keeps using HTTP/1.1 for origin fetches by default, so this does
+	# not change the edge->origin leg. h3 is intentionally left off.
 	servers {
-		protocols h1
+		protocols h1 h2
 	}
 }
 
@@ -146,7 +149,8 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 	}
 
 	# FastAPI backend (identical to the apex block; the CDN in front
-	# forwards /api/* to the origin unchanged)
+	# forwards /api/* to the origin unchanged). Kept as the fallback path
+	# for old cached SPA builds that still fetch same-origin.
 	handle /api/* {
 		reverse_proxy 127.0.0.1:8000 {
 			header_up Host {host}

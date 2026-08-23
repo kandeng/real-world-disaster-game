@@ -13,8 +13,11 @@
 import { computed, ref, watch } from 'vue';
 import * as sdk from 'matrix-js-sdk';
 import { useAuth } from '@shared-composables/useAuth.js';
+import { apiBaseUrl } from '@shared-composables/wsUrl.js';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+// Prod calls are pinned to the apex origin (see wsUrl.js): the CDN edge
+// never caches /api/*, so going through it would add a wasted hop.
+const API_BASE = apiBaseUrl();
 const CRED_KEY = 'drone.matrix.creds';
 
 /* Reactive state shared by every component instance. */

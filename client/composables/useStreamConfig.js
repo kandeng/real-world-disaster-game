@@ -14,8 +14,11 @@
 // broadcaster inject its own entry at the top of the catalog; local
 // entries survive refreshStreams() re-fetches.
 import { ref, computed } from 'vue';
+import { apiBaseUrl } from './wsUrl.js';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+// Prod calls are pinned to the apex origin (see wsUrl.js): the CDN edge
+// never caches /api/*, so going through it would add a wasted hop.
+const API_BASE = apiBaseUrl();
 
 // Last-resort catalog when the endpoint is unreachable or unconfigured:
 // local MediaMTX in dev, the public Caddy /live path in production.

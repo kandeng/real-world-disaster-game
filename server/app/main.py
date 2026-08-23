@@ -43,14 +43,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Drone Navigation API", lifespan=lifespan)
 
-# Only needed for local dev (Vite on :5173 -> API on :8000); in production the
-# SPA and API are same-origin behind Caddy, so no CORS preflight occurs.
+# Needed for local dev (Vite on :5173 -> API on :8000) AND for production
+# visitors on the CDN edge domains: the SPA pins /api/* to the apex origin
+# (client/composables/wsUrl.js apiBaseUrl), so www./cdn. pages arrive here
+# cross-origin and must be allowlisted in cors_origins.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CONFIG.get("cors_origins", []),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Let browsers cache the CORS preflight verdict for a day: preflights
+    # from the www./cdn. edge origins otherwise cost an extra ocean RTT.
+    max_age=86400,
 )
 
 # --- Auth: email + password (JWT) ------------------------------------------
