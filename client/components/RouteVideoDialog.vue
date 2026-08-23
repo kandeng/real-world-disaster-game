@@ -15,7 +15,7 @@ const emit = defineEmits(['close']);
 
 const { t, locale } = useI18n();
 const scene = useRouteScene3D();
-const { publishVideo } = useVideos();
+const { publishVideo, uploadToYouTube } = useVideos();
 
 const displayCanvas = ref(null);
 const state = ref('rendering'); // 'rendering' | 'done' | 'failed'
@@ -28,8 +28,13 @@ const createdAt = computed(() => new Date(props.route.created_at));
 const publish = ref(true);
 const deletePrevious = ref(true);
 const published = ref(false);
+const publishedId = ref(null); // gallery record id (anchors the YouTube source)
 const publishFailed = ref(false);
 const publishing = ref(false);
+const uploading = ref(false); // mp4 -> server -> YouTube in flight
+const uploadPct = ref(0);
+const uploadedUrl = ref('');
+const uploadFailed = ref(false);
 let blitRaf = null;
 let finished = false;
 
@@ -51,6 +56,7 @@ const statusText = computed(() => {
 const errorMsg = computed(() => {
   if (state.value === 'failed') return t('routevideodialog.failed');
   if (publishFailed.value) return t('routevideodialog.publish_failed');
+  if (uploadFailed.value) return t('routevideodialog.upload_failed');
   return '';
 });
 // Offline pass: { frame, total }; fallback capture flight: distance %.
@@ -130,13 +136,14 @@ async function onDownload() {
   if (publish.value && !published.value) {
     publishing.value = true;
     try {
-      await publishVideo({
+      const created = await publishVideo({
         route_id: props.route.id,
         title: title.value.trim() || props.route.title,
         description: description.value,
         delete_previous: deletePrevious.value,
       });
       published.value = true;
+      publishedId.value = created.id;
     } catch {
       publishFailed.value = true;
     } finally {
@@ -168,6 +175,43 @@ async function onDownload() {
   anchor.click();
   anchor.remove();
 }
+
+// "Upload to YouTube": ensure the gallery record exists (its id anchors
+// the source rewrite server-side), then multipart the mp4 — the server
+// uploads it to the site channel + drone-navigation playlist and returns
+// the watch URL, shown as a link once done.
+async function onUploadYouTube() {
+  const blob = clipBlob;
+  if (!blob || uploading.value || publishing.value) return;
+  uploadFailed.value = false;
+  try {
+    let id = publishedId.value;
+    if (!id) {
+      publishing.value = true;
+      const created = await publishVideo({
+        route_id: props.route.id,
+        title: title.value.trim() || props.route.title,
+        description: description.value,
+        delete_previous: deletePrevious.value,
+      });
+      published.value = true;
+      publishedId.value = created.id;
+      id = created.id;
+    }
+    uploading.value = true;
+    uploadPct.value = 0;
+    const updated = await uploadToYouTube(id, blob, (p) => {
+      uploadPct.value = p;
+    });
+    const yt = (updated.sources || []).find((s) => s.provider === 'youtube');
+    uploadedUrl.value = yt ? yt.url : '';
+  } catch {
+    uploadFailed.value = true;
+  } finally {
+    uploading.value = false;
+    publishing.value = false;
+  }
+}
 </script>
 
 <template>
@@ -179,6 +223,9 @@ async function onDownload() {
             <span class="vd__error-icon">⚠</span>
             <span class="vd__error-text">{{ errorMsg }}</span>
             <span class="vd__error-icon">⚠</span>
+          </div>
+          <div v-else-if="uploading" class="vd__status">
+            {{ t('routevideodialog.uploading_youtube') }} {{ Math.round(uploadPct * 100) }}%
           </div>
           <div v-else-if="state === 'rendering'" class="vd__status">{{ statusText }}</div>
         </div>
@@ -233,15 +280,34 @@ async function onDownload() {
         <span>{{ t('routevideodialog.delete_previous') }}</span>
       </label>
       <div v-if="published" class="vd__published">{{ t('routevideodialog.published') }}</div>
+      <div v-if="uploadedUrl" class="vd__published">
+        {{ t('routevideodialog.uploaded_youtube') }}
+        <a
+          class="vd__yt-link"
+          :href="uploadedUrl"
+          target="_blank"
+          rel="noopener"
+        >{{ uploadedUrl }}</a>
+      </div>
 
-      <button
-        class="vd__download"
-        :class="{ 'vd__download--ready': state === 'done' }"
-        :disabled="state !== 'done'"
-        @click="onDownload"
-      >
-        {{ t('routevideodialog.download') }}
-      </button>
+      <div class="vd__actions-row">
+        <button
+          class="vd__download vd__download--yt"
+          :class="{ 'vd__download--ready': state === 'done' }"
+          :disabled="state !== 'done' || uploading || publishing"
+          @click="onUploadYouTube"
+        >
+          {{ t('routevideodialog.upload_youtube') }}
+        </button>
+        <button
+          class="vd__download"
+          :class="{ 'vd__download--ready': state === 'done' }"
+          :disabled="state !== 'done'"
+          @click="onDownload"
+        >
+          {{ t('routevideodialog.download') }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -474,10 +540,9 @@ async function onDownload() {
 
 /* Grey like the Account -> Login Save button until the clip is ready. */
 .vd__download {
-  margin-top: 18px;
-  width: 100%;
+  flex: 1;
   padding: 11px 0;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: #f5f5f7;
   color: #1d1d1f;
@@ -490,6 +555,30 @@ async function onDownload() {
 .vd__download--ready {
   background: #007aff;
   color: #ffffff;
+}
+
+/* Upload to YouTube: outline variant of the ready state so the two
+   actions stay visually distinct side by side. */
+.vd__download--yt.vd__download--ready {
+  background: #ffffff;
+  border-color: #007aff;
+  color: #007aff;
+}
+
+.vd__actions-row {
+  margin-top: 18px;
+  display: flex;
+  gap: 12px;
+}
+
+.vd__yt-link {
+  color: #007aff;
+  word-break: break-all;
+  text-decoration: none;
+}
+
+.vd__yt-link:hover {
+  text-decoration: underline;
 }
 
 .vd__download--ready:hover {

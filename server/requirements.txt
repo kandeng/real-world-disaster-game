@@ -21,3 +21,8 @@ httpx-oauth>=0.13
 
 # Synapse Admin API client (hidden chat-account provisioning, token brokering)
 httpx>=0.27
+
+# YouTube Data API v3: server-side mp4 upload to the site channel
+# (Route Planning -> Video dialog -> POST /api/videos/{id}/upload-youtube).
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.0

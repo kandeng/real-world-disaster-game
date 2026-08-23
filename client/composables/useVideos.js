@@ -79,5 +79,42 @@ export function useVideos() {
     return res.json();
   }
 
-  return { listVideos, listPublicVideos, saveVideo, publishVideo };
+  /** POST /api/videos/{id}/upload-youtube — multipart the mp4; the server
+   *  uploads it to the site YouTube channel (unlisted, added to the
+   *  drone-navigation playlist) and returns the updated video with the
+   *  watch URL as the primary source. XHR instead of fetch: upload
+   *  progress events. onProgress receives 0..1. */
+  function uploadToYouTube(id, blob, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/api/videos/${id}/upload-youtube`);
+      xhr.setRequestHeader('Authorization', `Bearer ${token.value}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error('youtube_upload_failed'));
+          }
+          return;
+        }
+        let code = 'youtube_upload_failed';
+        try {
+          code = JSON.parse(xhr.responseText).detail || code;
+        } catch {
+          /* non-JSON body: keep the generic code */
+        }
+        reject(new Error(code));
+      };
+      xhr.onerror = () => reject(new Error('youtube_upload_failed'));
+      const form = new FormData();
+      form.append('file', blob, 'route-video.mp4');
+      xhr.send(form);
+    });
+  }
+
+  return { listVideos, listPublicVideos, saveVideo, publishVideo, uploadToYouTube };
 }

@@ -13,5 +13,9 @@
   "status_fly": "正在沿航路飞行…",
   "published": "已发布到展厅",
   "publish_failed": "发布失败",
-  "download": "下载 mp4 视频文件"
+  "download": "下载 mp4 视频文件",
+  "upload_youtube": "上传到 YouTube",
+  "uploading_youtube": "正在上传到 YouTube…",
+  "uploaded_youtube": "已上传到 YouTube：",
+  "upload_failed": "YouTube 上传失败"
 }

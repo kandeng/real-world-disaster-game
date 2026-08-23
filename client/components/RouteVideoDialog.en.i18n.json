@@ -13,5 +13,9 @@
   "status_fly": "Flying the route…",
   "published": "Published to the gallery",
   "publish_failed": "Publish failed",
-  "download": "Download the mp4 video file"
+  "download": "Download the mp4 video file",
+  "upload_youtube": "Upload to YouTube",
+  "uploading_youtube": "Uploading to YouTube…",
+  "uploaded_youtube": "Uploaded to YouTube:",
+  "upload_failed": "YouTube upload failed"
 }

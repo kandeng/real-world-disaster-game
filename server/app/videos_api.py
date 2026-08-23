@@ -9,6 +9,12 @@ GET /api/videos/public -> the Gallery feed: every user's published videos,
                           most recent first, with author names. Open to
                           anonymous callers (the Gallery page is public).
 PUT /api/videos/{id}   -> replace title / waypoint snapshot / sources.
+POST /api/videos/{id}/upload-youtube
+                       -> the Route Planning -> Video dialog posts the
+                          finished mp4; the server uploads it to the site's
+                          YouTube channel (unlisted, added to the
+                          `drone-navigation` playlist) and stores the watch
+                          URL as the primary playback source.
 
 Ownership is enforced purely at this layer: every statement is scoped by
 the JWT caller's id and foreign ids surface as 404 (API-only hardening,
@@ -17,12 +23,16 @@ per the CMS schema decision).
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from tempfile import SpooledTemporaryFile
 
-from fastapi import APIRouter, Depends, HTTPException
+import asyncio
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from . import youtube_upload
 from .db import get_async_session
 from .models import Route, User, Video, VideoSource
 from .routes_api import WaypointIn, _seed_rows
@@ -257,3 +267,90 @@ async def update_video(
     await session.commit()
     await session.refresh(video)
     return await _serialize(session, video, user.display_name)
+
+
+# youtube_upload error codes -> HTTP status (detail carries the code so
+# the dialog can show the matching i18n message).
+_YT_STATUS = {
+    "youtube_not_configured": 503,
+    "youtube_auth": 503,
+    "youtube_quota": 429,
+    "youtube_signup": 409,
+}
+
+
+@router.post("/videos/{video_id}/upload-youtube")
+async def upload_video_to_youtube(
+    video_id: uuid.UUID,
+    file: UploadFile = File(...),
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Receive the generated mp4 and upload it to the site YouTube channel.
+
+    The blocking Google client runs in a worker thread; the mp4 is spooled
+    to disk (never held fully in memory). On success the watch URL becomes
+    the video's primary source (provider "youtube", position 0), the other
+    providers keep their order behind it.
+    """
+    stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
+    video = (await session.execute(stmt)).scalar_one_or_none()
+    if video is None:
+        raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
+    ctype = file.content_type or ""
+    if ctype not in ("", "video/mp4") and not (file.filename or "").endswith(".mp4"):
+        raise HTTPException(status_code=415, detail="NOT_MP4")
+
+    spool = SpooledTemporaryFile(max_size=64 * 1024 * 1024)
+    try:
+        size = 0
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > youtube_upload.MAX_SIZE:
+                raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            _, watch_url = await asyncio.to_thread(
+                youtube_upload.upload_mp4,
+                spool,
+                video.title or "Drone route video",
+                video.description or "",
+            )
+        except youtube_upload.YouTubeUploadError as err:
+            raise HTTPException(
+                status_code=_YT_STATUS.get(err.code, 502), detail=err.code
+            )
+
+        # Rewrite sources: the fresh YouTube URL first, the rest behind it.
+        existing = (
+            (
+                await session.execute(
+                    select(VideoSource)
+                    .where(VideoSource.video_id == video.id)
+                    .order_by(VideoSource.position.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        others = [s for s in existing if s.provider != "youtube"]
+        await session.execute(
+            delete(VideoSource).where(VideoSource.video_id == video.id)
+        )
+        session.add(
+            VideoSource(
+                video_id=video.id, provider="youtube", url=watch_url, position=0
+            )
+        )
+        for pos, s in enumerate(others, start=1):
+            session.add(
+                VideoSource(
+                    video_id=video.id, provider=s.provider, url=s.url, position=pos
+                )
+            )
+        await session.commit()
+        await session.refresh(video)
+        return await _serialize(session, video, user.display_name)
+    finally:
+        spool.close()
