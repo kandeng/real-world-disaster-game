@@ -41,10 +41,13 @@ class WaypointIn(BaseModel):
 
 class RouteUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
     waypoints: list[WaypointIn]
 
 
 class RouteCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    description: str = Field(default="", max_length=2000)
     waypoints: list[WaypointIn]
 
 
@@ -104,6 +107,7 @@ def _serialize(row: Route) -> dict:
     return {
         "id": str(row.id),
         "title": row.title,
+        "description": row.description,
         "created_at": row.created_at.isoformat(),
         "waypoints": row.waypoints,
     }
@@ -143,6 +147,8 @@ async def update_route(
         raise HTTPException(status_code=404, detail="ROUTE_NOT_FOUND")
     if body.title is not None:
         row.title = body.title
+    if body.description is not None:
+        row.description = body.description
     row.waypoints = [w.model_dump() for w in body.waypoints]
     # Update flow (Route Planning case 2): the route in Content -> Route
     # shows the fresh Creation Time. updated_at follows via onupdate.
@@ -161,7 +167,10 @@ async def create_route(
     if not body.waypoints:
         raise HTTPException(status_code=400, detail="WAYPOINTS_REQUIRED")
     wps = [w.model_dump() for w in body.waypoints]
-    row = Route(user_id=user.id, title=_default_title(wps[0]), waypoints=wps)
+    title = (body.title or "").strip() or _default_title(wps[0])
+    row = Route(
+        user_id=user.id, title=title, description=body.description, waypoints=wps
+    )
     session.add(row)
     await session.commit()
     await session.refresh(row)

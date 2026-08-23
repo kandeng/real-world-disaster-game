@@ -10,7 +10,15 @@ import { useVideos } from '@shared-composables/useVideos.js';
 // panel. Below: a progress bar, the "Publish to the gallery" checkbox
 // (checked by default) and the download button — grey until the clip is
 // finished, blue afterwards (same grey/blue as the Account Save button).
-const props = defineProps({ route: { type: Object, required: true } });
+// The Video flow no longer saves the route when the dialog opens: the
+// route is persisted only when Download / Upload to YouTube is clicked.
+// ensureRoute (provided by the host page) performs that deferred
+// create/update and returns the saved route; its id anchors the video
+// record. Closing the dialog without clicking either abandons the route.
+const props = defineProps({
+  route: { type: Object, required: true },
+  ensureRoute: { type: Function, default: null },
+});
 const emit = defineEmits(['close']);
 
 const { t, locale } = useI18n();
@@ -127,17 +135,36 @@ function onClose() {
   emit('close');
 }
 
-// Clicking the (blue, ready) button: 1) publish the video card when the
-// checkbox is on (optionally deleting the previous video of this route),
-// 2) pop the native "Save As" dialog for the mp4.
+// Deferred route save: returns the persisted route's id (Case 2 may
+// already carry one, but the click still commits title/description/
+// waypoint edits), or null when the save failed.
+async function resolveRouteId() {
+  if (typeof props.ensureRoute === 'function') {
+    try {
+      const saved = await props.ensureRoute();
+      if (saved && saved.id != null) return saved.id;
+    } catch {
+      /* fall back to the id the route object carries */
+    }
+  }
+  return props.route.id ?? null;
+}
+
+// Clicking the (blue, ready) button: 1) persist the route (deferred save —
+// Download = keep the route, regardless of the publish checkbox), 2) publish
+// the video card when the checkbox is on (optionally deleting the previous
+// video of this route), 3) pop the native "Save As" dialog for the mp4.
 async function onDownload() {
   const blob = clipBlob;
   if (!blob || publishing.value) return;
+  // Commit the route first so the anchor exists even if publishing is off.
+  const rid = await resolveRouteId();
   if (publish.value && !published.value) {
     publishing.value = true;
     try {
+      if (rid == null) throw new Error('route save failed');
       const created = await publishVideo({
-        route_id: props.route.id,
+        route_id: rid,
         title: title.value.trim() || props.route.title,
         description: description.value,
         delete_previous: deletePrevious.value,
@@ -188,8 +215,10 @@ async function onUploadYouTube() {
     let id = publishedId.value;
     if (!id) {
       publishing.value = true;
+      const rid = await resolveRouteId();
+      if (rid == null) throw new Error('route save failed');
       const created = await publishVideo({
-        route_id: props.route.id,
+        route_id: rid,
         title: title.value.trim() || props.route.title,
         description: description.value,
         delete_previous: deletePrevious.value,

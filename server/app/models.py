@@ -110,6 +110,7 @@ class Route(Base):
         index=True,
     )
     title: Mapped[str] = mapped_column(String(length=200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     waypoints: Mapped[list] = mapped_column(
         JSONB().with_variant(JSON, "sqlite"),
         nullable=False,

@@ -621,6 +621,14 @@ const sourceRouteId = ref(null);
 const routeSaving = ref(false);
 // Saved route object handed to the video dialog (null = dialog closed).
 const videoRoute = ref(null);
+// Title / description of the route being edited (the Route panel inputs
+// under the waypoint list). Sent to the API on Save/Update; on create an
+// empty title makes the server mint the default one.
+const routeTitle = ref('');
+const routeDescription = ref('');
+// Creation time of the carried route (Content -> Route handoff), so the
+// video dialog shows the route's own timestamp before any save happens.
+const routeCreatedAt = ref('');
 
 // Label of the Save/Update button in the Route panel: Case 1 (no saved
 // route yet) vs Case 2 (Steer handoff or already saved once).
@@ -644,30 +652,40 @@ async function saveCurrentRoute() {
   }));
   routeSaving.value = true;
   let saved = null;
+  // Title is optional (omitted on update = kept; empty on create = the
+  // server mints the default); description always rides along.
+  const extra = { description: routeDescription.value };
+  const trimmedTitle = routeTitle.value.trim();
+  if (trimmedTitle) extra.title = trimmedTitle;
   try {
     if (sourceRouteId.value != null) {
       // Case 2 — modified version of an existing route (the user arrived
       // via Content -> Route -> Steer, or an earlier save minted the id):
-      // update it in place, keeping its title (the server refreshes the
-      // Creation Time). A 404 (route deleted meanwhile) falls back to a
-      // new one.
+      // update it in place (the server refreshes the Creation Time). A
+      // 404 (route deleted meanwhile) falls back to a new one.
       try {
-        saved = await saveRoute(sourceRouteId.value, { waypoints: wps });
+        saved = await saveRoute(sourceRouteId.value, { waypoints: wps, ...extra });
       } catch {
-        saved = await createRoute({ waypoints: wps });
+        saved = await createRoute({ waypoints: wps, ...extra });
         sourceRouteId.value = saved.id;
       }
     } else {
       // Case 1 — brand-new route: save it as new with the current time
-      // stamp (the server mints the default title) and remember the id
-      // so later clicks update instead of creating a duplicate.
-      saved = await createRoute({ waypoints: wps });
+      // stamp and remember the id so later clicks update instead of
+      // creating a duplicate.
+      saved = await createRoute({ waypoints: wps, ...extra });
       sourceRouteId.value = saved.id;
     }
   } catch {
     saved = null;
   } finally {
     routeSaving.value = false;
+  }
+  // Mirror the authoritative title back (e.g. the server-minted default
+  // after a create with an empty title input).
+  if (saved) {
+    routeTitle.value = saved.title;
+    routeCreatedAt.value = saved.created_at;
   }
   return saved;
 }
@@ -694,9 +712,12 @@ async function onClickSaveRoute() {
   await saveCurrentRoute();
 }
 
-// Video button: first save the current route to Content -> Route, then
-// open the video generation dialog.
-async function onClickVideo() {
+// Video button: open the video generation dialog WITHOUT saving the
+// route first. The route is persisted only when the dialog's Download /
+// Upload to YouTube button calls ensureVideoRouteSaved; closing the
+// dialog without clicking either abandons the route (no create, no
+// update in Content -> Route).
+function onClickVideo() {
   if (controlsLocked.value || videoRoute.value) return;
   if (waypoints.value.length < 2) {
     // Same green reminder: a route needs >= 2 waypoints.
@@ -714,12 +735,35 @@ async function onClickVideo() {
     authNoticeTimer = setTimeout(() => { showAuthNotice.value = false; }, 6000);
     return;
   }
-  const saved = await saveCurrentRoute();
-  if (!saved) return;
   // The offline render walks the 3D camera along the route: enter 3D so
   // the render pass (and its frame-counter overlay) is visible.
   if (!is3d.value) viewMode.value = '3d';
-  videoRoute.value = saved;
+  videoRoute.value = makeTransientRoute();
+}
+
+// Snapshot of the current (possibly unsaved) route for the dialog: the
+// waypoints drive the render, title / created_at feed its header fields.
+// id stays null in Case 1 until ensureVideoRouteSaved persists it.
+function makeTransientRoute() {
+  const w = waypoints.value[0];
+  return {
+    id: sourceRouteId.value,
+    title: routeTitle.value.trim()
+      || `Route at: (${w.lat.toFixed(4)}, ${w.lng.toFixed(4)}, ${w.alt.toFixed(4)})`,
+    description: routeDescription.value,
+    created_at: routeCreatedAt.value || new Date().toISOString(),
+    waypoints: waypoints.value.map((wp) => ({
+      lat: wp.lat, lng: wp.lng, alt: wp.alt, speed: wp.speed,
+      camYaw: wp.camYaw, camPitch: wp.camPitch, camRoll: wp.camRoll,
+    })),
+  };
+}
+
+// Deferred save of the Video flow: the dialog calls this when Download /
+// Upload to YouTube is clicked. Same create/update semantics as the Save
+// button; the returned route's id anchors the video record.
+function ensureVideoRouteSaved() {
+  return saveCurrentRoute();
 }
 
 function onVideoClose() {
@@ -753,6 +797,9 @@ onMounted(() => {
   const handoff = takeRouteHandoff();
   if (handoff && Array.isArray(handoff.waypoints) && handoff.waypoints.length) {
     sourceRouteId.value = handoff.id != null ? handoff.id : null;
+    routeTitle.value = handoff.title || '';
+    routeDescription.value = handoff.description || '';
+    routeCreatedAt.value = handoff.created_at || '';
     waypoints.value = handoff.waypoints.map((w, i) => ({ ...w, id: ++wpSeq, index: i + 1 }));
     ensureWaypointDefaults();
     showRoutePanel.value = true;
@@ -925,7 +972,12 @@ onUnmounted(() => {
 
       <!-- Video generation dialog (this page is its only host; Content
            -> Route -> Video lands here via the handoff) -->
-      <RouteVideoDialog v-if="videoRoute" :route="videoRoute" @close="onVideoClose" />
+      <RouteVideoDialog
+        v-if="videoRoute"
+        :route="videoRoute"
+        :ensure-route="ensureVideoRouteSaved"
+        @close="onVideoClose"
+      />
 
       <!-- Spinning circle: the preview/save flight is stuck waiting for
            the Google 3D tiles of the current view to download + render;
@@ -1071,6 +1123,19 @@ onUnmounted(() => {
           </div>
         </div>
         <div v-else class="route-panel__empty">{{ t('routeplanningview.no_waypoints') }}</div>
+        <!-- Route title + description (same field styles as the Route
+             Planning -> Video dialog); persisted by Save/Update below. -->
+        <div class="route-panel__field">
+          <span class="route-panel__fieldlabel">{{ t('routeplanningview.title_label') }}</span>
+          <input v-model="routeTitle" class="route-panel__title-input" type="text" maxlength="200" />
+        </div>
+        <textarea
+          v-model="routeDescription"
+          class="route-panel__desc"
+          rows="4"
+          maxlength="2000"
+          :placeholder="t('routeplanningview.description_ph')"
+        ></textarea>
         <!-- Save the route to Content -> Route: Case 1 (no saved route
              yet) creates a new one, Case 2 (Steer handoff / already
              saved once) updates it. Same blue as Account -> Login. -->
@@ -1183,10 +1248,60 @@ onUnmounted(() => {
   width: fit-content;
   max-width: min(560px, 86vw);
   height: auto;
-  max-height: min(420px, 70vh);
+  max-height: min(560px, 80vh);
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* Title + description fields above the Save button — same styles as the
+   Route Planning -> Video dialog fields (.vd__title-input / .vd__desc). */
+.route-panel__field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.route-panel__fieldlabel {
+  flex-shrink: 0;
+  font-size: 0.95rem;
+  color: #1d1d1f;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.route-panel__title-input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 12px;
+  border: 1px solid #8e8e93;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.route-panel__title-input:focus {
+  outline: 1px solid rgba(37, 99, 235, 0.5);
+}
+
+.route-panel__desc {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #8e8e93;
+  border-radius: 8px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #111827;
+  resize: vertical;
+  min-height: 96px;
+}
+
+.route-panel__desc:focus {
+  outline: 1px solid rgba(37, 99, 235, 0.5);
 }
 
 .route-panel__list {

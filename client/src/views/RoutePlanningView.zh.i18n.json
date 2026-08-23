@@ -11,6 +11,8 @@
   "camera": "相机",
   "position": "位置",
   "speed": "速度",
+  "title_label": "标题：",
+  "description_ph": "描述",
   "steer": "操控",
   "video": "视频",
   "save": "保存",

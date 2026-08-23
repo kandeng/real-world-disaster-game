@@ -91,6 +91,9 @@ async function onSave(r) {
 function onVideo(r) {
   setRouteHandoff({
     id: r.id,
+    title: r.title,
+    description: r.description || '',
+    created_at: r.created_at,
     waypoints: r.waypoints.map((w) => ({ ...w })),
     openVideo: true,
   });
@@ -101,7 +104,13 @@ function onVideo(r) {
 // along so the Video flow there updates THIS route instead of minting a
 // new one.
 function onSteer(r) {
-  setRouteHandoff({ id: r.id, waypoints: r.waypoints.map((w) => ({ ...w })) });
+  setRouteHandoff({
+    id: r.id,
+    title: r.title,
+    description: r.description || '',
+    created_at: r.created_at,
+    waypoints: r.waypoints.map((w) => ({ ...w })),
+  });
   router.push({ name: 'RoutePlanning' });
 }
 </script>

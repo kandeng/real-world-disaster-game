@@ -11,6 +11,8 @@
   "camera": "Camera",
   "position": "Position",
   "speed": "Speed",
+  "title_label": "Title:",
+  "description_ph": "Description",
   "steer": "Steer",
   "video": "Video",
   "save": "Save",
