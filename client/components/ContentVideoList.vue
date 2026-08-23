@@ -2,9 +2,10 @@
 import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
+import LoadingSpinner from '@shared/LoadingSpinner.vue';
 import WaypointCards from '@shared/WaypointCards.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
-import { useVideos } from '@shared-composables/useVideos.js';
+import { useVideos, cachedVideos } from '@shared-composables/useVideos.js';
 
 // Content -> Video: the user's published videos, most recent first,
 // separated by thin horizontal lines — same layout language as the Route
@@ -35,11 +36,15 @@ const PROVIDER_LABELS = {
 
 onMounted(async () => {
   if (!isAuthenticated.value) return;
-  loading.value = true;
+  // Instant paint from the last successful fetch (tab switches and page
+  // changes remount this component); the GET below silently revalidates.
+  const cached = cachedVideos();
+  if (cached) videos.value = cached;
+  loading.value = !videos.value.length;
   try {
     videos.value = await listVideos();
   } catch {
-    loadError.value = true;
+    if (!videos.value.length) loadError.value = true;
   } finally {
     loading.value = false;
   }
@@ -70,6 +75,24 @@ function onEditWp(v, { pos, field, value }) {
 
 function providerLabel(p) {
   return PROVIDER_LABELS[p] || p;
+}
+
+// Front-page image thumbnail of the primary (lowest-position) source,
+// shown in the collapsed list row instead of title + creation time.
+// YouTube serves its thumbnails freely; other providers have no such
+// endpoint, so they fall back to a dark placeholder panel.
+function thumbUrl(v) {
+  const src = [...(v.sources || [])]
+    .sort((a, b) => a.position - b.position)
+    .find((s) => s.url && s.url.trim());
+  if (!src) return null;
+  const url = src.url.trim();
+  if (src.provider === 'youtube') {
+    const m = url.match(/(?:youtu\.be\/|[?/]v=|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)
+      || url.match(/^([A-Za-z0-9_-]{6,})$/);
+    if (m) return `https://img.youtube.com/vi/${m[1]}/hqdefault.jpg`;
+  }
+  return null;
 }
 
 // Embed URL of the primary (lowest-position) playable source, so the card
@@ -149,15 +172,25 @@ function flash(id, kind) {
     <p v-else-if="loadError" class="vlist__note">{{ t('contentvideolist.error') }}</p>
     <p v-else-if="!loading && !videos.length" class="vlist__note">{{ t('contentvideolist.empty') }}</p>
 
+    <LoadingSpinner v-if="loading && !videos.length" />
+
     <div
       v-for="v in videos"
       :key="v.id"
       class="vlist__entry"
     >
       <div class="vlist__head">
-        <div v-if="!expanded[v.id]" class="vlist__meta">
-          <div class="vlist__title">{{ v.title }}</div>
-          <div class="vlist__date">{{ fmtDate(v.created_at) }}</div>
+        <!-- Collapsed: the video's front-page image thumbnail (title +
+             creation time move into the expanded editor). -->
+        <div v-if="!expanded[v.id]" class="vlist__thumb">
+          <img
+            v-if="thumbUrl(v)"
+            :src="thumbUrl(v)"
+            :alt="v.title"
+            class="vlist__thumb-img"
+            draggable="false"
+          />
+          <div v-else class="vlist__thumb-empty">{{ t('contentvideolist.no_thumb') }}</div>
         </div>
         <div v-else class="vlist__spacer"></div>
         <button
@@ -292,21 +325,40 @@ function flash(id, kind) {
   gap: 24px;
 }
 
-.vlist__meta {
-  min-width: 0;
+/* Collapsed row: 16:9 front-page image thumbnail of the primary source
+   (title + creation time now live inside the expanded editor). */
+.vlist__thumb {
+  width: 280px;
+  aspect-ratio: 16 / 9;
+  flex-shrink: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000000;
+}
+
+.vlist__thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Provider without a free thumbnail endpoint (Bilibili / Vimeo / ...). */
+.vlist__thumb-empty {
+  width: 100%;
+  height: 100%;
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  box-sizing: border-box;
+  font-size: 0.85rem;
+  color: #f5f5f7;
+  text-align: center;
 }
 
 .vlist__spacer {
   flex: 1;
-}
-
-.vlist__title {
-  font-size: 1.15rem;
-  font-weight: 600;
-  color: #111827;
 }
 
 /* Editable title while the entry is expanded. */
@@ -328,12 +380,6 @@ function flash(id, kind) {
 
 .vlist__title-input:focus {
   outline: 1px solid rgba(37, 99, 235, 0.5);
-}
-
-/* Creation time: not editable. */
-.vlist__date {
-  font-size: 0.95rem;
-  color: #1d1d1f;
 }
 
 /* The video displaying window: embedded primary playback URL. */

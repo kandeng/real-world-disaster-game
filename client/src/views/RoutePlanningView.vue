@@ -445,8 +445,10 @@ function registerRightDock() {
   registerRight({
     // The Video button sits below Route: it saves the current route to
     // Content -> Route (new route -> POST, route carried by Steer -> PUT)
-    // and opens the same video generation dialog as Content -> Route ->
-    // Video, which renders the whole route at exact 30 fps into a 16:9 mp4.
+    // and opens the video generation dialog, which renders the whole
+    // route at exact 30 fps into a 16:9 mp4. This page is the ONLY host
+    // of the dialog: Content -> Route -> Video jumps here and reuses
+    // this very code path.
     id: 'video',
     icon: 'MENU_RECORDER',
     titleKey: 'routeplanningview.video',
@@ -693,7 +695,7 @@ async function onClickSaveRoute() {
 }
 
 // Video button: first save the current route to Content -> Route, then
-// open the same video generation dialog as Content -> Route -> Video.
+// open the video generation dialog.
 async function onClickVideo() {
   if (controlsLocked.value || videoRoute.value) return;
   if (waypoints.value.length < 2) {
@@ -742,10 +744,12 @@ onMounted(() => {
   // 2D street map, the page's entry state.)
   registerRightDock();
 
-  // Content -> Route -> Steer handoff: list the carried route's waypoints
-  // and pop the Route panel so the user lands on exactly that route. The
-  // carried id marks this session as Case 2 (modified existing route): the
-  // Video flow then updates that route instead of creating a new one.
+  // Content -> Route -> Steer / Video handoff: list the carried route's
+  // waypoints and pop the Route panel so the user lands on exactly that
+  // route. The carried id marks this session as Case 2 (modified existing
+  // route): the Video flow then updates that route instead of creating a
+  // new one. With openVideo (Content -> Route -> Video) the dialog opens
+  // right after landing via this page's own Video flow.
   const handoff = takeRouteHandoff();
   if (handoff && Array.isArray(handoff.waypoints) && handoff.waypoints.length) {
     sourceRouteId.value = handoff.id != null ? handoff.id : null;
@@ -755,6 +759,7 @@ onMounted(() => {
     showSearchPanel.value = false;
     showWaypointHint.value = false;
     mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+    if (handoff.openVideo) onClickVideo();
   }
 
   // Keep dock buttons' active (green-border) state in sync. Video greens
@@ -918,7 +923,8 @@ onUnmounted(() => {
         </div>
       </Teleport>
 
-      <!-- Video generation dialog (same as Content -> Route -> Video) -->
+      <!-- Video generation dialog (this page is its only host; Content
+           -> Route -> Video lands here via the handoff) -->
       <RouteVideoDialog v-if="videoRoute" :route="videoRoute" @close="onVideoClose" />
 
       <!-- Spinning circle: the preview/save flight is stuck waiting for

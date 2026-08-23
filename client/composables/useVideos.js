@@ -9,6 +9,21 @@ import { useAuth } from './useAuth.js';
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
+// Module-level caches of the last successful list responses. The lists
+// unmount/remount on every tab switch and page change; with the caches
+// they paint instantly from memory while a background GET silently
+// revalidates (the spinner only shows while no cached copy exists yet).
+let videosCache = null;        // GET /api/videos (owner list)
+let publicVideosCache = null;  // GET /api/videos/public (Gallery feed)
+
+export function cachedVideos() {
+  return videosCache;
+}
+
+export function cachedPublicVideos() {
+  return publicVideosCache;
+}
+
 export function useVideos() {
   const { token } = useAuth();
 
@@ -24,7 +39,8 @@ export function useVideos() {
       headers: authHeaders(),
     });
     if (!res.ok) throw new Error('videos_unavailable');
-    return res.json();
+    videosCache = await res.json();
+    return videosCache;
   }
 
   /** GET /api/videos/public — the Gallery feed: every user's published
@@ -32,7 +48,8 @@ export function useVideos() {
   async function listPublicVideos() {
     const res = await fetch(`${API_BASE}/api/videos/public`);
     if (!res.ok) throw new Error('videos_unavailable');
-    return res.json();
+    publicVideosCache = await res.json();
+    return publicVideosCache;
   }
 
   /** PUT /api/videos/{id} — replace title + waypoint snapshot + sources. */

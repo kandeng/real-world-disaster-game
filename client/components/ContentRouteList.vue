@@ -3,10 +3,10 @@ import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
-import RouteVideoDialog from '@shared/RouteVideoDialog.vue';
+import LoadingSpinner from '@shared/LoadingSpinner.vue';
 import WaypointCards from '@shared/WaypointCards.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
-import { useRoutes, setRouteHandoff } from '@shared-composables/useRoutes.js';
+import { useRoutes, setRouteHandoff, cachedRoutes } from '@shared-composables/useRoutes.js';
 
 // Content -> Route: the user's saved routes, most recent first, separated
 // by thin horizontal lines. Each entry collapses to title + creation time
@@ -22,18 +22,21 @@ const routes = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 const expanded = ref({}); // routeId -> bool
-const videoRoute = ref(null); // route whose Video dialog is open
 const savingId = ref(null);
 const savedId = ref(null); // transient "Saved" hint next to the buttons
 let savedTimer = null;
 
 onMounted(async () => {
   if (!isAuthenticated.value) return;
-  loading.value = true;
+  // Instant paint from the last successful fetch (tab switches and page
+  // changes remount this component); the GET below silently revalidates.
+  const cached = cachedRoutes();
+  if (cached) routes.value = cached;
+  loading.value = !routes.value.length;
   try {
     routes.value = await listRoutes();
   } catch {
-    loadError.value = true;
+    if (!routes.value.length) loadError.value = true;
   } finally {
     loading.value = false;
   }
@@ -82,9 +85,16 @@ async function onSave(r) {
   }
 }
 
-// Video generation along the route: pop the render dialog.
+// Video generation along the route: jump to Route Planning (like Steer)
+// and open the video generation dialog THERE — same code path as clicking
+// Route Planning -> Video, so the dialog lives in one place only.
 function onVideo(r) {
-  if (!videoRoute.value) videoRoute.value = r;
+  setRouteHandoff({
+    id: r.id,
+    waypoints: r.waypoints.map((w) => ({ ...w })),
+    openVideo: true,
+  });
+  router.push({ name: 'RoutePlanning' });
 }
 
 // Jump to Route Planning with this route's waypoints listed; the id rides
@@ -101,6 +111,8 @@ function onSteer(r) {
     <p v-if="!isAuthenticated" class="rlist__note">{{ t('contentroutelist.sign_in') }}</p>
     <p v-else-if="loadError" class="rlist__note">{{ t('contentroutelist.error') }}</p>
     <p v-else-if="!loading && !routes.length" class="rlist__note">{{ t('contentroutelist.empty') }}</p>
+
+    <LoadingSpinner v-if="loading && !routes.length" />
 
     <div
       v-for="r in routes"
@@ -153,12 +165,6 @@ function onSteer(r) {
         </div>
       </template>
     </div>
-
-    <RouteVideoDialog
-      v-if="videoRoute"
-      :route="videoRoute"
-      @close="videoRoute = null"
-    />
   </div>
 </template>
 

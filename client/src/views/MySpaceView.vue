@@ -1,20 +1,34 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import TabBar from '@shared/TabBar.vue';
 import AccountLoginPanel from '@/views/AccountLoginPanel.vue';
 import ContentRouteList from '@shared/ContentRouteList.vue';
 import ContentVideoList from '@shared/ContentVideoList.vue';
+import { useAuth } from '@shared-composables/useAuth.js';
+import { useVideos } from '@shared-composables/useVideos.js';
 
 // 'account' | 'content' — provided by the router. The shell's left panel
 // owns the navigation; this page renders the body. Account carries three
 // tabs (Login / Consumption / Income); Content carries two (Route / Video).
 // The active tab is blue + underlined.
-defineProps({
+const props = defineProps({
   sub: { type: String, default: 'account' },
 });
 
 const { t } = useI18n();
+const { isAuthenticated } = useAuth();
+const { listVideos } = useVideos();
+
+// Content opens on the Route tab, whose list fetches itself; fire the
+// Video list GET at the same time so BOTH tabs' data arrive within one
+// network round-trip instead of waiting for the tab click (the two
+// fetches run in parallel, halving the perceived wait).
+onMounted(() => {
+  if (props.sub === 'content' && isAuthenticated.value) {
+    listVideos().catch(() => { /* ContentVideoList retries on open */ });
+  }
+});
 
 /* 'login' | 'consumption' | 'income' */
 const tab = ref('login');

@@ -6,6 +6,7 @@
   "collapse": "Collapse",
   "playback_urls": "Playback URLs",
   "no_source": "No playback URL yet — add one below to play the video here.",
+  "no_thumb": "No thumbnail available",
   "title_label": "Title:",
   "created_at": "Created at:",
   "description_ph": "Description",

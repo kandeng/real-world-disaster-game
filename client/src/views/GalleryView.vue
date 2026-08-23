@@ -2,7 +2,8 @@
 import { onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
-import { useVideos } from '@shared-composables/useVideos.js';
+import LoadingSpinner from '@shared/LoadingSpinner.vue';
+import { useVideos, cachedPublicVideos } from '@shared-composables/useVideos.js';
 
 // Gallery (展厅): a grid of equal-width rounded cards, one per published
 // video — embedded player on top (YouTube / Bilibili), then title, creation
@@ -18,11 +19,15 @@ const loading = ref(false);
 const loadError = ref(false);
 
 onMounted(async () => {
-  loading.value = true;
+  // Instant paint from the last successful fetch (page changes remount
+  // this view); the GET below silently revalidates.
+  const cached = cachedPublicVideos();
+  if (cached) videos.value = cached;
+  loading.value = !videos.value.length;
   try {
     videos.value = await listPublicVideos();
   } catch {
-    loadError.value = true;
+    if (!videos.value.length) loadError.value = true;
   } finally {
     loading.value = false;
   }
@@ -72,6 +77,8 @@ function onExplore() {
   <div class="gallery-page">
     <p v-if="loadError" class="gallery__note">{{ t('galleryview.error') }}</p>
     <p v-else-if="!loading && !videos.length" class="gallery__note">{{ t('galleryview.empty') }}</p>
+
+    <LoadingSpinner v-if="loading && !videos.length" />
 
     <div v-if="videos.length" class="gallery__grid">
       <article v-for="v in videos" :key="v.id" class="gcard">
