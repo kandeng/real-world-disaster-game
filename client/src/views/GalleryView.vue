@@ -57,7 +57,11 @@ function embedUrl(v) {
   if (src.provider === 'youtube') {
     const m = url.match(/(?:youtu\.be\/|[?/]v=|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)
       || url.match(/^([A-Za-z0-9_-]{6,})$/);
-    if (m) return `https://www.youtube-nocookie.com/embed/${m[1]}`;
+    // Plain youtube.com (NOT youtube-nocookie.com): the nocookie domain
+    // cannot share cookies with a signed-in Google session, so YouTube's
+    // bot detection walls anonymous embeds with "Sign in to confirm
+    // you're not a bot". hl pins the player UI to the app language.
+    if (m) return `https://www.youtube.com/embed/${m[1]}?hl=${locale.value === 'zh' ? 'zh_CN' : 'en_US'}`;
   } else {
     const bv = url.match(/(BV[0-9A-Za-z]+)/);
     const av = url.match(/av(\d+)/i);
