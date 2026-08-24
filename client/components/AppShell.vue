@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '@shared-composables/useAuth.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
-import ChatbotOverlay from '@shared/ChatbotOverlay.vue';
 import bannerUrl from '../assets/media/drone_earth.png';
 
 const { t, locale } = useI18n();
@@ -33,11 +32,6 @@ onMounted(() => {
 // Starts collapsed (mockup left state); the circular toggle flips the
 // chevron right→left when the panel unfolds.
 const open = ref(false);
-
-/* ─── Chatbot overlay (top-bar question button) ─── */
-// The question button toggles a translucent assistant layer that floats
-// above whatever page is currently on screen.
-const chatOpen = ref(false);
 
 /* ─── Left-panel width drag (same pattern as Extensions / My Space) ─── */
 const LEFT_MIN = 180;
@@ -175,16 +169,6 @@ function toggleLocale() {
               />
             </svg>
           </button>
-
-          <!-- Customer service: toggles the chatbot overlay -->
-          <button
-            class="shell-round"
-            :title="t('aerialview.topbar_customer_service')"
-            :aria-label="t('aerialview.topbar_customer_service')"
-            @click="chatOpen = !chatOpen"
-          >
-            <ConfigurableIcon name="MENU_QUESTION" :size="20" />
-          </button>
         </div>
 
         <!-- Canonical slot for every page's reminders / warnings: pages
@@ -220,8 +204,6 @@ function toggleLocale() {
       <!-- Main panel: pages fill exactly this area -->
       <main class="shell-main">
         <slot />
-        <!-- Chatbot layer floats above the current page (3D / 2D / Account…) -->
-        <ChatbotOverlay v-if="chatOpen" />
       </main>
     </div>
   </div>

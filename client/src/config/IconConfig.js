@@ -30,8 +30,6 @@ export const IconMap = {
   MENU_RECORDER: '../../icons/recorder.svg',
   MENU_CONTACTS: '../../icons/contacts.svg',
   MENU_GALLARY: '../../icons/gallary.svg',
-  MENU_CUSTOMER_SERVICE: '../../icons/customer_service.svg',
-  MENU_QUESTION: '../../icons/question.svg',
   MENU_FILE_FOLDER: '../../icons/file_folder.svg',
   MENU_PHOTO: '../../icons/photo.svg',
   MENU_HELICOPTER: '../../icons/helicopter.svg',
@@ -81,7 +79,6 @@ export const IconMap = {
   CHAT_ATTACHMENT: '../../icons/attachment.svg',
 
   // Chat avatars
-  AGENT_OPENCLAW: '../../icons/openclaw.svg',
   USER_PORTRAIT: '../../icons/portrait_photo.png',
 };
 

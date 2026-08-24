@@ -45,7 +45,6 @@
       "auth_notice_screenshot": "请先登录，然后再截屏。",
       "auth_notice_recording": "请先登录，然后再录屏。",
   "page_chat": "社区",
-  "page_customer_service": "客服",
   "page_extensions": "扩展",
   "page_gallery": "展厅",
   "extensions_tab_drone": "无人机",
@@ -55,7 +54,6 @@
   "extensions_tab_hardware": "硬件配件",
   "extensions_tab_software": "软件工具",
   "extensions_empty": "暂无内容。",
-  "topbar_customer_service": "客服",
   "topbar_user": "用户",
   
   "calibrating": "校准中...",

@@ -10,10 +10,8 @@ import { createWhepPlayer } from '@shared-composables/useWhepPlayer.js';
 import { useWhipBroadcast } from '@shared-composables/useWhipPublisher.js';
 import { useLiveCapture } from '@shared-composables/useLiveCapture.js';
 import { useStreamConfig } from '@shared-composables/useStreamConfig.js';
-import { useRouter } from 'vue-router';
 
 const { t } = useI18n();
-const router = useRouter();
 const { rightItems, registerRight, clear } = useDockRegistry();
 const { isAuthenticated, user, fetchMe } = useAuth();
 const {
@@ -534,13 +532,6 @@ onMounted(() => {
     titleKey: 'chatview.nav_contacts',
     active: computed(() => selectedNav.value === 'contacts'),
     onClick: () => { selectedNav.value = 'contacts'; },
-  });
-  registerRight({
-    id: 'customer_service',
-    icon: 'MENU_CUSTOMER_SERVICE',
-    titleKey: 'chatview.nav_customer_service',
-    active: computed(() => selectedNav.value === 'customer_service'),
-    onClick: () => { router.push('/customer-service'); },
   });
 
   registerRight({

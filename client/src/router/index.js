@@ -40,11 +40,6 @@ const routes = [
     component: ChatView,
   },
   {
-    path: '/customer-service',
-    name: 'CustomerService',
-    component: () => import('@/views/CustomerServiceView.vue'),
-  },
-  {
     // My Space subpages: the shell's left panel navigates here; Account
     // shows the login/register card, Wallet and Content are blank for now.
     path: '/account',
