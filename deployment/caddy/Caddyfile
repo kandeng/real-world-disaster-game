@@ -9,7 +9,7 @@
 	# debug
 
 	# Offer HTTP/1.1 + HTTP/2 during TLS negotiation (Port 443). h2 lets
-	# apex visitors multiplex API/WS/static over one connection; the CDN
+	# apex visitors multiplex API/static over one connection; the CDN
 	# edge keeps using HTTP/1.1 for origin fetches by default, so this does
 	# not change the edge->origin leg. h3 is intentionally left off.
 	servers {
@@ -17,42 +17,8 @@
 	}
 }
 
-# 1. Direct Origin Domain (Public Let's Encrypt Cert + WebSocket Gateway)
+# 1. Direct Origin Domain (Public Let's Encrypt Cert)
 drone-navigation.com {
-	# Reverse Proxy for OpenClaw WebSocket Gateway
-	# (plain `handle` keeps the path; the gateway expects its WS endpoint at
-	# the root, so rewrite /ws -> / before proxying)
-	handle /ws* {
-		# Origin allowlist: WebSocket has no CORS, so the server must
-		# validate the browser Origin itself. Requests without an Origin
-		# header (curl, server-to-server) pass; a foreign Origin gets 403.
-		@badOrigin {
-			header_regexp Origin .+
-			not header Origin https://drone-navigation.com
-			not header Origin https://www.drone-navigation.com
-			not header Origin https://cdn.drone-navigation.com
-		}
-		respond @badOrigin 403
-
-		# rewrite * /
-		reverse_proxy 127.0.0.1:18789 {
-			header_up Host {host}
-			header_up X-Real-IP {remote_host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto https
-
-			# Mandatory WebSocket upgrade headers
-			# header_up Connection {>Connection}
-			# header_up Upgrade {>Upgrade}
-
-			# Infinite timeout for long-lived WS connections
-			transport http {
-				read_timeout 0
-				write_timeout 0
-			}
-		}
-	}
-
 	# MediaMTX Control API (proxied across ECS servers to 47.85.110.135)
 	handle_path /control-api/* {
 		reverse_proxy 47.85.110.135:9997 {
@@ -117,37 +83,6 @@ drone-navigation.com {
 www.drone-navigation.com, cdn.drone-navigation.com {
 	tls internal
 
-	# OpenClaw WebSocket gateway (identical to the apex block; the CDN in
-	# front must also forward WS upgrades for this to work end-to-end)
-	handle_path /ws* {
-		# Origin allowlist (identical policy to the apex block; see there).
-		@badOrigin {
-			header_regexp Origin .+
-			not header Origin https://drone-navigation.com
-			not header Origin https://www.drone-navigation.com
-			not header Origin https://cdn.drone-navigation.com
-		}
-		respond @badOrigin 403
-
-		# rewrite * /
-		reverse_proxy 127.0.0.1:18789 {
-			header_up Host {host}
-			header_up X-Real-IP {remote_host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto https
-
-			# Mandatory WebSocket upgrade headers
-			# header_up Connection {>Connection}
-			# header_up Upgrade {>Upgrade}
-
-			# Infinite timeout for long-lived WS connections
-			transport http {
-				read_timeout 0
-				write_timeout 0
-			}
-		}
-	}
-
 	# FastAPI backend (identical to the apex block; the CDN in front
 	# forwards /api/* to the origin unchanged). Kept as the fallback path
 	# for old cached SPA builds that still fetch same-origin.
@@ -170,7 +105,7 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 
 	# Static Web App — MUST stay inside a catch-all handle{} block: a
 	# top-level try_files runs before `handle` matching and would rewrite
-	# /ws to /index.html, breaking the WebSocket proxy.
+	# unmatched paths to /index.html ahead of the proxied routes.
 	handle {
 		root * /var/www/drone-navigation/client/dist
 		file_server
