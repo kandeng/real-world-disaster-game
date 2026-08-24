@@ -1,4 +1,8 @@
 {
+  "title": "Customer Service",
+  "clear": "Clear conversation",
+  "thinking": "Thinking…",
+  "error": "Sorry, I could not answer that right now. Please try again.",
   "placeholder": "Type a message, or upload files and images",
   "tutorial_video": "Tutorial Video",
   "upload": "Upload file",

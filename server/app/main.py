@@ -10,12 +10,14 @@ path rewriting, giving identical URLs in dev and production:
     http://localhost:8000/api/auth/jwt/login
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .chat_api import router as chat_router, sweep_loop as chat_sweep_loop
 from .config import CONFIG
 from .db import Base, engine
 from .drone_commands import router as drone_commands_router
@@ -38,7 +40,10 @@ async def lifespan(app: FastAPI):
     # Create tables on startup (fine for v1; Alembic when the schema evolves).
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # Hourly customer-service transcript retention sweep (10 days default).
+    sweep_task = asyncio.create_task(chat_sweep_loop())
     yield
+    sweep_task.cancel()
 
 
 app = FastAPI(title="Drone Navigation API", lifespan=lifespan)
@@ -134,6 +139,9 @@ app.include_router(telemetry_router, prefix="/api")
 
 # --- Real drone: flight commands (WS /api/drone/command[/downlink]) ----------
 app.include_router(drone_commands_router, prefix="/api")
+
+# --- Customer service chatbot (GET/POST/DELETE /api/chat/*) ------------------
+app.include_router(chat_router, prefix="/api")
 
 
 @app.get("/api/health")

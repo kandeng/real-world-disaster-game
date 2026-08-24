@@ -1,17 +1,28 @@
 <script setup>
 import { nextTick, onMounted, ref } from 'vue';
+import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useAuth } from '@shared-composables/useAuth.js';
+import { useChatContext } from '@shared-composables/useChatContext.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const { user } = useAuth();
+const route = useRoute();
 
-/* ─── Conversation state (layout stage: local only, no backend yet) ─── */
-// The assistant opens the conversation with the tutorial-video card.
+/* ─── Conversation state (per-page server-backed transcript) ─── */
+// The assistant opens every fresh conversation with the tutorial-video
+// card; past turns of THIS page are loaded from the backend on mount.
 const messages = ref([{ role: 'ai', kind: 'video', text: '' }]);
 const text = ref('');
+const busy = ref(false);
 let attachSeq = 0;
+
+// The overlay is unmounted on every page switch (AppShell resets
+// chatOpen), so the route at mount is exactly the page this transcript
+// belongs to.
+const pageKey = route.path;
+const { loadHistory, clearContext, streamTurn } = useChatContext();
 
 // Full-size viewer state: { kind, url, poster } — null = closed.
 const viewer = ref(null);
@@ -55,7 +66,11 @@ function scrollBottom() {
   if (el) el.scrollTop = el.scrollHeight;
 }
 
-onMounted(scrollBottom);
+onMounted(async () => {
+  const hist = await loadHistory(pageKey);
+  messages.value = [{ role: 'ai', kind: 'video', text: '' }, ...hist];
+  nextTick(scrollBottom);
+});
 
 function openFilePicker() {
   fileInput.value?.click();
@@ -142,9 +157,40 @@ function closeViewer() {
 
 function send() {
   const body = text.value.trim();
-  if (!body) return;
+  if (!body || busy.value) return;
   messages.value.push({ role: 'user', kind: 'text', text: body });
   text.value = '';
+  nextTick(scrollBottom);
+
+  // Assistant bubble appears immediately with a thinking indicator and
+  // fills in as the SSE deltas arrive.
+  const ai = { role: 'ai', kind: 'text', text: '', pending: true };
+  messages.value.push(ai);
+  busy.value = true;
+  nextTick(scrollBottom);
+  streamTurn(pageKey, body, locale.value, {
+    onDelta: (d) => {
+      ai.text += d;
+      ai.pending = false;
+      nextTick(scrollBottom);
+    },
+  })
+    .catch(() => {
+      if (!ai.text) ai.text = t('chatbotoverlay.error');
+      ai.pending = false;
+      nextTick(scrollBottom);
+    })
+    .finally(() => {
+      ai.pending = false;
+      busy.value = false;
+    });
+}
+
+/* ─── Clear conversation (server + model forget this page) ─── */
+async function clearChat() {
+  if (busy.value) return;
+  await clearContext(pageKey);
+  messages.value = [{ role: 'ai', kind: 'video', text: '' }];
   nextTick(scrollBottom);
 }
 </script>
@@ -158,6 +204,19 @@ function send() {
       class="chatbot-dialog"
       :style="dialogHeight ? { height: dialogHeight + 'px' } : null"
     >
+      <!-- Header: page-scoped title + clear-conversation button -->
+      <div class="chatbot-header">
+        <span class="chatbot-header__title">{{ t('chatbotoverlay.title') }}</span>
+        <button
+          class="chatbot-clear"
+          :title="t('chatbotoverlay.clear')"
+          :aria-label="t('chatbotoverlay.clear')"
+          @click="clearChat"
+        >
+          🗑
+        </button>
+      </div>
+
       <!-- Messages -->
       <div ref="listRef" class="chatbot-messages">
         <div
@@ -180,6 +239,9 @@ function send() {
             :class="{ 'chatbot-bubble--plain': !m.text && m.files && m.files.length }"
           >
             <span v-if="m.text">{{ m.text }}</span>
+            <span v-else-if="m.pending" class="chatbot-thinking">{{
+              t('chatbotoverlay.thinking')
+            }}</span>
             <template v-if="m.files && m.files.length">
               <template v-for="a in m.files" :key="a.id">
                 <!-- Video: first-frame poster + play glyph; click = player -->
@@ -245,6 +307,7 @@ function send() {
           class="chatbot-round"
           :title="t('chatbotoverlay.send')"
           :aria-label="t('chatbotoverlay.send')"
+          :disabled="busy"
           @click="send"
         >
           <ConfigurableIcon name="CHAT_SEND" :size="30" />
@@ -300,6 +363,49 @@ function send() {
   flex-direction: column;
   padding: 24px 28px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* ─── Header (title + clear) ─── */
+.chatbot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.chatbot-header__title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.chatbot-clear {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1.5px solid #374151;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  padding: 0;
+}
+
+.chatbot-clear:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.chatbot-thinking {
+  color: #8e8e93;
+  font-style: italic;
+}
+
+.chatbot-round:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ─── Messages ─── */

@@ -30,5 +30,15 @@
     "whep_url": "http://127.0.0.1:8889/crazyflie-drone/whep",
     "control_api_url": "http://127.0.0.1:9997",
     "streams": []
+  },
+  "chat": {
+    "engine": "auto",
+    "model": "DeepSeek-V4-Flash",
+    "models": ["Qwen3.8-Max", "DeepSeek-V4-Flash", "Kimi-K3"],
+    "bailian_base_url": "https://coding.dashscope.aliyuncs.com/v1",
+    "api_key": "CHANGE_ME_bailian_api_key",
+    "max_tokens": 2048,
+    "retention_days": 10,
+    "dsh_session_root": ""
   }
 }

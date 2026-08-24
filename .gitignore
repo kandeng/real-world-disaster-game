@@ -10,6 +10,12 @@ deployment/tls/
 deployment/acert
 server/local_dev.db
 
+# DeepSeek Harness runtime state (session logs, generated cordis configs)
+server/.dsh_sessions/
+server/cordis/
+server/sessions/
+server/workspace/
+
 # Temporary bug-reproduction screen recordings (kept locally, not source)
 /*.webm
 

@@ -192,3 +192,31 @@ class VideoSource(Base):
     provider: Mapped[str] = mapped_column(String(length=32), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     position: Mapped[int] = mapped_column(nullable=False, default=0)
+
+
+class ChatContext(Base):
+    """Per-identity, per-page customer-service transcript (10-day retention).
+
+    identity is 'user:<uuid>' for signed-in users and 'anon:<device-uuid>'
+    for anonymous visitors, so no FK to user is needed (anonymous rows are
+    garbage-collected by the retention sweep instead of CASCADE).
+    generation mints a fresh DeepSeek-Harness session id whenever the
+    visitor clears the conversation, so the model forgets too.
+    """
+
+    __tablename__ = "chat_context"
+
+    identity: Mapped[str] = mapped_column(String(length=80), primary_key=True)
+    page_key: Mapped[str] = mapped_column(String(length=120), primary_key=True)
+    generation: Mapped[str] = mapped_column(String(length=36), nullable=False)
+    messages: Mapped[list] = mapped_column(
+        JSONB().with_variant(JSON, "sqlite"),
+        nullable=False,
+        default=list,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
