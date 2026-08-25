@@ -1,4 +1,7 @@
 {
   "load_failed": "无法加载 Google 地图",
-  "api_hint": "请确认您的 API 密钥已启用 Maps JavaScript API。"
+  "api_hint": "请确认您的 API 密钥已启用 Maps JavaScript API。",
+  "focus": "聚焦",
+  "zoom_in": "放大",
+  "zoom_out": "缩小"
 }

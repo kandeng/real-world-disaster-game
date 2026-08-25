@@ -5,6 +5,9 @@ import { useRouter } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import CollisionWarning from '@shared/CollisionWarning.vue';
 import StreetViewPane from '@shared/StreetViewPane.vue';
+import { MapView } from '@/2d_map/index.js';
+import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
+import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
 import { useDrone } from '@shared-composables/useDrone.js';
 import { useAltitudeGate, PHASES, DESCEND_THRESHOLD, ASCEND_THRESHOLD } from '@shared-composables/useAltitudeGate.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
@@ -103,6 +106,145 @@ const cesiumContainer = ref(null);
 const streetViewReady = ref(false);
 const lockedMessage = ref('');
 let lockedMessageTimer = null;
+
+// Active background of this page:
+//   '3d'     – the shared Cesium 3D globe (default, the classic view)
+//   'street' – Google 2D street map, entered via the Search / Route buttons
+// Same workflow as the Route Planning page: address search lives on the 2D
+// map; the Route button keeps exactly the same map (center / zoom / the red
+// balloon of the picked address); Steer lifts the view to the Google Earth
+// 3D tiles nadir overview of the same spot and scale.
+const routeScene = useRouteScene3D();
+const viewMode = ref('3d');
+const isStreet = computed(() => viewMode.value === 'street');
+const mapTypeId = computed(() => 'roadmap');
+
+// ── Search panel state (address finding — same workflow as Route Planning) ──
+const mapViewRef = ref(null);
+const showSearchPanel = ref(false);
+const searchQuery = ref('');
+const searchResults = ref([]);
+const searchError = ref('');
+// True while a search query is in flight; the next poisFound event then
+// fills the results list.
+const searchBusy = ref(false);
+// True once at least one query has been submitted (gates the
+// "No results found." hint so it never shows while merely typing).
+const hasSearched = ref(false);
+// Route button green border: on the 2D map without the search panel.
+const routeActive = computed(() => isStreet.value && !showSearchPanel.value);
+// The address the user picked from the search results (the red balloon). Kept
+// so the balloon can be re-shown when returning to the Search view after the
+// map was recreated (e.g. after a 3D excursion).
+const selectedLatLng = ref(null);
+
+function onClickSearch() {
+  // Address search always shows the 2D street map, matched to the location /
+  // zoom the user currently has (leaving 3D first if needed).
+  if (!isStreet.value) enterStreetFrom3d();
+  viewMode.value = 'street';
+  showSearchPanel.value = true;
+  // The Search view marks the picked address with the red balloon.
+  if (selectedLatLng.value) {
+    mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
+  }
+}
+
+function onClickRoute() {
+  // Route shows the same 2D street map as Search (same center / zoom) but
+  // WITHOUT the red balloon. Leaving 3D first matches the current view.
+  if (!isStreet.value) enterStreetFrom3d();
+  viewMode.value = 'street';
+  showSearchPanel.value = false;
+  mapViewRef.value?.setSelectionMarkerVisible(false);
+}
+
+function enterStreetFrom3d() {
+  // Convert the true 3D camera altitude back to the 2D map model altitude so
+  // the street map opens at the same location and ground scale (zoom level)
+  // the user was seeing in 3D.
+  drone.alt = routeScene.modelAltForMapScale(drone.alt, drone.lat);
+}
+
+function onSearchSubmit() {
+  const text = searchQuery.value.trim();
+  if (!text || !mapViewRef.value) return;
+  searchError.value = '';
+  searchResults.value = [];
+  searchBusy.value = true;
+  hasSearched.value = true;
+  mapViewRef.value.searchPoisByText(text);
+}
+
+function onResultClick(poi) {
+  const loc = poi?.geometry?.location;
+  if (loc && mapViewRef.value) {
+    selectedLatLng.value = { lat: loc.lat(), lng: loc.lng() };
+    mapViewRef.value.panTo(loc.lat(), loc.lng());
+    // Mark the picked address with Google's default red pin ("balloon").
+    mapViewRef.value.setSelectionMarker(loc.lat(), loc.lng());
+  }
+}
+
+function onMapCenterChange({ lat, lng }) {
+  drone.lat = lat;
+  drone.lon = lng;
+}
+
+function onMapZoomChange(alt) {
+  drone.alt = Math.max(0, Math.min(100000, alt));
+}
+
+// The Google Map is recreated whenever we return from the 3D view; re-apply
+// the picked-address balloon if we are back on the Search view.
+function onMapReady() {
+  if (isStreet.value && showSearchPanel.value && selectedLatLng.value) {
+    mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
+  }
+}
+
+// Great-circle distance (meters) between two lat/lon pairs.
+function haversineMeters(aLat, aLng, bLat, bLng) {
+  const R = 6371000;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function onPoisFound(pois) {
+  if (searchBusy.value) {
+    searchBusy.value = false;
+    // Order results by distance to the cursor's current map position
+    // (closest first).
+    const list = [...(pois || [])];
+    const cursor = mapViewRef.value?.getCursorLatLng?.();
+    if (cursor) {
+      list.sort((a, b) => {
+        const aLoc = a?.geometry?.location;
+        const bLoc = b?.geometry?.location;
+        if (!aLoc || !bLoc) return 0;
+        return (
+          haversineMeters(cursor.lat(), cursor.lng(), aLoc.lat(), aLoc.lng()) -
+          haversineMeters(cursor.lat(), cursor.lng(), bLoc.lat(), bLoc.lng())
+        );
+      });
+    }
+    searchResults.value = list;
+  }
+}
+
+function onPoisError(message) {
+  console.error('[AerialView] poisError:', message);
+  if (searchBusy.value) {
+    searchBusy.value = false;
+    searchResults.value = [];
+    searchError.value = message;
+  }
+}
 
 const isTakeoffLanding = computed(() => altitudeGate.isTransitioning.value);
 const isPausedByCollision = computed(() => altitudeGate.isPausedByCollision.value);
@@ -241,27 +383,44 @@ function flashTakeoffLimitNotice() {
   takeoffLimitTimer = setTimeout(() => { takeoffLimitNotice.value = ''; }, 5000);
 }
 
-// Steer owns both disks: one tap shows (or hides) the Flight and the Camera
-// (gimbal) disks together — the old separate Camera button is gone.
+// Steer has two jobs:
+// - on the 2D street map it lifts the view to the Google Earth 3D tiles
+//   NADIR overview of the SAME spot and ground scale (the red selection
+//   balloon is a 2D-map-only overlay, so the 3D view has none);
+// - in the 3D view it shows (or hides) the Flight and the Camera (gimbal)
+//   disks together — the old separate Camera button is gone.
 function toggleSteer() {
+  if (isStreet.value) {
+    // The 2D map altitude is Google's nominal model altitude; convert it
+    // to the true camera altitude that shows the SAME ground scale in the
+    // 3D nadir view (otherwise the 3D view looks ~4-6x more zoomed in).
+    drone.alt = routeScene.trueAltForMapScale(drone.alt, drone.lat);
+    drone.heading = 0;
+    gimbal.yaw = 0;
+    gimbal.pitch = -90; // look straight down, satellite style
+    gimbal.roll = 0;
+    showSearchPanel.value = false;
+    viewMode.value = '3d';
+    return;
+  }
   const next = !showFlight.value;
   showFlight.value = next;
   showCamera.value = next;
 }
 
 watch(
-  [() => svPaneState.value.visible, () => svPaneState.value.transitioning, streetViewReady],
-  ([show, transitioning, svReady]) => {
+  [() => svPaneState.value.visible, () => svPaneState.value.transitioning, streetViewReady, isStreet],
+  ([show, transitioning, svReady, street]) => {
     const viewer = window.cesiumViewer;
     if (viewer) {
       // In mesh (OSM) mode the globe must stay visible as ground context; in
       // aerial (Google) mode it is only shown during the street-view
-      // transition crossfade.
-      viewer.scene.globe.show = activeSource.value === 'osm' || (show && transitioning);
+      // transition crossfade. The 2D street map always covers the globe.
+      viewer.scene.globe.show = (activeSource.value === 'osm' || (show && transitioning)) && !street;
     }
     if (cesiumContainer.value) {
       // Only hide Cesium when Street View is fully loaded to prevent black flash
-      cesiumContainer.value.classList.toggle('cesium-hidden', show && !transitioning && svReady);
+      cesiumContainer.value.classList.toggle('cesium-hidden', street || (show && !transitioning && svReady));
     }
   },
   { immediate: true }
@@ -362,17 +521,32 @@ function projectEnuMove(enuMove, collision) {
 }
 
 function syncCesiumCamera() {
-  if (typeof window.updateCesiumCamera === 'function') {
+  if (typeof window.updateCesiumCamera !== 'function') return;
+  if (isStreet.value) {
+    // While the 2D street map covers the globe, the hidden (still
+    // rendering, opacity 0) Cesium canvas mirrors the map as a nadir view
+    // at the same ground scale: the Google 3D tiles of the visible area
+    // stream in the background, so the Steer lift to 3D is instant.
     window.updateCesiumCamera({
       lat: drone.lat,
       lon: drone.lon,
-      alt: drone.alt,
-      heading: drone.heading,
-      gimbalYaw: gimbal.yaw,
-      gimbalPitch: gimbal.pitch,
-      gimbalRoll: gimbal.roll,
+      alt: routeScene.trueAltForMapScale(drone.alt, drone.lat),
+      heading: 0,
+      gimbalYaw: 0,
+      gimbalPitch: -90,
+      gimbalRoll: 0,
     });
+    return;
   }
+  window.updateCesiumCamera({
+    lat: drone.lat,
+    lon: drone.lon,
+    alt: drone.alt,
+    heading: drone.heading,
+    gimbalYaw: gimbal.yaw,
+    gimbalPitch: gimbal.pitch,
+    gimbalRoll: gimbal.roll,
+  });
 }
 
 function getStreetViewPov() {
@@ -486,20 +660,25 @@ onMounted(() => {
   }, 10000);
 
   registerRight({
+    id: 'search',
+    icon: 'MENU_SEARCH',
+    titleKey: 'aerialview.search',
+    active: showSearchPanel,
+    onClick: onClickSearch,
+  });
+  registerRight({
     id: 'steer',
     icon: 'MENU_CONTROL_STICK',
     titleKey: 'aerialview.steer',
     active: showFlight.value,
     onClick: toggleSteer,
   });
-  // Takeoff/Stop/Landing switcher — always starts at 'takeoff'; its icon
-  // and title are driven by switchIndex (see toggleTakeoffLanding), NOT by
-  // the drone's altitude.
   registerRight({
-    id: 'takeoff',
-    icon: 'MENU_TAKEOFF',
-    titleKey: 'aerialview.takeoff',
-    onClick: toggleTakeoffLanding,
+    id: 'route',
+    icon: 'MENU_MAP',
+    titleKey: 'aerialview.route',
+    active: routeActive,
+    onClick: onClickRoute,
   });
   registerRight({
     id: 'screenshot',
@@ -587,8 +766,8 @@ onUnmounted(() => {
 <template>
   <ViewComposer
     :right-items="rightItems"
-    :show-flight="showFlight"
-    :show-camera="showCamera"
+    :show-flight="showFlight && !isStreet"
+    :show-camera="showCamera && !isStreet"
     :show-hud="recorderState !== 'replaying'"
     :flight="flight"
     :camera="camera"
@@ -601,6 +780,27 @@ onUnmounted(() => {
     @cameraModeChange="onCameraModeChange"
   >
     <template #background>
+      <!-- Google 2D street map background: shown while the page is in
+           'street' mode, entered via Search / Route. Stays mounted across
+           Search <-> Route switches so center / zoom / the red selection
+           balloon are preserved. -->
+      <MapView
+        v-if="isStreet"
+        ref="mapViewRef"
+        class="view-composer__background aerial-street-map"
+        :map-type-id="mapTypeId"
+        :lat="drone.lat"
+        :lon="drone.lon"
+        :alt="drone.alt"
+        :heading="drone.heading"
+        :is-picking="false"
+        :show-drone-marker="false"
+        @mapReady="onMapReady"
+        @centerChange="onMapCenterChange"
+        @zoomChange="onMapZoomChange"
+        @poisFound="onPoisFound"
+        @poisError="onPoisError"
+      />
       <StreetViewPane
         class="view-composer__background"
         :lat="svPaneState.lat"
@@ -608,7 +808,7 @@ onUnmounted(() => {
         :heading="svPaneState.headingRad"
         :pitch="svPaneState.pitchRad"
         :altitude="svPaneState.relativeAlt"
-        :visible="svPaneState.visible"
+        :visible="svPaneState.visible && !isStreet"
         :prewarm="shouldPrewarmSV"
         :style="{ opacity: svPaneState.opacity }"
         @ready="streetViewReady = true"
@@ -617,6 +817,40 @@ onUnmounted(() => {
 
     <template #top-overlay>
       <ConnectionError :visible="showConnectionError" :message="connectionMessage" />
+
+      <!-- Address search panel (same workflow as Route Planning) -->
+      <div v-if="showSearchPanel && isStreet" class="search-panel">
+        <form class="search-panel__row" @submit.prevent="onSearchSubmit">
+          <input
+            v-model="searchQuery"
+            class="search-panel__input"
+            type="text"
+            :placeholder="t('aerialview.search_placeholder')"
+          />
+          <button
+            class="search-panel__btn"
+            type="submit"
+            :title="t('aerialview.search')"
+          >
+            <ConfigurableIcon name="MENU_SEARCH" :size="18" color="rgba(30, 40, 60, 0.9)" />
+          </button>
+        </form>
+        <ul v-if="searchResults.length" class="search-panel__list">
+          <li
+            v-for="(poi, idx) in searchResults"
+            :key="poi.place_id || idx"
+            class="search-panel__item"
+            @click="onResultClick(poi)"
+          >
+            <span class="search-panel__name">{{ poi.name }}</span>
+            <span v-if="poi.address" class="search-panel__address">{{ poi.address }}</span>
+          </li>
+        </ul>
+        <div v-else-if="searchError" class="search-panel__error">{{ searchError }}</div>
+        <div v-else-if="hasSearched && !searchBusy" class="search-panel__empty">
+          {{ t('aerialview.no_results') }}
+        </div>
+      </div>
       <CollisionWarning :visible="isCollisionFrozen" />
       <!-- Reminders / warnings live in the shell top bar (centered). -->
       <Teleport to="#shell-notices">
@@ -653,5 +887,129 @@ onUnmounted(() => {
 
 :deep(.view-composer__background.street-view-pane--visible) {
   pointer-events: auto;
+}
+
+/* The 2D street map must receive its pan / zoom gestures. */
+:deep(.view-composer__background.aerial-street-map) {
+  pointer-events: auto;
+}
+
+/* Address search panel — same frosted card as Route Planning. */
+.search-panel {
+  position: fixed;
+  top: 50%;
+  right: 112px;
+  transform: translateY(-50%);
+  width: min(480px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(6px);
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2), inset 0 0 20px rgba(255, 255, 255, 0.08);
+  z-index: 50;
+  padding: 16px 20px;
+  box-sizing: border-box;
+}
+
+.search-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-panel__input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  color: rgba(30, 40, 60, 0.95);
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.search-panel__input::placeholder {
+  color: rgba(30, 40, 60, 0.45);
+}
+
+.search-panel__btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.search-panel__btn:hover {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.search-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.search-panel__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.search-panel__item:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.search-panel__name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(30, 40, 60, 0.95);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.search-panel__address {
+  font-size: 0.78rem;
+  color: rgba(30, 40, 60, 0.7);
+}
+
+.search-panel__error,
+.search-panel__empty {
+  font-size: 0.85rem;
+  color: rgba(160, 40, 50, 0.9);
+  background: rgba(255, 235, 235, 0.6);
+  border: 1px solid rgba(200, 80, 90, 0.4);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.search-panel__empty {
+  color: rgba(30, 40, 60, 0.75);
+  background: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+@media (max-width: 768px) {
+  .search-panel {
+    right: 96px;
+  }
 }
 </style>

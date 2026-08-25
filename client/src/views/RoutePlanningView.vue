@@ -92,7 +92,12 @@ function onClickRoute() {
     ensureWaypointDefaults();
     if (is3d.value) {
       routeScene.stopPreview();
-      cancelFocus();
+      // The route list lives on the 2D street map: leave 3D so the street map
+      // (with the waypoint dots) becomes the background, keeping the same
+      // location and zoom level the user had in 3D. watch(is3d) handles the
+      // 3D cleanup (stop loop / hide overlay) and the altitude conversion,
+      // and onMapReady redraws the waypoint dots on the 2D map.
+      viewMode.value = 'street';
     }
   }
 }
@@ -437,7 +442,7 @@ function registerRightDock() {
   });
   registerRight({
     id: 'route',
-    icon: 'MENU_LIST',
+    icon: 'MENU_MAP',
     titleKey: 'routeplanningview.route',
     active: showRoutePanel.value,
     onClick: onClickRoute,
@@ -515,18 +520,6 @@ function tweenDrone(to, durationMs, onDone) {
     }
   };
   steerTweenRaf = requestAnimationFrame(frame);
-}
-
-// Drop the focus state without any rollback animation (Route list opened,
-// leaving 3D, ...): disks hide, the overlay dot turns back to blue.
-function cancelFocus() {
-  cancelSteerTween();
-  routeScene.setFocusWaypoint(null);
-  routeScene.showFlight.value = false;
-  routeScene.showCamera.value = false;
-  focusedWpId.value = null;
-  selectedWpId.value = null;
-  routeScene.showRouteOverlay(waypoints.value, null);
 }
 
 // Two-stage focus animation on a blue overlay dot:

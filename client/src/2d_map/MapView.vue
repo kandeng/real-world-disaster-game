@@ -4,6 +4,9 @@ import { useI18n } from 'vue-i18n';
 import { loadGoogleMaps } from './googleMaps.js';
 import { splinePath } from './spline.js';
 import droneIconUrl from '../../icons/drone.svg';
+import zoomFocusUrl from '../../icons/zoom_focus.svg';
+import zoomPlusUrl from '../../icons/zoom_plus.svg';
+import zoomMinusUrl from '../../icons/zoom_minus.svg';
 
 const { t, locale } = useI18n();
 
@@ -190,6 +193,35 @@ function onWheel(e) {
   e.stopPropagation();
   const rect = map.value.getDiv().getBoundingClientRect();
   anchoredZoom(e.deltaY < 0 ? 1 : -1, e.clientX - rect.left, e.clientY - rect.top, false);
+}
+
+// ── Bottom-right Google-Maps-style controls (focus / zoom-in / zoom-out) ──
+// Un-guarded setZoom / setCenter / fitBounds so the resulting zoom_changed /
+// center_changed events reach the parent view and keep the simulated drone's
+// altitude + position in sync with the map.
+function zoomIn() {
+  if (!map.value) return;
+  map.value.setZoom(Math.min(MAX_ZOOM, map.value.getZoom() + 1));
+}
+
+function zoomOut() {
+  if (!map.value) return;
+  map.value.setZoom(Math.max(MIN_ZOOM, map.value.getZoom() - 1));
+}
+
+// Recenter on the current point of interest: the selected address pin if one
+// is down, otherwise fit all waypoint dots in view, otherwise keep the view.
+function focusMap() {
+  if (!map.value || !mapsApi) return;
+  if (selectionMarker) {
+    map.value.setCenter(selectionMarker.getPosition());
+    return;
+  }
+  if (waypointMarkers.length) {
+    const bounds = new mapsApi.LatLngBounds();
+    waypointMarkers.forEach((m) => bounds.extend(m.getPosition()));
+    map.value.fitBounds(bounds, 80);
+  }
 }
 
 onMounted(async () => {
@@ -561,15 +593,25 @@ function attachMapClickListener() {
 }
 
 // Drop (or move) a marker at the given address, marking the selected search
-// result. Uses Google Maps' default pin icon.
+// result. Uses Google Maps' default pin icon. Always attaches the pin to the
+// map so it is (re)shown even if it was previously hidden.
 function setSelectionMarker(lat, lng) {
   if (!mapsApi || !map.value) return;
   const position = new mapsApi.LatLng(lat, lng);
   if (selectionMarker) {
     selectionMarker.setPosition(position);
+    selectionMarker.setMap(map.value);
   } else {
     selectionMarker = new mapsApi.Marker({ position, map: map.value });
   }
+}
+
+// Show or hide the red selection pin without losing its position — the
+// Search view shows it while the Route view hides it, and both share the
+// same mounted map instance.
+function setSelectionMarkerVisible(visible) {
+  if (!selectionMarker || !map.value) return;
+  selectionMarker.setMap(visible ? map.value : null);
 }
 
 function getCursorLatLng() {
@@ -687,6 +729,7 @@ defineExpose({
   panTo,
   searchRoutes,
   setSelectionMarker,
+  setSelectionMarkerVisible,
   getCursorLatLng,
   addWaypointMarker,
   redrawWaypointMarkers,
@@ -715,6 +758,19 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
         transform: `translate(-50%, -50%) rotate(${props.heading}deg)`,
       }"
     />
+    <div class="map-controls">
+      <button type="button" class="map-ctrl-btn" :title="t('mapview.focus')" @click="focusMap">
+        <img :src="zoomFocusUrl" alt="" draggable="false" />
+      </button>
+      <div class="map-ctrl-zoom">
+        <button type="button" class="map-ctrl-btn" :title="t('mapview.zoom_in')" @click="zoomIn">
+          <img :src="zoomPlusUrl" alt="" draggable="false" />
+        </button>
+        <button type="button" class="map-ctrl-btn" :title="t('mapview.zoom_out')" @click="zoomOut">
+          <img :src="zoomMinusUrl" alt="" draggable="false" />
+        </button>
+      </div>
+    </div>
     <div v-if="error" class="map-error">
       <strong>{{ t('mapview.load_failed') }}</strong>
       <p>{{ error }}</p>
@@ -749,6 +805,66 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
   user-select: none;
   -webkit-user-drag: none;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+
+/* Google-Maps-style control stack at the bottom-right. Offset from the right
+   edge so it clears the 72px (56px mobile) right dock column. */
+.map-controls {
+  position: absolute;
+  right: 88px;
+  bottom: 24px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
+
+.map-ctrl-btn:hover {
+  background: #f1f3f4;
+}
+
+.map-ctrl-btn img {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+.map-ctrl-zoom {
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.map-ctrl-zoom .map-ctrl-btn {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.map-ctrl-zoom .map-ctrl-btn + .map-ctrl-btn {
+  border-top: 1px solid #e0e0e0;
+}
+
+@media (max-width: 768px) {
+  .map-controls {
+    right: 72px;
+  }
 }
 
 /* Hide Google Maps UI widgets and bottom-right attribution links. */
