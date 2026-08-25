@@ -1,23 +1,12 @@
-import { reactive } from 'vue';
-import { useAppSettings } from './useAppSettings.js';
+import { useSessionState } from './useSessionState.js';
 
-const { settings } = useAppSettings();
-
-const drone = reactive({
-  lat: settings.defaultLat,
-  lon: settings.defaultLon,
-  alt: settings.defaultAlt,
-  heading: settings.defaultYaw,
-  // Scalar speed along the flying trajectory (m/s); updated by the sim
-  // loop each frame, displayed in the HUD.
-  speed: 0,
-});
-
-const gimbal = reactive({
-  yaw: 0.0,
-  pitch: settings.defaultPitch,
-  roll: settings.defaultRoll,
-});
+// Phase 1: pose now lives in the shared session store (useSessionState.js).
+// useDrone() stays the stable accessor so the 60 fps hot path and every
+// consumer (views, physics, HUD, route scene) remain unchanged — they all
+// receive the very same reactive objects, now owned by `session`.
+const { session } = useSessionState();
+const drone = session.drone;
+const gimbal = session.gimbal;
 
 export function useDrone() {
   function setDroneLocation(lat, lon, altitude = null) {

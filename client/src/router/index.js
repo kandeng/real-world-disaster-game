@@ -1,8 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import AerialView from '@/views/AerialView.vue';
-import RealDroneView from '@/views/RealDroneView.vue';
-import MeshView from '@/views/MeshView.vue';
-import Satellite2DView from '@/views/Satellite2DView.vue';
 import RoutePlanningView from '@/views/RoutePlanningView.vue';
 import ChatView from '@/views/ChatView.vue';
 import MySpaceView from '@/views/MySpaceView.vue';
@@ -13,21 +10,6 @@ const routes = [
     path: '/',
     name: 'Aerial',
     component: AerialView,
-  },
-  {
-    path: '/real-drone',
-    name: 'RealDrone',
-    component: RealDroneView,
-  },
-  {
-    path: '/mesh',
-    name: 'Mesh3D',
-    component: MeshView,
-  },
-  {
-    path: '/satellite',
-    name: 'Satellite2D',
-    component: Satellite2DView,
   },
   {
     path: '/route-planning',

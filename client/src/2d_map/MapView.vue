@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { loadGoogleMaps } from './googleMaps.js';
+import { acquireMap, releaseMap } from './mapSingleton.js';
 import { splinePath } from './spline.js';
 import droneIconUrl from '../../icons/drone.svg';
 import zoomFocusUrl from '../../icons/zoom_focus.svg';
@@ -226,25 +226,17 @@ function focusMap() {
 
 onMounted(async () => {
   try {
-    mapsApi = await loadGoogleMaps();
-
-    map.value = new mapsApi.Map(containerRef.value, {
-      center: { lat: props.lat, lng: props.lon },
+    // Acquire the session-persistent Google Map (see mapSingleton.js): its
+    // container is re-attached here and its tiles stay cached across mounts
+    // and page switches — the map is never destroyed/recreated.
+    const acquired = await acquireMap(containerRef.value, {
+      lat: props.lat,
+      lon: props.lon,
       zoom: altToZoom(props.alt),
       mapTypeId: props.mapTypeId,
-      disableDefaultUI: true,
-      clickableIcons: false,  // POI icons should not intercept map picks
-      scrollwheel: false,     // we handle wheel events ourselves
-      gestureHandling: 'auto',
-      draggable: true,
-      keyboardShortcuts: false,
-      zoomControl: false,
-      mapTypeControl: false,
-      streetViewControl: false,
-      fullscreenControl: false,
-      scaleControl: false,
-      rotateControl: false,
     });
+    map.value = acquired.map;
+    mapsApi = acquired.mapsApi;
 
     listeners.push(mapsApi.event.addListener(map.value, 'center_changed', handleCenterChanged));
     listeners.push(mapsApi.event.addListener(map.value, 'zoom_changed', handleZoomChanged));
@@ -261,7 +253,7 @@ onMounted(async () => {
     containerRef.value.addEventListener('wheel', wheelHandler, { capture: true, passive: false });
 
     // Let the parent redraw maintained overlays (waypoint markers) whenever
-    // the underlying Google Map is (re)created — e.g. returning from 3D.
+    // the map is (re)acquired — e.g. returning from 3D or another page.
     emit('mapReady');
   } catch (e) {
     console.error('[2D Map]', e);
@@ -294,6 +286,11 @@ onUnmounted(() => {
   if (wheelHandler && containerRef.value) {
     containerRef.value.removeEventListener('wheel', wheelHandler, { capture: true });
   }
+  wheelHandler = null;
+  map.value = null;
+  // Detach the persistent map container WITHOUT destroying the map, so its
+  // tiles stay warm for the next mount (same view or another page).
+  releaseMap();
 });
 
 watch(() => [props.lat, props.lon], ([lat, lon]) => {

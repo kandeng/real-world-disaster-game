@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
@@ -9,6 +9,7 @@ import { MapView } from '@/2d_map/index.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
 import { useDrone } from '@shared-composables/useDrone.js';
+import { useSessionState } from '@shared-composables/useSessionState.js';
 import { useAltitudeGate, PHASES, DESCEND_THRESHOLD, ASCEND_THRESHOLD } from '@shared-composables/useAltitudeGate.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
@@ -27,6 +28,11 @@ const { t } = useI18n();
 const router = useRouter();
 
 const { drone, gimbal } = useDrone();
+const { session } = useSessionState();
+// Altitude split: the 2D street-map zoom height (mapAlt) is a SEPARATE value
+// from the true drone/camera altitude (drone.alt). They are reconciled only
+// at the 3D<->2D boundary (see enterStreetFrom3d / toggleSteer).
+const mapAlt = toRef(session.view, 'mapAlt');
 
 // 3D data source of the shared Cesium viewer (Google tiles vs OSM Buildings).
 const { activeSource, getActiveTileset } = useTilesetSource();
@@ -160,10 +166,10 @@ function onClickRoute() {
 }
 
 function enterStreetFrom3d() {
-  // Convert the true 3D camera altitude back to the 2D map model altitude so
+  // Convert the true 3D camera altitude into the separate 2D map height so
   // the street map opens at the same location and ground scale (zoom level)
-  // the user was seeing in 3D.
-  drone.alt = routeScene.modelAltForMapScale(drone.alt, drone.lat);
+  // the user was seeing in 3D. drone.alt itself stays the true altitude.
+  mapAlt.value = routeScene.modelAltForMapScale(drone.alt, drone.lat);
 }
 
 function onSearchSubmit() {
@@ -192,7 +198,7 @@ function onMapCenterChange({ lat, lng }) {
 }
 
 function onMapZoomChange(alt) {
-  drone.alt = Math.max(0, Math.min(100000, alt));
+  mapAlt.value = Math.max(0, Math.min(100000, alt));
 }
 
 // The Google Map is recreated whenever we return from the 3D view; re-apply
@@ -391,10 +397,10 @@ function flashTakeoffLimitNotice() {
 //   disks together — the old separate Camera button is gone.
 function toggleSteer() {
   if (isStreet.value) {
-    // The 2D map altitude is Google's nominal model altitude; convert it
-    // to the true camera altitude that shows the SAME ground scale in the
-    // 3D nadir view (otherwise the 3D view looks ~4-6x more zoomed in).
-    drone.alt = routeScene.trueAltForMapScale(drone.alt, drone.lat);
+    // The 2D map height is Google's nominal model altitude; convert it to
+    // the true camera altitude that shows the SAME ground scale in the 3D
+    // nadir view (otherwise the 3D view looks ~4-6x more zoomed in).
+    drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
     drone.heading = 0;
     gimbal.yaw = 0;
     gimbal.pitch = -90; // look straight down, satellite style
@@ -530,7 +536,7 @@ function syncCesiumCamera() {
     window.updateCesiumCamera({
       lat: drone.lat,
       lon: drone.lon,
-      alt: routeScene.trueAltForMapScale(drone.alt, drone.lat),
+      alt: routeScene.trueAltForMapScale(mapAlt.value, drone.lat),
       heading: 0,
       gimbalYaw: 0,
       gimbalPitch: -90,
@@ -791,7 +797,7 @@ onUnmounted(() => {
         :map-type-id="mapTypeId"
         :lat="drone.lat"
         :lon="drone.lon"
-        :alt="drone.alt"
+        :alt="mapAlt"
         :heading="drone.heading"
         :is-picking="false"
         :show-drone-marker="false"

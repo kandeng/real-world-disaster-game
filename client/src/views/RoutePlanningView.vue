@@ -1,9 +1,10 @@
 <script setup>
-import { onMounted, onUnmounted, h, ref, computed, watch } from 'vue';
+import { onMounted, onUnmounted, h, ref, computed, watch, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { MapView } from '@/2d_map/index.js';
 import { useDrone } from '@shared-composables/useDrone.js';
+import { useSessionState } from '@shared-composables/useSessionState.js';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
@@ -19,6 +20,11 @@ import cancelIcon from '../../icons/cancel.svg';
 
 const { t } = useI18n();
 const { drone, gimbal } = useDrone();
+const { session } = useSessionState();
+// Altitude split: the 2D street-map zoom height (mapAlt) is a SEPARATE value
+// from the true drone/camera altitude (drone.alt). They are reconciled only
+// at the 3D<->2D boundary (watch(is3d)).
+const mapAlt = toRef(session.view, 'mapAlt');
 // Login state: the finished preview video is only handed out to logged-in
 // users (same gate as the captures on 3D Exploration -> 3D Aerial).
 const { isAuthenticated } = useAuth();
@@ -350,7 +356,7 @@ function onMapCenterChange({ lat, lng }) {
 }
 
 function onMapZoomChange(alt) {
-  drone.alt = Math.max(0, Math.min(100000, alt));
+  mapAlt.value = Math.max(0, Math.min(100000, alt));
   scheduleTilePrefetch();
 }
 
@@ -364,7 +370,7 @@ function scheduleTilePrefetch() {
   if (is3d.value || prefetchTimer) return;
   prefetchTimer = setTimeout(() => {
     prefetchTimer = null;
-    if (!is3d.value) routeScene.prefetchTiles(drone.lat, drone.lon, drone.alt);
+    if (!is3d.value) routeScene.prefetchTiles(drone.lat, drone.lon, mapAlt.value);
   }, 250);
 }
 
@@ -861,7 +867,7 @@ onMounted(() => {
       // it to the true camera altitude that shows the SAME ground scale
       // in the 3D nadir view (otherwise the 3D view looks ~4-6x more
       // zoomed in).
-      drone.alt = routeScene.trueAltForMapScale(drone.alt, drone.lat);
+      drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
       drone.heading = 0;
       gimbal.yaw = 0;
       gimbal.pitch = -90; // look straight down, satellite style
@@ -892,7 +898,7 @@ onMounted(() => {
       // Convert the true 3D camera altitude back to the 2D map model
       // altitude so the 2D map reopens at the same ground scale (skipped
       // after a preview: the altitude then is a true flight height).
-      if (!wasPreview) drone.alt = routeScene.modelAltForMapScale(drone.alt, drone.lat);
+      if (!wasPreview) mapAlt.value = routeScene.modelAltForMapScale(drone.alt, drone.lat);
       scheduleTilePrefetch();
     }
   });
@@ -1150,7 +1156,7 @@ onUnmounted(() => {
         :map-type-id="mapTypeId"
         :lat="drone.lat"
         :lon="drone.lon"
-        :alt="drone.alt"
+        :alt="mapAlt"
         :heading="drone.heading"
         :is-picking="showWaypointHint"
         :show-drone-marker="false"
