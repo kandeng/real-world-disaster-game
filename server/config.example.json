@@ -33,9 +33,9 @@
   },
   "chat": {
     "engine": "auto",
-    "model": "DeepSeek-V4-Flash",
-    "models": ["Qwen3.8-Max", "DeepSeek-V4-Flash", "Kimi-K3"],
-    "bailian_base_url": "https://coding.dashscope.aliyuncs.com/v1",
+    "model": "qwen3.6-flash",
+    "models": ["qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash", "glm-5.2", "deepseek-v4-pro"],
+    "bailian_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     "api_key": "CHANGE_ME_bailian_api_key",
     "max_tokens": 2048,
     "retention_days": 10,
