@@ -47,8 +47,6 @@ A screenshot of the security group rules is attached below.
 
 ![Alibaba Cloud security group rules](assets/alibaba_02.png)
 
-The table above covers ECS 1 (the Caddy host). ECS 2 (`47.85.110.135`, MediaMTX + Synapse) needs its own inbound rules: TCP `8889` (WHIP/WHEP signaling — Caddy proxies `/live/*` to it), TCP `9997` (control API — Caddy proxies `/control-api/*` to it), and UDP `8189` (WebRTC ICE media). Synapse's port 8008 needs no rule at all — it binds only to the Tailscale interface (section 3.5).
-
 
 &nbsp;
 ### 2. CDN
@@ -70,33 +68,6 @@ In addition, create the **CDN edge domain names** — `www.drone-navigation.com`
 Contact Alibaba Cloud support for assistance with this configuration.
 
 ![The CDN domain names (CNAMEs)](assets/cdn_cname.png)
-
-
-&nbsp;
-### 3. WebSocket and the CDN (option 2: apex-pinned WS)
-
-Alibaba's base CDN **cannot proxy WebSocket** (that requires the DCDN product and Alibaba staff involvement), so the SPA never upgrades through the CDN edge. Instead, the OpenClaw WebSocket URL is **pinned to the apex** in the production `client/config.json`:
-
-```json
-"openclaw": { "url": "wss://drone-navigation.com/ws", "token": "..." }
-```
-
-An explicitly configured non-loopback URL always wins in `client/composables/useOpenClaw.js`, so every visitor — whether the page was loaded via `drone-navigation.com`, `www`, or `cdn` — opens the WebSocket directly against the apex (which resolves to ECS 1, bypassing the CDN edge). This is bandwidth-neutral for the origin (WebSocket payloads are never edge-cached anyway); the only thing given up is the edge's TCP-junk absorption, and it is 100% self-service (DNS, Caddy, and OpenClaw are all ours — no Alibaba ticket).
-
-Two hardening requirements, both satisfied:
-
-1. **Origin allowlist on `/ws`** — WebSocket has no CORS, so the server must validate the browser `Origin` itself. The `/ws` blocks in [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) return `403` for any `Origin` outside `https://drone-navigation.com`, `https://www.drone-navigation.com`, `https://cdn.drone-navigation.com` (requests with no `Origin` header — curl, server-to-server — are allowed).
-2. **`wss://` with a publicly trusted certificate** — the apex uses Caddy's Let's Encrypt cert (auto-renewed); `tls internal` is only for the CDN edge domains and must never be browser-facing.
-
-Verify after deploy (expect `101 Switching Protocols` for an allowed or absent Origin, `403` for a foreign Origin):
-
-```bash
-curl -i -N --max-time 5 \
-  -H "Connection: Upgrade" -H "Upgrade: websocket" \
-  -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-  -H "Origin: https://www.drone-navigation.com" \
-  https://drone-navigation.com/ws
-```
 
 
 &nbsp;
@@ -156,8 +127,12 @@ git pull origin main
 npm install -g npm@11.12.1    # (Optional) Upgrade npm if needed
 npm install
 
-# 4. Configure API keys
-# Edit client/config.json with your Google Maps API key and Cesium Ion token.
+# 4. Configure API keys (baked into the bundle at build time)
+# client/config.json holds googleApiKey + cesiumIonToken. It is NOT a runtime
+# file: Vite imports it directly into the JS bundle (src/cesium-main.js,
+# src/2d_map/googleMaps.js, src/3d_street/streetView.js). So it must be correct
+# BEFORE `npm run build`; any change here requires a rebuild. There is no
+# dist/config.json to edit afterwards.
 vim config.json
 
 # 5. Splash video clips need NO manual copy: `npm run build` syncs them
@@ -172,8 +147,25 @@ npm run build
 sudo mkdir -p /var/www/drone-navigation/client/dist
 sudo cp -r ~/drone-navigation/client/dist/* /var/www/drone-navigation/client/dist/
 
-# 8. Deploy the runtime config.json (this file is gitignored and must be copied manually)
-sudo cp ~/drone-navigation/client/config.json /var/www/drone-navigation/client/dist/config.json
+# 8. No config.json copy is needed — the config was already compiled into the
+#    bundle in step 6. Do NOT create dist/config.json: the Caddyfile's
+#    `try_files {path} /index.html` serves the SPA for any unmatched path, so a
+#    request for /config.json would return index.html, never JSON.
+```
+
+**Preferred variant — build locally, then rsync `dist/`** (avoids installing Node and building on the ECS). Because `client/config.json` is baked in wherever the build runs, it must already be correct on the build machine:
+
+```bash
+# On the machine where client/config.json is already correct:
+cd drone-navigation/client
+npm install && npm run build
+
+# Sync the built bundle to the ECS web root (the PEM lives in deployment/tls/).
+# --exclude config.json is a no-op safeguard (there is no runtime config.json in
+# dist); --chown keeps the files owned by clawer:clawer like the existing root.
+rsync -avz --delete --chown=clawer:clawer --exclude 'config.json' \
+  -e "ssh -i deployment/tls/20260213-8-221-124-43.pem" \
+  client/dist/ root@8.221.124.43:/var/www/drone-navigation/client/dist/
 ```
 
 After copying the files, configure Caddy (see the next section) and reload the service:
@@ -314,166 +306,85 @@ HTTP/2 200
 &nbsp;
 # 3. Backend Servers
 
-## 3.1. OpenClaw for Customer Service
+## 3.1. DeepSeek Harness for Customer Service
 
-`Openclaw` is installed and run on `launch-advisor-20260213/i-0xi7m4xb72am9kjxn9mr 8.221.124.43`, an Alibaba ECS server in Virginia USA. 
+`DeepSeek Harness` runs inside the `drone-fastapi` service on `launch-advisor-20260213/i-0xi7m4xb72am9kjxn9mr 8.221.124.43`, the same Alibaba ECS server that hosts Caddy and PostgreSQL. It is **not** a standalone daemon: the [`deepseek-harness-sdk`](https://pypi.org/project/deepseek-harness-sdk/) package (pinned to `0.1.1rc1` in [`server/requirements.txt`](../server/requirements.txt)) provides the chat runtime, and `drone-fastapi` exposes it under `/api/chat/*`.
 
-We use OpenClaw as the customer service assistant.
-Follow [Alibaba's OpenClaw installation guide](https://help.aliyun.com/zh/model-studio/openclaw)
-to deploy it on an Alibaba ECS server located in Virginia, USA.
+The chat engine tries backends in this order:
 
-### 1. Prerequisites
+1. **DshEngine** — the primary engine backed by the DeepSeek Harness SDK.
+2. **BailianEngine** — the fallback, talking to the Bailian OpenAI-compatible endpoint.
+3. A friendly apology message if neither engine is available.
 
-Before installing, request the following from your AI model provider: `baseUrl`, `apiKey`, `api`, and the list of available AI models.
-These values are used in the OpenClaw configuration file at `~/.openclaw/openclaw.json`.
+Replies stream to the browser as Server-Sent Events (SSE), and per-(user, page) transcripts are persisted in the PostgreSQL `chat_context` table.
+
+### 1. Install the SDK
+
+Install the pinned SDK into the same conda environment (`drone-navigation`) that runs `drone-fastapi`:
 
 ~~~
-  "models": {
-    "mode": "merge",
-    "providers": {
-      "bailian-token-plan": {
-        "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
-        "apiKey": "YOUR_API_KEY",
-        "api": "anthropic-messages",
-        "models": [
-          {
-            "id": "qwen3.8-max-preview",
-            "name": "qwen3.8-max-preview",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 983616,
-            "maxTokens": 131072,
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "compat": { "thinkingFormat": "openai" }
-          },
-          ...
-        ]
-      }
-    }
-  }
+conda activate drone-navigation
+pip install deepseek-harness-sdk==0.1.1rc1 -i https://pypi.org/simple/
 ~~~
 
 &nbsp;
-### 2. openclaw.json
+### 2. Configure the `chat` section
 
-See [`deployment/openclaw/openclaw.json`](./openclaw/openclaw.json) for the full configuration.
+Chat behavior is controlled by the `"chat"` block in `server/config.json`:
+
+~~~
+"chat": {
+  "engine": "auto",
+  "model": "qwen3.6-flash",
+  "models": ["qwen3.8-max-preview", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash", "glm-5.2", "deepseek-v4-pro"],
+  "bailian_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  "api_key": "CHANGE_ME_bailian_api_key",
+  "max_tokens": 2048,
+  "retention_days": 10,
+  "dsh_session_root": ""
+}
+~~~
+
+| Key | Meaning |
+| --- | --- |
+| `engine` | `auto` tries DshEngine first, then falls back to BailianEngine; a specific engine can also be forced. |
+| `model` | Default model used for chat replies. |
+| `models` | Model list offered to the client. |
+| `bailian_base_url` | Bailian OpenAI-compatible endpoint used by the fallback engine. |
+| `api_key` | API key for the configured endpoint. |
+| `max_tokens` | Maximum tokens per reply. |
+| `retention_days` | Days to keep chat transcripts before the hourly sweep deletes them. |
+| `dsh_session_root` | Optional directory for DeepSeek Harness session state; empty uses the default. |
+
+> **Note:** the endpoint must match the API-key type: a Coding-Plan key (`sk-sp-...`) requires the coding endpoint, while a Token-Plan key requires the token-plan endpoint. Verify key/endpoint pairing with [`deployment/openclaw/test_bailian_access.py`](./openclaw/test_bailian_access.py).
 
 &nbsp;
-### 3. Restart OpenClaw from Scratch
+### 3. Restart and verify
 
 ~~~
-# Stop the systemd service first
-openclaw gateway stop
-
-# Force kill any remaining processes using port 18789
-sudo fuser -k 18789/tcp
-
-# Alternatively, kill all running openclaw processes
-pkill -9 -f openclaw
-
-# Run this to make sure nothing is listening on 18789
-ss -tulpn | grep 18789
-```
-root@iZ0xi7m4xb72am9kjxn9mrZ:~/.openclaw# ss -tulpn | grep 18789
-tcp   LISTEN 0      511              127.0.0.1:18789      0.0.0.0:*    users:(("openclaw-gatewa",pid=2714644,fd=22))             
-tcp   LISTEN 0      511                  [::1]:18789         [::]:*    users:(("openclaw-gatewa",pid=2714644,fd=23)) 
-
-sudo kill -9 2714644
-```
-
-# Verify the syntax of openclaw.json
-jq . openclaw.json
-
-# Perform a complete re-registration and setup of the OpenClaw gateway
-# as a system background service (daemon),
-# overwriting any existing service configurations.
-openclaw gateway install --force 
-
-openclaw gateway restart
-
-openclaw gateway status
-
-View recent logs, e.g.: `tail -n 100 /tmp/openclaw-0/openclaw-2026-07-21.log`
+sudo systemctl restart drone-fastapi
+sudo systemctl status drone-fastapi
 ~~~
 
-
-&nbsp;
-## 3.2. MediaMTX for Livestream
-
-`MediaMTX` is installed and run on `launch-advisor-20260723/i-0xif3f3l5j6qwh8kapws 47.85.110.135`, an Alibaba ECS server in Virginia USA. 
-
-
-### 1. Installation
+Verify the chat API (mounted under `/api/chat`; identity is the logged-in JWT or the `X-Device-Id` header for anonymous visitors):
 
 ~~~
-root@iZ0xif3f3l5j6qwh8kapwsZ:~# mkdir mediamtx_v1.9.0
-root@iZ0xif3f3l5j6qwh8kapwsZ:~# cd mediamtx_v1.9.0/
+# Stored transcript for the current identity + page
+curl -s 'https://drone-navigation.com/api/chat/history?page=2d_map' -H 'X-Device-Id: <uuid>'
 
-root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# wget https://github.com/bluenviron/mediamtx/releases/download/v1.9.0/mediamtx_v1.9.0_linux_amd64.tar.gz
-root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# tar -xzf mediamtx_v1.9.0_linux_amd64.tar.gz
-root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# ls -l
-total 44156
--rw-r--r-- 1 root root     1062 Aug 26  2024 LICENSE
--rwxr-xr-x 1 root root 29860595 Aug 26  2024 mediamtx
--rw-r--r-- 1 root root 15317195 Aug 27  2024 mediamtx_v1.9.0_linux_amd64.tar.gz
--rw-r--r-- 1 root root    28112 Aug 26  2024 mediamtx.yml
+# Send one turn; the reply streams back as SSE
+curl -N -s 'https://drone-navigation.com/api/chat/turn' -H 'Content-Type: application/json' \
+     -d '{"page": "2d_map", "text": "Hello", "locale": "en"}'
+
+# Clear the stored context for the current identity + page
+curl -X DELETE 'https://drone-navigation.com/api/chat/context?page=2d_map' -H 'X-Device-Id: <uuid>'
 ~~~
 
-Start up `MediaMTX` using the executable file `mediamtx` for testing purpose.
-
-~~~
-root@iZ0xif3f3l5j6qwh8kapwsZ:~/mediamtx_v1.9.0# ./mediamtx
-2026/07/25 16:13:11 INF MediaMTX v1.9.0
-2026/07/25 16:13:11 INF configuration loaded from /root/mediamtx_v1.9.0/mediamtx.yml
-2026/07/25 16:13:11 INF [RTSP] listener opened on :8554 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
-2026/07/25 16:13:11 INF [RTMP] listener opened on :1935
-2026/07/25 16:13:11 INF [HLS] listener opened on :8888
-2026/07/25 16:13:11 INF [WebRTC] listener opened on :8889 (HTTP), :8189 (ICE/UDP)
-2026/07/25 16:13:11 INF [SRT] listener opened on :8890 (UDP)
-~~~
-
-&nbsp;
-### 2. Configuration
-
-See [`deployment/mediamtx/mediamtx.yml`](./mediamtx/mediamtx.yml) for the full configuration.
-
-&nbsp;
-### 3. System daemon service
-
-Register the MediaMTX as a new systemd service.
-
-~~~
-# 1. Reload systemd to recognize the new service:
-sudo systemctl daemon-reload
-
-# 2. Enable MediaMTX to start automatically on system boot:
-sudo systemctl enable mediamtx
-~~~
-
-Start, stop, restart, reload, status, journal log.
-
-~~~
-# 1. Start the service immediately:
-sudo systemctl start mediamtx
-
-# 2. Verify service status and logs
-sudo systemctl status mediamtx
-# (You should see an active (running) state in green).
-
-# 3. View live logs:
-journalctl -u mediamtx -f
-
-# 4. Stop service: 
-sudo systemctl stop mediamtx
-
-# 5. Restart service: 
-#    Reload configuration: If you update mediamtx.yml, simply run sudo systemctl restart mediamtx.
-sudo systemctl restart mediamtx
-~~~
+An hourly retention sweep (`chat_sweep_loop`, started with `drone-fastapi`) deletes `chat_context` rows older than `retention_days`.
 
 
 &nbsp;
-## 3.3. PostgreSQL Database
+## 3.2. PostgreSQL Database
 
 `PostgreSQL` stores the identity data for the `My Space -> Account` page (fastapi-users tables `"user"` and `oauth_account`) and the per-user settings document (`user_settings`, single-row JSONB) written by the `Save` button. It runs on the same ECS instance as Caddy (`8.221.124.43`, PostgreSQL 16 on Ubuntu 24.04).
 
@@ -551,7 +462,7 @@ cd server && ~/miniconda3/envs/drone-navigation/bin/python -m migrations.generat
 ```
 
 &nbsp;
-## 3.4. FastAPI for My\-Space (fastapi-users)
+## 3.3. FastAPI for My\-Space (fastapi-users)
 
 `FastAPI` + [`fastapi-users`](https://fastapi-users.github.io/) provides the `My Space -> Account` flows: email/password register + login (JWT), password reset and email verification (SMTP), Google OAuth, and `GET`/`PUT /api/users/me/settings` — the endpoints behind the `Save` button (logged-in: settings persisted to `user_settings`; logged-out: the SPA redirects to the Account page with a "please log in" banner). It runs on the same ECS instance as Caddy (`8.221.124.43`), behind the Caddy `/api/*` reverse proxy.
 
@@ -624,7 +535,7 @@ sudo journalctl -u drone-fastapi -f
 
 Refer to [`./fastapi/drone-fastapi.service`](./fastapi/drone-fastapi.service) for its content.
 
-On startup the app runs `Base.metadata.create_all` as a dev convenience; on a fresh server you should still run the migration script from section 3.3 first, because it also creates the `drone_api` role, the database, and the GRANTs. For production, wrap the uvicorn command in a systemd unit (same pattern as the MediaMTX unit in section 3.2).
+On startup the app runs `Base.metadata.create_all` as a dev convenience; on a fresh server you should still run the migration script from section 3.2 first, because it also creates the `drone_api` role, the database, and the GRANTs. For production, wrap the uvicorn command in a systemd unit.
 
 &nbsp;
 ### 4. Smoke test
@@ -649,251 +560,7 @@ curl -s http://127.0.0.1:8000/api/users/me/settings \
      -H "Authorization: Bearer <access_token>"   # returns the saved JSONB document
 ```
 
-End-to-end check from the browser (the goal of sections 3.3–3.4): open `My Space -> Account`, register and sign in; then on `My Space -> Settings` change a value and click the `Save` button in the left dock — a green "Your settings have been saved." banner appears and the document is persisted in PostgreSQL. Clicking `Save` while logged out instead redirects to `My Space -> Account` with a green "Please log in before saving." banner.
-
-
-&nbsp;
-## 3.5. Synapse Matrix
-
-`Synapse` powers the `Community -> Chat` page: in-site direct messages and team rooms. It runs on ECS 2 (`47.85.110.135`, alongside MediaMTX) and is reached **exclusively through the Tailscale mesh** (section 4.1) — its only listener binds to the Tailscale interface, so nothing Matrix-specific is exposed on the public internet.
-
-Website users never see Matrix: registering in `My Space -> Account` auto-provisions a hidden Synapse account (`@u_<id>:drone-navigation.com`), and logging in transparently brokers a client access token via the Synapse Admin API (single-account illusion). Public registration on the homeserver itself is disabled — the website is the only entrance.
-
-v1 scope: federation is **OFF** (no 8448 listener, no `.well-known`, no `matrix.drone-navigation.com` DNS record), rooms are not end-to-end encrypted, and storage is SQLite (migrate to PostgreSQL later with `synapse_port_db` if volume demands it).
-
-**Prerequisites**
-
-- Section 4.1 (Tailscale) completed on BOTH servers. Below, `<TAILSCALE_B>` = Tailscale IPv4 of ECS 2 (Synapse host), `<TAILSCALE_A>` = Tailscale IPv4 of ECS 1 (Caddy/FastAPI host).
-- Sections 3.3 (PostgreSQL) and 3.4 (FastAPI) already done on ECS 1.
-
-&nbsp;
-### 1. Installation (on ECS 2)
-
-```bash
-# Run on 47.85.110.135 as root (same account style as the MediaMTX setup)
-
-# 1. Create a virtualenv from the SYSTEM python3 (3.12+). Do NOT use a conda
-#    python here: the Anaconda "defaults" SQLite build lacks FTS4/FTS5, and
-#    Synapse's schema needs FTS4 ('no such module: fts4' at first start).
-python3 -m venv --without-pip /root/synapse-venv
-curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
-/root/synapse-venv/bin/python /tmp/get-pip.py
-
-# 2. Install Synapse (pinned to the version verified locally).
-#    NOTE: this host's /etc/pip.conf points at Alibaba's VPC-internal mirror
-#    (mirrors.cloud.aliyuncs.com), which does not always resolve — pass the
-#    public index explicitly:
-/root/synapse-venv/bin/pip install --index-url https://pypi.org/simple matrix-synapse==1.157.1
-
-# 3. Generate the initial config + data directory. cd INTO the data dir first:
-#    generate-config embeds CWD-absolute paths (database, media_store, pid,
-#    log) — running it from ~ would litter /root with homeserver.db etc.
-#    server-name = the PUBLIC domain: user IDs will be @user:drone-navigation.com
-mkdir -p ~/synapse-data && cd ~/synapse-data
-/root/synapse-venv/bin/python -m synapse.app.homeserver \
-  --server-name drone-navigation.com \
-  --config-path ~/synapse-data/homeserver.yaml \
-  --generate-config --report-stats=no
-```
-
-&nbsp;
-### 2. homeserver.yaml — Tailscale-only listener
-
-Edit `~/synapse-data/homeserver.yaml` on ECS 2:
-
-1. Keep exactly **one** listener entry, bound to the Tailscale IP (NOT `127.0.0.1`, NOT `0.0.0.0`):
-
-```yaml
-listeners:
-  - port: 8008
-    tls: false
-    type: http
-    x_forwarded: true
-    bind_addresses: ['<TAILSCALE_B>']
-    resources:
-      - names: [client]
-        compress: false
-```
-
-There is no 8448 entry (federation stays off) and no `federation` resource above. The Admin API (`/_synapse/admin/*`) is served by the `client` listener itself — Synapse has no separate `admin` resource name (passing one fails config validation at startup). `x_forwarded: true` lets Synapse log the real client IPs that Caddy forwards.
-
-2. Verify registration stays closed (users are provisioned by FastAPI, never by the public):
-
-```yaml
-enable_registration: false
-```
-
-3. Keep the generated SQLite `database` block, `macaroon_secret_key`, and `registration_shared_secret` unchanged.
-
-&nbsp;
-### 3. First start + service admin (on ECS 2)
-
-```bash
-# Foreground smoke run — Ctrl-C after verifying
-/root/synapse-venv/bin/python -m synapse.app.homeserver -c ~/synapse-data/homeserver.yaml
-```
-
-From **ECS 1**, prove the mesh path before going further:
-
-```bash
-curl http://<TAILSCALE_B>:8008/_matrix/client/versions
-# -> {"versions":[...,"v1.11"]}
-```
-
-Back on **ECS 2**, create the service admin user and harvest its long-lived access token:
-
-```bash
-/root/synapse-venv/bin/register_new_matrix_user \
-  -c ~/synapse-data/homeserver.yaml \
-  -u admin -p '<generate-a-strong-password>' --admin \
-  http://<TAILSCALE_B>:8008
-
-curl -s -X POST http://<TAILSCALE_B>:8008/_matrix/client/v3/login \
-  -H 'Content-Type: application/json' \
-  -d '{"type":"m.login.password","user":"admin","password":"<same-password>"}'
-# -> save the returned "access_token" (starts with syt_...); it goes into
-#    server/config.json on ECS 1 in step 5
-```
-
-&nbsp;
-### 4. systemd service (on ECS 2)
-
-Copy [`deployment/synapse/drone-synapse.service`](./synapse/drone-synapse.service) to `/etc/systemd/system/drone-synapse.service`, then:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now drone-synapse
-sudo systemctl status drone-synapse        # active (running)
-sudo journalctl -u drone-synapse -f        # live logs
-```
-
-Synapse coexists with MediaMTX without port conflicts: 8008 binds only to the Tailscale interface, while MediaMTX uses 8554/1935/8888/8889/8890 on the public interface.
-
-&nbsp;
-### 5. FastAPI wiring (on ECS 1)
-
-1. Add the `matrix_account` table (idempotent migration):
-
-```bash
-sudo cp ~/drone-navigation/server/migrations/002_matrix_account.sql /tmp/
-sudo chmod 644 /tmp/002_matrix_account.sql
-sudo -u postgres psql -v ON_ERROR_STOP=1 -d drone_navigation -f /tmp/002_matrix_account.sql
-```
-
-2. Edit `~/drone-navigation/server/config.json` — point the backend at Synapse over the mesh:
-
-```json
-"synapse": {
-  "base_url": "http://<TAILSCALE_B>:8008",
-  "server_name": "drone-navigation.com",
-  "admin_access_token": "<syt_... token from step 3>"
-}
-```
-
-3. Restart the backend:
-
-```bash
-sudo systemctl restart drone-fastapi
-sudo journalctl -u drone-fastapi -f
-```
-
-&nbsp;
-### 6. Caddy route (on ECS 1)
-
-Add a `/_matrix/*` block to BOTH site blocks in `/etc/caddy/Caddyfile` (apex `drone-navigation.com` and CDN edge `www.drone-navigation.com`), right after the existing `/api/*` block. Plain `handle` keeps the path prefix (Synapse routes include `/_matrix`):
-
-```plain
-# Synapse Matrix client API (over the Tailscale mesh)
-handle /_matrix/* {
-    reverse_proxy <TAILSCALE_B>:8008 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-    }
-}
-```
-
-Then format, validate, and reload:
-
-```bash
-caddy fmt --overwrite /etc/caddy/Caddyfile
-caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
-```
-
-The repo copy [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) carries this block with the live Tailscale IP — keep the two in sync on every route change.
-
-&nbsp;
-### 7. Smoke tests
-
-```bash
-# 1. Mesh + homeserver (from ECS 1)
-curl http://<TAILSCALE_B>:8008/_matrix/client/versions
-
-# 2. Public client API through Caddy (apex direct, and via the CDN edge)
-curl https://drone-navigation.com/_matrix/client/versions
-curl https://www.drone-navigation.com/_matrix/client/versions
-
-# 3. Token brokering through the whole stack
-TOKEN=$(curl -s -X POST https://drone-navigation.com/api/auth/jwt/login \
-  -H 'Content-Type: application/x-www-form-urlencoded' \
-  -d 'username=me@example.com&password=Secret123!' | jq -r .access_token)
-curl -s https://drone-navigation.com/api/matrix/token \
-  -H "Authorization: Bearer $TOKEN"
-# -> {"homeserver_url":"","access_token":"syt_...",
-#     "user_id":"@u_...:drone-navigation.com","device_id":null}
-```
-
-The first `/api/matrix/token` call for any pre-existing website user lazily provisions their hidden Synapse account — no manual step needed.
-
-Browser end-to-end: sign in as two different accounts (two browsers or profiles), open `Community -> Chat`, start a New chat with the other user, exchange messages both ways, reload and confirm history persists; then create a team room containing both.
-
-&nbsp;
-### 8. Deleting a website user (incl. Matrix cleanup)
-
-Deleting the PostgreSQL row alone is NOT enough: the hidden Synapse account and its access tokens survive. Token brokering issues *admin-puppeted* tokens — they live in `access_tokens` under `@admin:drone-navigation.com` with `puppets_user_id` set to the hidden account — and Synapse's deactivation does not revoke them (an old chat token keeps passing `whoami` until the row is gone).
-
-1. **PostgreSQL (ECS 1)** — deleting from `"user"` cascades to `matrix_account`, `user_settings`, and `oauth_account`:
-
-```bash
-sudo -u postgres psql -d drone_navigation \
-  -c "DELETE FROM \"user\" WHERE email = '<user@example.com>';"
-```
-
-2. **Synapse (ECS 2)** — deactivate + erase the hidden account (erases its messages; the mxid was stored in `matrix_account`, format `@u_<hex8>:drone-navigation.com`; URL-encode `@` -> `%40`, `:` -> `%3A`):
-
-```bash
-curl -s -X POST http://<TAILSCALE_B>:8008/_synapse/admin/v1/deactivate/<url-encoded-mxid> \
-  -H "Authorization: Bearer <admin syt_ token>" -H 'Content-Type: application/json' \
-  -d '{"erase": true}'
-```
-
-3. **Kill its live tokens (ECS 2)**, then restart to flush Synapse's in-process auth cache:
-
-```bash
-/root/synapse-venv/bin/python -c "import sqlite3; \
-  db = sqlite3.connect('/root/synapse-data/homeserver.db'); \
-  db.execute(\"DELETE FROM access_tokens WHERE puppets_user_id = '<mxid>'\"); db.commit()"
-sudo systemctl restart drone-synapse
-```
-
-Verify: website login -> `LOGIN_BAD_CREDENTIALS`; old chat token -> `M_UNKNOWN_TOKEN` from `https://drone-navigation.com/_matrix/client/v3/account/whoami`.
-
-&nbsp;
-### 9. Troubleshooting
-
-| Symptom | Likely cause / check |
-|---------|----------------------|
-| `503 Chat service unavailable` from `/api/matrix/token` | Wrong `base_url`/token in `server/config.json`, or Synapse down — `journalctl -u drone-fastapi -f` (ECS 1) and `journalctl -u drone-synapse -f` (ECS 2) |
-| `curl http://<TAILSCALE_B>:8008/...` times out from ECS 1 | Tailscale down (`tailscale status`), or listener bound to the wrong IP — `ss -tulpn \| grep 8008` on ECS 2 must show the 100.x address |
-| `sqlite3.OperationalError: no such module: fts4` at first start | The python's bundled SQLite lacks FTS4 (conda's Anaconda-"defaults" build) — rebuild the env from the SYSTEM python3 per step 1 |
-| `table background_updates already exists` at first start | Stale DB from a previously crashed first start — delete `homeserver.db*` (check BOTH `~/synapse-data/` and `~/`, see step 1 note) and start again |
-| pip `Failed to resolve 'mirrors.cloud.aliyuncs.com'` | `/etc/pip.conf` points at Alibaba's VPC-internal mirror, which doesn't resolve outside the VPC — always pass `--index-url https://pypi.org/simple` |
-| DNS stops resolving right after `tailscale up` | tailscaled's MagicDNS wedged systemd-resolved — re-run `tailscale up --accept-dns=false` on the server (persistent pref), then `systemctl restart tailscaled systemd-resolved`; if still broken, `resolvectl revert tailscale0` |
-| Chat works via apex but `/sync` drops every ~30–60 s when the page is loaded via `www` | CDN edge killing long-polls (same family as the customer-service WebSocket issue) — use the apex domain until the CDN behavior is addressed |
-| Old chat access token still works after the website user was deleted | Admin-puppeted tokens survive Synapse deactivation — complete steps 2–3 of section 3.5.8 (delete `access_tokens` by `puppets_user_id`, then restart) |
-
-Deferred to later phases (explicit v1 non-goals): federation Variant A provisioning (8448 listener, `.well-known/matrix/server`, `matrix.drone-navigation.com` A record), E2EE, media attachments, OpenClaw appservice bridge, SQLite→PostgreSQL migration, stale-device cleanup, message retention, push notifications.
-
+End-to-end check from the browser (the goal of sections 3.2–3.3): open `My Space -> Account`, register and sign in; then on `My Space -> Settings` change a value and click the `Save` button in the left dock — a green "Your settings have been saved." banner appears and the document is persisted in PostgreSQL. Clicking `Save` while logged out instead redirects to `My Space -> Account` with a green "Please log in before saving." banner.
 
 
 &nbsp;
@@ -901,7 +568,9 @@ Deferred to later phases (explicit v1 non-goals): federation Variant A provision
 
 ## 4.1. Tailscale VPN
 
-`Tailscale` builds a private WireGuard mesh ("tailnet") between the two ECS servers. It carries the **private plane**: Caddy's `/_matrix/*` reverse-proxy traffic and FastAPI's Synapse Admin API calls. Because Synapse binds only to the `tailscale0` interface (section 3.5), no Matrix port is ever exposed on the public internet. Both servers join the same tailnet under one Tailscale account.
+`Tailscale` builds a private WireGuard mesh ("tailnet") between the two ECS servers. It provides a **private plane**: anything bound to the `tailscale0` interface is reachable from the other server without ever being exposed on the public internet. Both servers join the same tailnet under one Tailscale account.
+
+> **Note:** for the time being, **nothing is installed on ECS 2** (`47.85.110.135`) — it joins the tailnet as a reserved node, so a future private-plane service can be added without opening any public port.
 
 &nbsp;
 ### 1. Install + join (on BOTH servers)
@@ -924,12 +593,12 @@ ping -c 3 <other-100.x>          # ICMP over the mesh
 tailscale ping <other-100.x>     # shows the direct path or DERP relay in use
 ```
 
-Record the addresses — they are the `<TAILSCALE_A>` / `<TAILSCALE_B>` placeholders used in section 3.5:
+Record the addresses — they are the `<TAILSCALE_A>` / `<TAILSCALE_B>` placeholders for any future private-plane service:
 
 | Server | Public IP | Tailscale IPv4 | Role |
 |--------|-----------|----------------|------|
-| ECS 1 | `8.221.124.43` | `<TAILSCALE_A>` | Caddy + FastAPI + PostgreSQL + OpenClaw |
-| ECS 2 | `47.85.110.135` | `<TAILSCALE_B>` | Synapse + MediaMTX |
+| ECS 1 | `8.221.124.43` | `<TAILSCALE_A>` | Caddy + FastAPI + PostgreSQL |
+| ECS 2 | `47.85.110.135` | `<TAILSCALE_B>` | nothing installed for the time being (reserved node) |
 
 &nbsp;
 ### 3. Disable key expiry (mandatory for servers)
@@ -939,100 +608,7 @@ In the Tailscale admin console (`https://login.tailscale.com/admin/machines`), f
 &nbsp;
 ### 4. Notes
 
-- **Server DNS**: join with `tailscale up --accept-dns=false` on servers. MagicDNS is meant for client devices; on these Alibaba Ubuntu images it wedged systemd-resolved (all lookups timed out until reverted). See the section 3.5 troubleshooting table.
+- **Server DNS**: join with `tailscale up --accept-dns=false` on servers. MagicDNS is meant for client devices; on these Alibaba Ubuntu images it wedged systemd-resolved (all lookups timed out until reverted).
 - **Alibaba security groups**: no new inbound rules are needed — Tailscale NAT-traverses using outbound connections and falls back to DERP relays. Optionally open UDP `41641` on both servers for faster direct links.
-- **ACLs**: the default tailnet policy lets all nodes reach each other (fine for two servers). An ACL restricting port 8008 to just these two machines can be added later.
-- Renaming the machines in the admin console (e.g. `ecs-caddy`, `ecs-synapse`) makes `tailscale status` output and logs easier to read.
-
-
-
-&nbsp;
-# 5. Extension
-
-The two extensions under `extension/` run where the hardware is — in practice the maintainer's Ubuntu desktop — and publish **into** the production servers:
-
-| Extension | What it does | Publishes into production |
-|---|---|---|
-| `extension/simple_webcam` | Grabs the desktop webcam and WHIP-ingests it as one MediaMTX stream | MediaMTX on ECS 2, via Caddy (`https://drone-navigation.com/live/*` -> `:8889`) |
-| `extension/crazyflie_bridge` | Four processes around one Crazyradio link: MJPEG video proxy (`:8082`), motion-control WebSocket (`:8765`), telemetry relay (drone <-> FastAPI), drone-camera WHIP publisher | Video -> MediaMTX on ECS 2; telemetry -> FastAPI on ECS 1 (`wss://drone-navigation.com/api/drone/telemetry/publish`, via the Caddy `/api/*` proxy) |
-
-Both default to PRODUCTION — no environment variables are needed to serve the real site. Set `MEDIAMTX_URL` / `MEDIAMTX_API` / `TELEMETRY_SERVER` only when targeting a local stack instead (that local flow is covered by the platform READMEs at the repository root).
-
-&nbsp;
-## 5.1. Prerequisites (Ubuntu desktop)
-
-1. Clone the repo to `~/drone-navigation` and create the shared conda environment:
-
-```bash
-conda create -n drone-navigation python=3.12 -y
-conda activate drone-navigation
-pip install -r ~/drone-navigation/extension/simple_webcam/requirements.txt
-pip install -r ~/drone-navigation/extension/crazyflie_bridge/requirements.txt
-```
-
-2. (Drone only) one-time udev rules so userland can reach the Crazyradio PA, and the drone itself over USB (used when changing its EEPROM identity):
-
-```bash
-echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1915", ATTR{idProduct}=="7777", MODE="0666"
-SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5740", MODE="0666"' \
-  | sudo tee /etc/udev/rules.d/99-crazyflie.rules
-sudo udevadm control --reload && sudo udevadm trigger
-lsusb | grep 1915        # Nordic Semiconductor — the Crazyradio is visible
-```
-
-3. (Drone only) the drone's AI-Deck joins the same LAN as the desktop — find its IP (`nmap -sn 192.168.0.0/24`, then browse the `http://192.168.0.x` candidates until one shows the livestream). The examples below use `192.168.0.110`.
-
-&nbsp;
-## 5.2. simple_webcam (webcam -> production MediaMTX)
-
-```bash
-cd ~/drone-navigation/extension/simple_webcam
-conda activate drone-navigation
-python simple_webcam.py            # publishes stream id 'ubuntu-webcam' to PRODUCTION
-```
-
-Environment variables (defaults target production):
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `MEDIAMTX_URL` | `https://drone-navigation.com/live` | WHIP base URL (Caddy proxies `/live/*` -> ECS 2 `:8889`) |
-| `MEDIAMTX_API` | `https://drone-navigation.com/control-api` | control API (Caddy proxies `/control-api/*` -> ECS 2 `:9997`) |
-| `LIVESTREAM_ID` | `ubuntu-webcam` | MediaMTX path / stream id |
-
-Verify: `curl https://drone-navigation.com/control-api/v3/paths/list` shows the id, and the website's `Real Drone -> Livestream Viewer` plays it. Which ids the SPA lists comes from the `"mediamtx": { "streams": [...] }` catalog in the deployed `server/config.json` — both `crazyflie-drone` and `ubuntu-webcam` are present by default (see `server/config.example.json`).
-
-systemd variant: [`deployment/local-systemd/drone-webcam.service`](./local-systemd/drone-webcam.service) wraps the same publisher as a systemd **user** service — but note it overrides `MEDIAMTX_URL` / `MEDIAMTX_API` to `127.0.0.1` (it is meant for the local stack, section 11 of `README-ubuntu.md`). For production publishing, run the publisher manually as above or edit the unit's `Environment=` lines first.
-
-&nbsp;
-## 5.3. crazyflie_bridge (real drone -> production)
-
-Plug in the Crazyradio PA and power the drone, then launch all four processes with one script (it self-activates the `drone-navigation` conda env):
-
-```bash
-cd ~/drone-navigation/extension/crazyflie_bridge
-CRAZYFLIE_IP="192.168.0.110" RADIO_URL="radio://0/80/2M/E7E7E7E7E7" ./start_bridge.sh
-#    = video_stream_proxy.py  (re-broadcasts http://$CRAZYFLIE_IP/stream on :8082)
-#    + motion_control_ws.py   (ws://:8765; set RADIO_URL env var, or pass
-#      --cf-uri to the script, to change the radio identity)
-#    + telemetry_relay.py     (telemetry + flight commands, drone <-> FastAPI)
-#    + crazyflie_mediamtx.py  (drone camera -> MediaMTX WHIP, id 'crazyflie-drone')
-#    Stop: Ctrl+C (press twice to force) — lands the drone first if flying.
-```
-
-Environment variables (defaults target production):
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `CRAZYFLIE_IP` | `192.168.0.106` (script default) | drone AI-Deck IP — override as shown above |
-| `RADIO_URL` | — | convenience alias for `--cf-uri`; pass a different radio URI, e.g. `radio://0/14/2M/E7E7E7E707`, to connect to a specific drone (the CLI `--cf-uri` still wins if both are given) |
-| `TELEMETRY_SERVER` | `wss://drone-navigation.com/api/drone/telemetry/publish` | FastAPI ingest WebSocket; the command downlink derives from it (`.../command/downlink`) |
-| `TELEMETRY_TOKEN` | empty | must match `"drone": { "telemetry_token" }` in the deployed `server/config.json` if set there (empty = open) |
-| `MEDIAMTX_URL` / `MEDIAMTX_API` | production `/live` + `/control-api` | same meaning as in 5.2 |
-| `LIVESTREAM_ID` | `crazyflie-drone` | stream id for the drone camera |
-| `CF_NO_FLY` | — | `=1` refuses every takeoff (bench dry-run) |
-
-Smoke test without flying: `python e2e_command_check.py` validates the full command chain. Then the website's `Livestream Host` HUD shows `Link live | ~20 Hz` with real position / attitude / battery, and the Takeoff/Stop/Landing button + Flight disk fly the drone. Safety rule that is always in effect: takeoff is **refused on a USB cable** (`usb://*`) — flight goes over the Crazyradio only.
-
-Multi-drone note: the default radio URI is for SOLO use — same channel + same address = cross-control. To fly several drones in one room, provision each drone's EEPROM identity once over its USB cable (`python provision_drone.py --channel 14 --address E7E7E7E707` writes the identity, then verifies it over the radio after a power-cycle) and connect with `RADIO_URL="radio://0/14/2M/E7E7E7E707" ./start_bridge.sh` (or `./start_bridge.sh --cf-uri radio://0/14/2M/E7E7E7E707`). Give each drone a distinct channel, >=2 MHz apart at 2M datarate; `--read-only` prints the current identity without writing.
-
-
+- **ACLs**: the default tailnet policy lets all nodes reach each other (fine for two servers). Per-port ACL restrictions can be added later, once a private-plane service exists.
+- Renaming the machines in the admin console (e.g. `ecs-caddy`, `ecs-spare`) makes `tailscale status` output and logs easier to read.
