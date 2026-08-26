@@ -25,6 +25,10 @@ const props = defineProps({
   isPicking: { type: Boolean, default: false },
   isPanelOpen: { type: Boolean, default: false },
   showDroneMarker: { type: Boolean, default: true },
+  // Waypoint circles are press-and-drag editable by default (Route Planning);
+  // read-only route illustrations (3D Exploration -> Route) pass false so the
+  // dots are plain markers: not clickable, not draggable.
+  waypointsEditable: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease']);
@@ -636,24 +640,27 @@ function waypointIcon(label, selected) {
 }
 
 // Add a numbered waypoint marker. Pressing it turns it red and makes it
-// draggable; releasing turns it back to blue.
+// draggable; releasing turns it back to blue. Read-only maps (the
+// waypointsEditable prop is false) get inert markers instead.
 function addWaypointMarker(lat, lng, label, selected, id) {
   if (!mapsApi || !map.value) return;
   const marker = new mapsApi.Marker({
     position: new mapsApi.LatLng(lat, lng),
     map: map.value,
     icon: waypointIcon(label, selected),
-    clickable: true,
-    cursor: 'pointer',
+    clickable: props.waypointsEditable,
+    cursor: props.waypointsEditable ? 'pointer' : undefined,
   });
   marker.wpId = id;
   marker.wpLabel = label;
-  marker.addListener('mousedown', () => {
-    selectedWaypointId = id;
-    marker.setIcon(waypointIcon(label, true));
-    emit('waypointPress', id);
-    startWaypointDrag(marker, id);
-  });
+  if (props.waypointsEditable) {
+    marker.addListener('mousedown', () => {
+      selectedWaypointId = id;
+      marker.setIcon(waypointIcon(label, true));
+      emit('waypointPress', id);
+      startWaypointDrag(marker, id);
+    });
+  }
   waypointMarkers.push(marker);
 }
 

@@ -155,6 +155,7 @@ function onClickSearch() {
   // zoom the user currently has (leaving 3D first if needed).
   if (!isStreet.value) enterStreetFrom3d();
   viewCtx.subView = 'search';
+  snapshotMap();
   // The Search view marks the picked address with the red balloon.
   if (selectedLatLng.value) {
     mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
@@ -166,6 +167,7 @@ function onClickRoute() {
   // WITHOUT the red balloon. Leaving 3D first matches the current view.
   if (!isStreet.value) enterStreetFrom3d();
   viewCtx.subView = 'route';
+  snapshotMap();
   mapViewRef.value?.setSelectionMarkerVisible(false);
 }
 
@@ -174,6 +176,24 @@ function enterStreetFrom3d() {
   // the street map opens at the same location and ground scale (zoom level)
   // the user was seeing in 3D. drone.alt itself stays the true altitude.
   mapAlt.value = routeScene.modelAltForMapScale(drone.alt, drone.lat);
+}
+
+// ── Lossless 2D<->3D round trips ──────────────────────────────────────────
+// Snapshot of the map state (center + zoom height) taken when the street
+// map is entered. Pans / zooms / search picks mutate drone.lat/lon or
+// mapAlt (the map emits those events only for real interactions), so
+// comparing against the snapshot tells whether the user moved the map.
+let knownMap = null;
+function snapshotMap() {
+  knownMap = { lat: drone.lat, lon: drone.lon, alt: mapAlt.value };
+}
+function mapMoved() {
+  if (!knownMap) return true;
+  return (
+    Math.abs(drone.lat - knownMap.lat) > 1e-9 ||
+    Math.abs(drone.lon - knownMap.lon) > 1e-9 ||
+    Math.abs(mapAlt.value - knownMap.alt) > 1e-6
+  );
 }
 
 function onSearchSubmit() {
@@ -206,12 +226,31 @@ function onMapZoomChange(alt) {
 }
 
 // The Google Map is recreated whenever we return from the 3D view; re-apply
-// the picked-address balloon if we are back on the Search view.
+// the picked-address balloon if we are back on the Search view, and the
+// read-only route illustration if we are back on the Route view.
 function onMapReady() {
   if (isStreet.value && showSearchPanel.value && selectedLatLng.value) {
     mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
   }
+  if (routeActive.value) redrawRouteMarkers();
 }
+
+// Read-only route illustration (Content -> Steer handoff): while the Route
+// sub-view is active, the carried route (session.route) is drawn exactly as
+// Route Planning draws it — numbered blue dots linked by the blue spline —
+// but NOT editable: this page's MapView passes waypoints-editable=false, so
+// the dots are inert (not draggable).
+function redrawRouteMarkers() {
+  mapViewRef.value?.redrawWaypointMarkers(session.route.waypoints, null);
+}
+function clearRouteMarkers() {
+  mapViewRef.value?.redrawWaypointMarkers([], null);
+}
+watch(routeActive, (active) => {
+  if (!isStreet.value) return; // leaving for 3D unmounts the map (it cleans up)
+  if (active) redrawRouteMarkers();
+  else clearRouteMarkers();
+});
 
 // Great-circle distance (meters) between two lat/lon pairs.
 function haversineMeters(aLat, aLng, bLat, bLng) {
@@ -401,14 +440,21 @@ function flashTakeoffLimitNotice() {
 //   disks together — the old separate Camera button is gone.
 function toggleSteer() {
   if (isStreet.value) {
-    // The 2D map height is Google's nominal model altitude; convert it to
-    // the true camera altitude that shows the SAME ground scale in the 3D
-    // nadir view (otherwise the 3D view looks ~4-6x more zoomed in).
-    drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
-    drone.heading = 0;
-    gimbal.yaw = 0;
-    gimbal.pitch = -90; // look straight down, satellite style
-    gimbal.roll = 0;
+    if (mapMoved()) {
+      // The map was panned / zoomed / re-picked while in street mode: the
+      // lift re-matches the map. The 2D map height is Google's nominal model
+      // altitude; convert it to the true camera altitude that shows the SAME
+      // ground scale in the 3D nadir view (otherwise the 3D view looks ~4-6x
+      // more zoomed in).
+      drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
+      drone.heading = 0;
+      gimbal.yaw = 0;
+      gimbal.pitch = -90; // look straight down, satellite style
+      gimbal.roll = 0;
+    }
+    // Untouched map: the 3D pose (altitude / heading / gimbal) was never
+    // invalidated, so the lift restores the exact view left behind.
+    knownMap = null;
     viewCtx.subView = 'steer';
     return;
   }
@@ -659,6 +705,9 @@ onMounted(() => {
   startFlightKeyboard();
   startCameraKeyboard();
   syncCesiumCamera();
+  // Mounted already in street mode (restored sub-view): remember the map
+  // state so an untouched lift back to Steer restores the 3D pose.
+  if (isStreet.value) snapshotMap();
 
   // Initial connection check and periodic re-check.
   checkGoogleConnection();
@@ -804,6 +853,7 @@ onUnmounted(() => {
         :heading="drone.heading"
         :is-picking="false"
         :show-drone-marker="false"
+        :waypoints-editable="false"
         @mapReady="onMapReady"
         @centerChange="onMapCenterChange"
         @zoomChange="onMapZoomChange"
