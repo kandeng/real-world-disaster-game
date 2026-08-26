@@ -7,7 +7,7 @@
  * Domains are migrated in, one phase at a time (state moves, behavior stays in
  * the composables that own it):
  *   Phase 1  pose   – drone + gimbal            (wired via useDrone, done)
- *   Phase 2  route  – waypoints + route meta    (planned: RoutePlanningView)
+ *   Phase 2  route  – waypoints + route meta    (wired via RoutePlanningView, done)
  *   Phase 3  view   – page/sub-view/2D-3D/mapType/selection/search (planned)
  *   +        user   – identity mirror of useAuth (optional)
  *
@@ -38,7 +38,7 @@ export const session = reactive({
     roll: settings.defaultRoll,
   },
 
-  // ── Phase 2: route (populated once RoutePlanningView migrates) ──────────
+  // ── Phase 2: route (owned here; edited via RoutePlanningView) ───────────
   route: {
     waypoints: [],        // maintained waypoint list [{id,index,lat,lng,alt,speed,camYaw,camPitch,camRoll}]
     selectedWpId: null,   // red (selected) waypoint circle

@@ -1,9 +1,8 @@
 /**
  * API client for the per-user saved flight routes (Content -> Route),
- * plus a one-shot handoff channel used by the Steer and Video buttons to
- * open the Route Planning page with exactly this route's waypoints listed
- * (Video additionally asks for the video dialog to open right after
- * landing, reusing Route Planning's own Video flow).
+ * plus the one-shot video signal used by the Content -> Route -> Video
+ * jump (route data travels through session.route; only the "open the
+ * video dialog right after landing" intent is one-shot).
  */
 
 import { useAuth } from './useAuth.js';
@@ -13,21 +12,21 @@ import { apiBaseUrl } from './wsUrl.js';
 // never caches /api/*, so going through it would add a wasted hop.
 const API_BASE = apiBaseUrl();
 
-// One-shot handoff: Content -> Route stores { id, waypoints } here for
-// Steer, and the same payload plus openVideo: true for Video (the id
-// lets Route Planning tell "modified existing route" from "brand-new
-// route" when its Video flow saves back to Content -> Route); Route
-// Planning consumes (and clears) the payload on mount.
-let handoff = null;
+// One-shot "open the video dialog after landing" signal for the
+// Content -> Route -> Video jump. The route DATA itself travels through
+// session.route (seeded by the caller before navigating); only this
+// transient intent is one-shot. setRouteVideoSignal() arms it,
+// takeRouteVideoSignal() consumes it exactly once.
+let routeVideoSignal = false;
 
-export function setRouteHandoff(payload) {
-  handoff = payload;
+export function setRouteVideoSignal(on) {
+  routeVideoSignal = !!on;
 }
 
-export function takeRouteHandoff() {
-  const h = handoff;
-  handoff = null;
-  return h;
+export function takeRouteVideoSignal() {
+  const s = routeVideoSignal;
+  routeVideoSignal = false;
+  return s;
 }
 
 // Module-level cache of the last successful GET /api/routes payload.

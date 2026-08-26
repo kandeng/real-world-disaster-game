@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, h, ref, computed, watch, toRef } from 'vue';
+import { onMounted, onUnmounted, h, ref, computed, watch, toRef, toRefs } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import { MapView } from '@/2d_map/index.js';
@@ -11,7 +11,7 @@ import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import { useAuth } from '@shared-composables/useAuth.js';
-import { takeRouteHandoff, useRoutes } from '@shared-composables/useRoutes.js';
+import { useRoutes, takeRouteVideoSignal } from '@shared-composables/useRoutes.js';
 import DockButton from '@shared/DockButton.vue';
 import ConnectionError from '@shared/ConnectionError.vue';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
@@ -25,6 +25,18 @@ const { session } = useSessionState();
 // from the true drone/camera altitude (drone.alt). They are reconciled only
 // at the 3D<->2D boundary (watch(is3d)).
 const mapAlt = toRef(session.view, 'mapAlt');
+// Phase 2 (session-state migration): the route being edited lives in the
+// session store, so unsaved waypoints + route meta survive page switches.
+// toRefs yields drop-in refs — every existing `.value` usage (and the
+// template v-models) keeps working unchanged.
+const {
+  waypoints,
+  selectedWpId,
+  sourceRouteId,
+  title: routeTitle,
+  description: routeDescription,
+  createdAt: routeCreatedAt,
+} = toRefs(session.route);
 // Login state: the finished preview video is only handed out to logged-in
 // users (same gate as the captures on 3D Exploration -> 3D Aerial).
 const { isAuthenticated } = useAuth();
@@ -121,8 +133,8 @@ function onClickSearch() {
 
 // ── Waypoint picking (green reminder + numbered blue rectangles) ──────────
 const showWaypointHint = ref(false);
-// Maintained waypoint list; indices start at 1 and increment per click.
-const waypoints = ref([]);
+// Maintained waypoint list (session.route.waypoints); indices start at 1
+// and increment per click.
 
 function onWaypointClick() {
   if (controlsLocked.value) return; // locked during preview / save flights
@@ -166,7 +178,7 @@ function onMapReady() {
 }
 
 // ── Route panel: draggable waypoint list ──────────────────────────────────
-let wpSeq = 0; // stable row id (Vue :key) independent of the position index
+let wpSeq = session.route.waypoints.reduce((m, w) => Math.max(m, Number(w.id) || 0), 0); // stable row id (Vue :key) independent of the position index; derived from the carried list so restored waypoints never collide
 
 // Default waypoint values, used both when a waypoint is created and to
 // backfill any missing field when the Route list is opened.
@@ -230,8 +242,8 @@ function onEditCoord(event, pos, field) {
 const WP_ROW_HEIGHT = 84;
 const drag = ref(null); // { startPos, curPos, startY, offset }
 
-// Waypoint row whose cancel icon is currently visible (clicked row).
-const selectedWpId = ref(null);
+// Waypoint row whose cancel icon is currently visible (clicked row):
+// session.route.selectedWpId (red circle on the map).
 
 function onRowPointerDown(event, pos) {
   if (event.button !== 0) return;
@@ -611,26 +623,22 @@ let previewHintTimer = null;
 const showAuthNotice = ref(false);
 let authNoticeTimer = null;
 
-// Id of the saved route this editing session belongs to. Null = brand-new
-// route (Case 1); set by the Steer handoff (Case 2) or after the first
-// successful save, so later saves update instead of duplicating.
-const sourceRouteId = ref(null);
+// sourceRouteId (session.route): id of the saved route this editing
+// session belongs to. Null = brand-new route (Case 1); set by the
+// Content -> Route seeding (Case 2) or after the first successful save,
+// so later saves update instead of duplicating.
 // True while a POST/PUT /api/routes request is in flight (Save/Update
 // button in the Route panel stays disabled meanwhile).
 const routeSaving = ref(false);
 // Saved route object handed to the video dialog (null = dialog closed).
 const videoRoute = ref(null);
-// Title / description of the route being edited (the Route panel inputs
-// under the waypoint list). Sent to the API on Save/Update; on create an
-// empty title makes the server mint the default one.
-const routeTitle = ref('');
-const routeDescription = ref('');
-// Creation time of the carried route (Content -> Route handoff), so the
-// video dialog shows the route's own timestamp before any save happens.
-const routeCreatedAt = ref('');
+// routeTitle / routeDescription / routeCreatedAt (session.route): the Route
+// panel inputs under the waypoint list, sent to the API on Save/Update (on
+// create an empty title makes the server mint the default one); createdAt
+// lets the video dialog show the route's own timestamp before any save.
 
 // Label of the Save/Update button in the Route panel: Case 1 (no saved
-// route yet) vs Case 2 (Steer handoff or already saved once).
+// route yet) vs Case 2 (Content -> Route seeding or already saved once).
 const saveRouteLabel = computed(() =>
   t(sourceRouteId.value != null ? 'routeplanningview.save_route_update' : 'routeplanningview.save_route_new')
 );
@@ -787,26 +795,22 @@ onMounted(() => {
   // 2D street map, the page's entry state.)
   registerRightDock();
 
-  // Content -> Route -> Steer / Video handoff: list the carried route's
-  // waypoints and pop the Route panel so the user lands on exactly that
-  // route. The carried id marks this session as Case 2 (modified existing
+  // Phase 2: the route being edited lives in the session store — Content
+  // -> Route seeds session.route BEFORE navigating, and plain page switches
+  // keep it alive, so on every (re)mount we simply restore the carried
+  // state: list the waypoints in the Route panel and redraw the map. The
+  // carried sourceRouteId marks this session as Case 2 (modified existing
   // route): the Video flow then updates that route instead of creating a
-  // new one. With openVideo (Content -> Route -> Video) the dialog opens
-  // right after landing via this page's own Video flow.
-  const handoff = takeRouteHandoff();
-  if (handoff && Array.isArray(handoff.waypoints) && handoff.waypoints.length) {
-    sourceRouteId.value = handoff.id != null ? handoff.id : null;
-    routeTitle.value = handoff.title || '';
-    routeDescription.value = handoff.description || '';
-    routeCreatedAt.value = handoff.created_at || '';
-    waypoints.value = handoff.waypoints.map((w, i) => ({ ...w, id: ++wpSeq, index: i + 1 }));
+  // new one. The one-shot video signal (Content -> Route -> Video) opens
+  // the dialog right after landing via this page's own Video flow.
+  if (waypoints.value.length) {
     ensureWaypointDefaults();
     showRoutePanel.value = true;
     showSearchPanel.value = false;
     showWaypointHint.value = false;
     mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
-    if (handoff.openVideo) onClickVideo();
   }
+  if (takeRouteVideoSignal()) onClickVideo();
 
   // Keep dock buttons' active (green-border) state in sync. Video greens
   // while its dialog is open (incl. settling / downloading the clip);

@@ -6,7 +6,8 @@ import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import LoadingSpinner from '@shared/LoadingSpinner.vue';
 import WaypointCards from '@shared/WaypointCards.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
-import { useRoutes, setRouteHandoff, cachedRoutes } from '@shared-composables/useRoutes.js';
+import { useRoutes, setRouteVideoSignal, cachedRoutes } from '@shared-composables/useRoutes.js';
+import { useSessionState } from '@shared-composables/useSessionState.js';
 
 // Content -> Route: the user's saved routes, most recent first, separated
 // by thin horizontal lines. Each entry collapses to title + creation time
@@ -17,6 +18,21 @@ const { t, locale } = useI18n();
 const router = useRouter();
 const { isAuthenticated } = useAuth();
 const { listRoutes, saveRoute } = useRoutes();
+const { session } = useSessionState();
+
+// Phase 2 (session-state migration): the Steer / Video jumps seed the
+// session store's route domain BEFORE navigating, replacing the old
+// one-shot handoff. Assigning a fresh array/object keeps reactivity clean
+// and the local row ids (:key) unique; Route Planning derives its wpSeq
+// from the carried ids on mount.
+function seedSessionRoute(r) {
+  session.route.sourceRouteId = r.id != null ? r.id : null;
+  session.route.title = r.title || '';
+  session.route.description = r.description || '';
+  session.route.createdAt = r.created_at || '';
+  session.route.waypoints = (r.waypoints || []).map((w, i) => ({ ...w, id: i + 1, index: i + 1 }));
+  session.route.selectedWpId = null;
+}
 
 const routes = ref([]);
 const loading = ref(false);
@@ -89,28 +105,16 @@ async function onSave(r) {
 // and open the video generation dialog THERE — same code path as clicking
 // Route Planning -> Video, so the dialog lives in one place only.
 function onVideo(r) {
-  setRouteHandoff({
-    id: r.id,
-    title: r.title,
-    description: r.description || '',
-    created_at: r.created_at,
-    waypoints: r.waypoints.map((w) => ({ ...w })),
-    openVideo: true,
-  });
+  seedSessionRoute(r);
+  setRouteVideoSignal(true);
   router.push({ name: 'RoutePlanning' });
 }
 
 // Jump to Route Planning with this route's waypoints listed; the id rides
-// along so the Video flow there updates THIS route instead of minting a
-// new one.
+// along (in session.route.sourceRouteId) so the Video flow there updates
+// THIS route instead of minting a new one.
 function onSteer(r) {
-  setRouteHandoff({
-    id: r.id,
-    title: r.title,
-    description: r.description || '',
-    created_at: r.created_at,
-    waypoints: r.waypoints.map((w) => ({ ...w })),
-  });
+  seedSessionRoute(r);
   router.push({ name: 'RoutePlanning' });
 }
 </script>
