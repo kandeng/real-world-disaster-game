@@ -85,14 +85,20 @@ const connectionMessage = computed(() => {
 const showConnectionError = computed(() => !cesiumReady.value || !googleReady.value);
 let connectionCheckInterval = null;
 
-// Active background of this page:
-//   'street' – 2D Google street map (default; the `Waypoint` view)
-//   '3d'     – Google Earth 3D tiles (the shared global Cesium viewer)
-// The `Search` and `Waypoint` buttons both return to the 2D street map
-// (the entry state).
-const viewMode = ref('street');
-const showRoutePanel = ref(false);
-const showSearchPanel = ref(false);
+// Phase 3 (session-state migration): this page's view context lives in the
+// session store, so the active sub-view (Route panel / Search / Waypoint
+// arming / Steer 3D), the search text and the 2D/3D mode survive page
+// switches and are restored on return. The panel booleans are READ-ONLY
+// views over session.view.route.subView; handlers switch subView instead.
+//   'map'     neutral 2D street map (the entry state)
+//   'search'  2D + search panel        'waypoint' 2D, picking armed
+//   'route'   2D + route panel         'steer'    3D nadir overview
+// ('steer' is the only 3D state, so entering 3D closes every panel by
+// construction; Search / Waypoint both return to the 2D street map.)
+const viewCtx = session.view.route;
+const viewMode = computed(() => (viewCtx.subView === 'steer' ? '3d' : 'street'));
+const showRoutePanel = computed(() => viewCtx.subView === 'route');
+const showSearchPanel = computed(() => viewCtx.subView === 'search');
 
 const mapTypeId = computed(() => 'roadmap');
 
@@ -102,50 +108,37 @@ const mapTypeId = computed(() => 'roadmap');
 // the spline stay visible in every 3D state.
 function onClickRoute() {
   if (controlsLocked.value) return; // locked during preview / save flights
-  const opening = !showRoutePanel.value;
-  showRoutePanel.value = opening;
-  if (opening) {
-    showSearchPanel.value = false;
-    showWaypointHint.value = false;
-    ensureWaypointDefaults();
-    if (is3d.value) {
-      routeScene.stopPreview();
-      // The route list lives on the 2D street map: leave 3D so the street map
-      // (with the waypoint dots) becomes the background, keeping the same
-      // location and zoom level the user had in 3D. watch(is3d) handles the
-      // 3D cleanup (stop loop / hide overlay) and the altitude conversion,
-      // and onMapReady redraws the waypoint dots on the 2D map.
-      viewMode.value = 'street';
-    }
+  if (showRoutePanel.value) {
+    viewCtx.subView = 'map';
+    return;
   }
+  ensureWaypointDefaults();
+  if (is3d.value) routeScene.stopPreview();
+  // The route list lives on the 2D street map: leaving 'steer' makes the
+  // street map (with the waypoint dots) the background, keeping the same
+  // location and zoom level the user had in 3D. watch(is3d) handles the 3D
+  // cleanup (stop loop / hide overlay) and the altitude conversion, and
+  // onMapReady redraws the waypoint dots on the 2D map.
+  viewCtx.subView = 'route';
 }
 
 function onClickSearch() {
   if (controlsLocked.value) return; // locked during preview / save flights
-  // Address search lives on the 2D map: leave 3D first if needed.
-  if (!showSearchPanel.value && is3d.value) viewMode.value = 'street';
-  showSearchPanel.value = !showSearchPanel.value;
-  if (showSearchPanel.value) {
-    showRoutePanel.value = false;
-    showWaypointHint.value = false;
-  }
+  // Address search lives on the 2D map: leaving 'steer' makes the street
+  // map the background (watch(is3d) handles the 3D cleanup).
+  viewCtx.subView = showSearchPanel.value ? 'map' : 'search';
 }
 
 // ── Waypoint picking (green reminder + numbered blue rectangles) ──────────
-const showWaypointHint = ref(false);
+const showWaypointHint = computed(() => viewCtx.subView === 'waypoint');
 // Maintained waypoint list (session.route.waypoints); indices start at 1
 // and increment per click.
 
 function onWaypointClick() {
   if (controlsLocked.value) return; // locked during preview / save flights
-  const arming = !showWaypointHint.value;
-  // Waypoint picking happens on the 2D map: leave 3D first if needed.
-  if (arming && is3d.value) viewMode.value = 'street';
-  showWaypointHint.value = arming;
-  if (arming) {
-    showSearchPanel.value = false;
-    showRoutePanel.value = false;
-  }
+  // Waypoint picking happens on the 2D map: leaving 'steer' makes the street
+  // map the background (watch(is3d) handles the 3D cleanup).
+  viewCtx.subView = showWaypointHint.value ? 'map' : 'waypoint';
 }
 
 function onMapClick({ lat, lng }) {
@@ -166,8 +159,8 @@ function onMapClick({ lat, lng }) {
   // Redraw circles + the spline link so both always match the list.
   // Always blue here: red is reserved for an active press.
   mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
-  // One reminder per waypoint: hide it once the user has clicked.
-  showWaypointHint.value = false;
+  // One reminder per waypoint: disarm picking once the user has clicked.
+  viewCtx.subView = 'map';
 }
 
 // The MapView is recreated when leaving 3D and coming back — redraw all
@@ -331,7 +324,7 @@ function onWaypointMove({ id, lat, lng }) {
 
 // ── Search popup (address finding) ────────────────────────────────────────
 const mapViewRef = ref(null);
-const searchQuery = ref('');
+const searchQuery = toRef(viewCtx, 'searchQuery');
 const searchResults = ref([]);
 const searchError = ref('');
 // True while a search-popup text query is in flight; the next poisFound
@@ -497,9 +490,9 @@ function onClickSteer() {
   if (controlsLocked.value) return; // locked during preview / save flights
   routeScene.stopPreview();
   if (!is3d.value) {
-    // 2D -> 3D nadir overview (the watch(is3d) entry sets center/scale).
-    showRoutePanel.value = false;
-    viewMode.value = '3d';
+    // 2D -> 3D nadir overview (the watch(is3d) entry sets center/scale; the
+    // route panel closes by construction — 'steer' is the only 3D state).
+    viewCtx.subView = 'steer';
     return;
   }
   if (focusedWpId.value != null || steerTweenRaf) {
@@ -508,7 +501,7 @@ function onClickSteer() {
     return;
   }
   // Plain nadir overview: leave 3D back to the 2D street map.
-  viewMode.value = 'street';
+  viewCtx.subView = 'map';
 }
 
 function cancelSteerTween() {
@@ -744,7 +737,7 @@ function onClickVideo() {
   }
   // The offline render walks the 3D camera along the route: enter 3D so
   // the render pass (and its frame-counter overlay) is visible.
-  if (!is3d.value) viewMode.value = '3d';
+  if (!is3d.value) viewCtx.subView = 'steer';
   videoRoute.value = makeTransientRoute();
 }
 
@@ -781,6 +774,39 @@ function onVideoClose() {
   }
 }
 
+// 3D entry: the nadir overview at the 2D map's center and scale, with the
+// blue dots + B-spline overlay. convertAlt=true is the live 2D->3D
+// transition (2D map zoom height -> true camera altitude); convertAlt=false
+// is a REMOUNT that was left in 3D (drone.alt is still the true altitude
+// and the panels' state already lives in the session store).
+function enter3dNadirOverview(convertAlt) {
+  routeScene.startLoop();
+  ensureWaypointDefaults();
+  focusedWpId.value = null;
+  overviewPose = null;
+  routeScene.setFocusWaypoint(null);
+  routeScene.showFlight.value = false; // no disks in the nadir overview
+  routeScene.showCamera.value = false;
+  // A preview started from 2D already hid the overlay: don't re-show it
+  // (same for an offline Save render pass, which hides it itself).
+  if (!routeScene.previewActive.value && !routeScene.saving.value) {
+    routeScene.showRouteOverlay(waypoints.value, null);
+  }
+  if (pickCleanup) pickCleanup();
+  pickCleanup = routeScene.onWaypointPick(onOverlayWpClick);
+  if (routeScene.previewActive.value) return; // preview owns the camera
+  if (convertAlt) {
+    // The 2D map altitude is Google's nominal model altitude; convert it to
+    // the true camera altitude that shows the SAME ground scale in the 3D
+    // nadir view (otherwise the 3D view looks ~4-6x more zoomed in).
+    drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
+    drone.heading = 0;
+    gimbal.yaw = 0;
+    gimbal.pitch = -90; // look straight down, satellite style
+    gimbal.roll = 0;
+  }
+}
+
 onMounted(() => {
   checkGoogleConnection();
   checkCesiumConnection();
@@ -795,19 +821,19 @@ onMounted(() => {
   // 2D street map, the page's entry state.)
   registerRightDock();
 
-  // Phase 2: the route being edited lives in the session store — Content
-  // -> Route seeds session.route BEFORE navigating, and plain page switches
-  // keep it alive, so on every (re)mount we simply restore the carried
-  // state: list the waypoints in the Route panel and redraw the map. The
-  // carried sourceRouteId marks this session as Case 2 (modified existing
-  // route): the Video flow then updates that route instead of creating a
-  // new one. The one-shot video signal (Content -> Route -> Video) opens
-  // the dialog right after landing via this page's own Video flow.
+  // Phase 2+3 (session-state migration): the route being edited AND the
+  // active sub-view live in the session store. Content -> Route seeds
+  // session.route and session.view.route.subView='route' BEFORE navigating;
+  // plain page switches keep both alive. On every (re)mount we only
+  // normalize the carried waypoints and redraw the map — the active
+  // sub-view (Route panel / Search / Waypoint / Steer) comes straight from
+  // the store, so the page returns exactly as left. The carried
+  // sourceRouteId marks this session as Case 2 (modified existing route):
+  // the Video flow then updates that route instead of creating a new one.
+  // The one-shot video signal (Content -> Route -> Video) opens the dialog
+  // right after landing via this page's own Video flow.
   if (waypoints.value.length) {
     ensureWaypointDefaults();
-    showRoutePanel.value = true;
-    showSearchPanel.value = false;
-    showWaypointHint.value = false;
     mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
   }
   if (takeRouteVideoSignal()) onClickVideo();
@@ -849,33 +875,7 @@ onMounted(() => {
   // same center and scale.
   watch(is3d, (now3d) => {
     if (now3d) {
-      routeScene.startLoop();
-      ensureWaypointDefaults();
-      showSearchPanel.value = false;
-      showWaypointHint.value = false;
-      showRoutePanel.value = false;
-      focusedWpId.value = null;
-      overviewPose = null;
-      routeScene.setFocusWaypoint(null);
-      routeScene.showFlight.value = false; // no disks in the nadir overview
-      routeScene.showCamera.value = false;
-      // A preview started from 2D already hid the overlay: don't re-show it
-      // (same for an offline Save render pass, which hides it itself).
-      if (!routeScene.previewActive.value && !routeScene.saving.value) {
-        routeScene.showRouteOverlay(waypoints.value, null);
-      }
-      if (pickCleanup) pickCleanup();
-      pickCleanup = routeScene.onWaypointPick(onOverlayWpClick);
-      if (routeScene.previewActive.value) return; // preview owns the camera
-      // The 2D map altitude is Google's nominal model altitude; convert
-      // it to the true camera altitude that shows the SAME ground scale
-      // in the 3D nadir view (otherwise the 3D view looks ~4-6x more
-      // zoomed in).
-      drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
-      drone.heading = 0;
-      gimbal.yaw = 0;
-      gimbal.pitch = -90; // look straight down, satellite style
-      gimbal.roll = 0;
+      enter3dNadirOverview(true);
     } else {
       const wasPreview = routeScene.previewActive.value;
       if (pickCleanup) {
@@ -906,6 +906,12 @@ onMounted(() => {
       scheduleTilePrefetch();
     }
   });
+
+  // Phase 3: returning to this page while it was left in Steer (3D) must
+  // re-bootstrap the 3D scene — watch(is3d) does not fire for the initial
+  // state. No 2D->3D altitude conversion: drone.alt is still the true
+  // altitude from before the page switch.
+  if (is3d.value) enter3dNadirOverview(false);
 
   // Keep the 3D route overlay in sync with every waypoint change (Route
   // list card edits / reorders / removals). While a waypoint is focused

@@ -4,6 +4,7 @@ import RoutePlanningView from '@/views/RoutePlanningView.vue';
 import ChatView from '@/views/ChatView.vue';
 import MySpaceView from '@/views/MySpaceView.vue';
 import ExtensionsView from '@/views/ExtensionsView.vue';
+import { useSessionState } from '@shared-composables/useSessionState.js';
 
 const routes = [
   {
@@ -82,6 +83,14 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+});
+
+// Phase 3 (session-state migration): track which page is active in the
+// session store. Other pages keep the last map page recorded.
+router.afterEach((to) => {
+  const { session } = useSessionState();
+  if (to.name === 'Aerial') session.view.page = 'aerial';
+  else if (to.name === 'RoutePlanning') session.view.page = 'route';
 });
 
 export default router;

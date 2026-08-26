@@ -32,6 +32,9 @@ function seedSessionRoute(r) {
   session.route.createdAt = r.created_at || '';
   session.route.waypoints = (r.waypoints || []).map((w, i) => ({ ...w, id: i + 1, index: i + 1 }));
   session.route.selectedWpId = null;
+  // Phase 3: the handoff lands with the Route panel open (the view context
+  // of Route Planning is restored from this slot on every mount).
+  session.view.route.subView = 'route';
 }
 
 const routes = ref([]);

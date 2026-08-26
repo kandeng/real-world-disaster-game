@@ -8,7 +8,7 @@
  * the composables that own it):
  *   Phase 1  pose   – drone + gimbal            (wired via useDrone, done)
  *   Phase 2  route  – waypoints + route meta    (wired via RoutePlanningView, done)
- *   Phase 3  view   – page/sub-view/2D-3D/mapType/selection/search (planned)
+ *   Phase 3  view   – page / per-page sub-view context (wired via the two map views + router, done)
  *   +        user   – identity mirror of useAuth (optional)
  *
  * IMPORTANT — never deep-watch or persist this object wholesale. The 60 fps
@@ -48,20 +48,25 @@ export const session = reactive({
     createdAt: '',
   },
 
-  // ── Phase 3: view context (which page / sub-view / map the user is on) ──
+  // ── Phase 3: view context (which page / sub-view the user is on) ────────
+  // Per-page slots: each map page remembers ITS OWN last sub-view, so
+  // returning to a page restores exactly what was left there. The 2D/3D
+  // mode is derived from subView ('steer' is the only 3D state).
   view: {
-    page: 'aerial',       // 'aerial' | 'route' | 'gallery' | 'extensions' | 'account' | 'content'
-    subView: 'steer',     // 'steer' | 'search' | 'waypoint' | 'route'
-    mode: '3d',           // '3d' | 'street'
-    mapTypeId: 'roadmap', // Google 2D map type
-    // 2D map "height" (model altitude driving Google zoom). This is the
-    // altitude SPLIT: drone.alt is the true 3D camera/gimbal altitude; the
-    // 2D street-map zoom is a separate value. They are related only at the
-    // 3D<->2D boundary via modelAltForMapScale / trueAltForMapScale so the
-    // two views open at the same ground scale.
+    page: 'aerial',       // active page ('aerial' | 'route'; set by the router)
+    // 2D map "height" (model altitude driving Google zoom), SHARED by both
+    // pages. This is the altitude SPLIT: drone.alt is the true 3D
+    // camera/gimbal altitude; the 2D street-map zoom is a separate value.
+    // They are related only at the 3D<->2D boundary via
+    // modelAltForMapScale / trueAltForMapScale so the two views open at
+    // the same ground scale.
     mapAlt: settings.defaultAlt,
-    selectionLatLng: null,// chosen search result (red balloon)
-    searchQuery: '',
+    // 3D Exploration: 'steer' (3D free flight) | 'search' (2D + panel) |
+    // 'route' (2D overview). selectionLatLng = picked address (red balloon).
+    aerial: { subView: 'steer', searchQuery: '', selectionLatLng: null },
+    // Route Planning: 'map' (neutral 2D) | 'search' | 'waypoint' (picking
+    // armed) | 'route' (route panel) | 'steer' (3D nadir overview).
+    route: { subView: 'map', searchQuery: '' },
   },
 
   // ── Identity mirror (set by useAuth on login/logout; optional phase) ────

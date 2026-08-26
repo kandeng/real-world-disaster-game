@@ -121,14 +121,19 @@ let lockedMessageTimer = null;
 // balloon of the picked address); Steer lifts the view to the Google Earth
 // 3D tiles nadir overview of the same spot and scale.
 const routeScene = useRouteScene3D();
-const viewMode = ref('3d');
-const isStreet = computed(() => viewMode.value === 'street');
+// Phase 3 (session-state migration): this page's view context lives in the
+// session store, so the sub-view (Steer 3D / Search / Route overview), the
+// search text and the picked-address balloon survive page switches and are
+// restored on return. subView drives everything; the 2D/3D mode is derived
+// ('steer' is the only 3D state).
+const viewCtx = session.view.aerial;
+const isStreet = computed(() => viewCtx.subView !== 'steer');
 const mapTypeId = computed(() => 'roadmap');
 
 // ── Search panel state (address finding — same workflow as Route Planning) ──
 const mapViewRef = ref(null);
-const showSearchPanel = ref(false);
-const searchQuery = ref('');
+const showSearchPanel = computed(() => viewCtx.subView === 'search');
+const searchQuery = toRef(viewCtx, 'searchQuery');
 const searchResults = ref([]);
 const searchError = ref('');
 // True while a search query is in flight; the next poisFound event then
@@ -139,17 +144,17 @@ const searchBusy = ref(false);
 const hasSearched = ref(false);
 // Route button green border: on the 2D map without the search panel.
 const routeActive = computed(() => isStreet.value && !showSearchPanel.value);
-// The address the user picked from the search results (the red balloon). Kept
-// so the balloon can be re-shown when returning to the Search view after the
-// map was recreated (e.g. after a 3D excursion).
-const selectedLatLng = ref(null);
+// The address the user picked from the search results (the red balloon),
+// carried in the session store so the balloon is re-shown when returning to
+// the Search view after the map was recreated (e.g. after a 3D excursion or
+// a page switch).
+const selectedLatLng = toRef(viewCtx, 'selectionLatLng');
 
 function onClickSearch() {
   // Address search always shows the 2D street map, matched to the location /
   // zoom the user currently has (leaving 3D first if needed).
   if (!isStreet.value) enterStreetFrom3d();
-  viewMode.value = 'street';
-  showSearchPanel.value = true;
+  viewCtx.subView = 'search';
   // The Search view marks the picked address with the red balloon.
   if (selectedLatLng.value) {
     mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
@@ -160,8 +165,7 @@ function onClickRoute() {
   // Route shows the same 2D street map as Search (same center / zoom) but
   // WITHOUT the red balloon. Leaving 3D first matches the current view.
   if (!isStreet.value) enterStreetFrom3d();
-  viewMode.value = 'street';
-  showSearchPanel.value = false;
+  viewCtx.subView = 'route';
   mapViewRef.value?.setSelectionMarkerVisible(false);
 }
 
@@ -405,8 +409,7 @@ function toggleSteer() {
     gimbal.yaw = 0;
     gimbal.pitch = -90; // look straight down, satellite style
     gimbal.roll = 0;
-    showSearchPanel.value = false;
-    viewMode.value = '3d';
+    viewCtx.subView = 'steer';
     return;
   }
   const next = !showFlight.value;
