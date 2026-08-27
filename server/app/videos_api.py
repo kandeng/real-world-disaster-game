@@ -9,6 +9,10 @@ GET /api/videos/public -> the Gallery feed: every user's published videos,
                           most recent first, with author names. Open to
                           anonymous callers (the Gallery page is public).
 PUT /api/videos/{id}   -> replace title / waypoint snapshot / sources.
+DELETE /api/videos/{id}
+                       -> retire one of the caller's videos: the YouTube
+                          post (best-effort), the playback sources, the
+                          row itself and the persisted mp4.
 POST /api/videos/{id}/upload-youtube
                        -> the Route Planning -> Video dialog posts the
                           finished mp4; the server uploads it to the site's
@@ -23,13 +27,16 @@ per the CMS schema decision).
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from urllib.parse import parse_qs, urlparse
 
 import asyncio
 import logging
+import shutil
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,6 +50,45 @@ from .users import current_active_user
 
 router = APIRouter(tags=["videos"])
 log = logging.getLogger(__name__)
+
+# Persistent mp4 store: every mp4 received via upload-youtube is also kept
+# on disk here so Content -> Video's Download button can serve it back
+# later (the workspace/ directory is excluded from the deploy rsync, so
+# the files survive backend redeploys).
+VIDEO_DIR = Path(__file__).resolve().parent.parent / "workspace" / "videos"
+
+
+def _mp4_path(video_id: str) -> Path:
+    return VIDEO_DIR / f"{video_id}.mp4"
+
+
+async def _retire_video(session: AsyncSession, video: Video) -> None:
+    """Delete one video everywhere: the YouTube post (best-effort — the
+    site channel token may be missing/expired, and a stuck YouTube video
+    must never block local deletion), the playback sources, the row and
+    the persisted mp4. Caller commits."""
+    yt_sources = (
+        await session.execute(
+            select(VideoSource).where(
+                VideoSource.video_id == video.id,
+                VideoSource.provider == "youtube",
+            )
+        )
+    ).scalars().all()
+    for src in yt_sources:
+        yt_id = _youtube_id(src.url)
+        if not yt_id:
+            continue
+        try:
+            await asyncio.to_thread(youtube_upload.delete_video, yt_id)
+        except Exception as err:
+            log.warning("[videos] youtube delete %s failed: %s", yt_id, err)
+    await session.execute(delete(VideoSource).where(VideoSource.video_id == video.id))
+    await session.delete(video)
+    try:
+        _mp4_path(video.id).unlink(missing_ok=True)
+    except OSError as err:
+        log.warning("[videos] unlink mp4 %s failed: %s", video.id, err)
 
 
 def _youtube_id(url: str) -> str | None:
@@ -232,27 +278,7 @@ async def create_video(
             )
         ).scalars().all()
         for ov in old:
-            # Also retire the previous YouTube post of this route. This is
-            # best-effort: the site channel token may be missing/expired,
-            # and a stuck YouTube video must never block the new publish.
-            yt_sources = (
-                await session.execute(
-                    select(VideoSource).where(
-                        VideoSource.video_id == ov.id,
-                        VideoSource.provider == "youtube",
-                    )
-                )
-            ).scalars().all()
-            for src in yt_sources:
-                yt_id = _youtube_id(src.url)
-                if not yt_id:
-                    continue
-                try:
-                    await asyncio.to_thread(youtube_upload.delete_video, yt_id)
-                except Exception as err:
-                    log.warning("[videos] youtube delete %s failed: %s", yt_id, err)
-            await session.execute(delete(VideoSource).where(VideoSource.video_id == ov.id))
-            await session.delete(ov)
+            await _retire_video(session, ov)
     video = Video(
         user_id=user.id,
         route_id=route.id,
@@ -314,6 +340,43 @@ _YT_STATUS = {
 }
 
 
+@router.delete("/videos/{video_id}", status_code=204)
+async def delete_video_entry(
+    video_id: str,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> None:
+    """Content -> Video Delete button: retire the video card (owner's
+    list and the public Plaza feed) plus its YouTube post and mp4."""
+    stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
+    video = (await session.execute(stmt)).scalar_one_or_none()
+    if video is None:
+        raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
+    await _retire_video(session, video)
+    await session.commit()
+
+
+@router.get("/videos/{video_id}/download")
+async def download_video(
+    video_id: str,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> FileResponse:
+    """Serve the persisted mp4 of one of the caller's videos (the
+    Content -> Video Download button). 404 when no mp4 was ever stored
+    for it (e.g. demo seeds or videos published before persistence)."""
+    stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
+    video = (await session.execute(stmt)).scalar_one_or_none()
+    if video is None:
+        raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
+    path = _mp4_path(video.id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="NO_MP4")
+    safe = "".join(c for c in (video.title or "") if c not in '\\/:*?"<>|').strip()
+    filename = f"{safe or video.id}.mp4"
+    return FileResponse(path, media_type="video/mp4", filename=filename)
+
+
 @router.post("/videos/{video_id}/upload-youtube")
 async def upload_video_to_youtube(
     video_id: str,
@@ -344,6 +407,15 @@ async def upload_video_to_youtube(
             if size > youtube_upload.MAX_SIZE:
                 raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
             spool.write(chunk)
+        # Keep a persistent copy for the Download button BEFORE the
+        # YouTube upload: a YouTube failure must not lose the mp4.
+        try:
+            VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+            spool.seek(0)
+            with open(_mp4_path(video.id), "wb") as fh:
+                shutil.copyfileobj(spool, fh)
+        except OSError as err:
+            log.warning("[videos] persist mp4 %s failed: %s", video.id, err)
         spool.seek(0)
         # The YouTube description carries a final Play! deep link: an
         # anonymous viewer clicking it lands on our Play! page with this

@@ -57,6 +57,8 @@ export const IconMap = {
   MENU_WALLET: '../../icons/wallet.svg',
   MENU_CONTENT: '../../icons/content.svg',
   MENU_SAVE: '../../icons/save.svg',
+  MENU_DOWNLOAD_FILE: '../../icons/download_file.svg',
+  MENU_CANCEL: '../../icons/cancel.svg',
   MENU_PREVIEW: '../../icons/preview.svg',
   MENU_UPWARD: '../../icons/upward.svg',
   MENU_DOWNWARD: '../../icons/downward.svg',

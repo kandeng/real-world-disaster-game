@@ -15,7 +15,7 @@ const defaults = {
   defaultLon: -122.1673,
   defaultAlt: 150,
   defaultYaw: 180,
-  defaultCamYaw: -123.6,
+  defaultCamYaw: -163.2,
   defaultPitch: -57.8,
   defaultRoll: 0,
   audioVolume: 0.9,

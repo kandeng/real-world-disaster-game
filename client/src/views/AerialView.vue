@@ -270,14 +270,34 @@ function onClickSearch() {
   }
 }
 
-// Reset: clear all waypoints of the current route (stopping any /play
-// autopilot playback of it), then open the address search popup — the
-// popup itself behaves exactly as before.
+// Reset: open the address search popup. The popup hosts the route-aware
+// actions (Replay / Restart) above the address lookup; the current route
+// is left untouched until the user explicitly clicks Restart inside.
 function onClickReset() {
+  onClickSearch();
+}
+
+// Route-aware popup actions:
+// - Replay re-runs the virtual drone flight from the first waypoint to the
+//   last (the autopilot teleports the drone to the start and flies it).
+// - Restart wipes the current route so the user starts from scratch with
+//   an address search.
+const hasRoute = computed(() => session.route.waypoints.length > 0);
+
+function onClickReplay() {
+  const wps = session.route.waypoints;
+  if (!wps.length) return;
+  viewCtx.subView = 'steer'; // leave the popup (and 2D map) for the 3D view
+  autopilot.start(wps);
+}
+
+function onClickRestart() {
   stopPlay();
+  session.route.sourceRouteId = null;
+  session.route.title = '';
+  session.route.description = '';
   session.route.waypoints = [];
   session.route.selectedWpId = null;
-  onClickSearch();
 }
 
 function enterStreetFrom3d() {
@@ -1007,8 +1027,15 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Address search panel (same workflow as Route Planning) -->
+      <!-- Address search panel (same workflow as Route Planning), hosting
+           the route-aware Replay / Restart actions around the search bar. -->
       <div v-if="showSearchPanel && isStreet" class="search-panel">
+        <template v-if="hasRoute">
+          <button class="search-panel__action" type="button" @click="onClickReplay">
+            {{ t('aerialview.replay') }}
+          </button>
+          <div class="search-panel__divider"></div>
+        </template>
         <form class="search-panel__row" @submit.prevent="onSearchSubmit">
           <input
             v-model="searchQuery"
@@ -1039,6 +1066,9 @@ onUnmounted(() => {
         <div v-else-if="hasSearched && !searchBusy" class="search-panel__empty">
           {{ t('aerialview.no_results') }}
         </div>
+        <button class="search-panel__action" type="button" @click="onClickRestart">
+          {{ t('aerialview.restart') }}
+        </button>
       </div>
       <CollisionWarning :visible="isCollisionFrozen" />
       <!-- Reminders / warnings live in the shell top bar (centered). -->
@@ -1186,6 +1216,30 @@ onUnmounted(() => {
 
 .search-panel__btn:hover {
   background: rgba(255, 255, 255, 0.75);
+}
+
+/* Full-width route-aware actions (Replay / Restart) in the search popup. */
+.search-panel__action {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  color: rgba(30, 40, 60, 0.95);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.search-panel__action:hover {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+/* Static (not draggable) separator below Replay. */
+.search-panel__divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.55);
 }
 
 .search-panel__list {

@@ -124,5 +124,26 @@ export function useVideos() {
     });
   }
 
-  return { listVideos, listPublicVideos, saveVideo, publishVideo, uploadToYouTube };
+  /** GET /api/videos/{id}/download — the persisted mp4 Blob of one of
+   *  the caller's videos (Content -> Video Download button). Returns
+   *  null when the server has no mp4 for it (404). */
+  async function fetchVideoFile(id) {
+    const res = await fetch(`${API_BASE}/api/videos/${id}/download`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return null;
+    return res.blob();
+  }
+
+  /** DELETE /api/videos/{id} — retire the video card (owner list and
+   *  the Plaza feed), its YouTube post and the persisted mp4. */
+  async function deleteVideo(id) {
+    const res = await fetch(`${API_BASE}/api/videos/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!res.ok) throw new Error('video_delete_failed');
+  }
+
+  return { listVideos, listPublicVideos, saveVideo, publishVideo, uploadToYouTube, fetchVideoFile, deleteVideo };
 }
