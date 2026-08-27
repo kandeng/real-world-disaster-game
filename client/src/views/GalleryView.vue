@@ -71,9 +71,12 @@ function embedUrl(v) {
   return null;
 }
 
-// Workflow placeholder: just jump to the 3D Exploration page for now.
-function onExplore() {
-  router.push('/');
+// "Explore the Scene in 3D": jump to the /play deep link, which lands in
+// 3D Exploration with the video's route loaded and the waypoint autopilot
+// armed. Prefer the route id (?r=); fall back to the video id (?v=) for
+// videos whose route was deleted (they keep a frozen waypoint snapshot).
+function onExplore(v) {
+  router.push({ path: '/play', query: v.route_id ? { r: v.route_id } : { v: v.id } });
 }
 </script>
 
@@ -103,7 +106,7 @@ function onExplore() {
         <div class="gcard__meta">{{ v.author_name }}</div>
         <div class="gcard__desc">{{ v.description }}</div>
 
-        <button class="gcard__explore" @click="onExplore">
+        <button class="gcard__explore" @click="onExplore(v)">
           {{ t('galleryview.explore') }}
         </button>
       </article>

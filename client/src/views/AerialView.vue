@@ -1,13 +1,16 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import CollisionWarning from '@shared/CollisionWarning.vue';
 import StreetViewPane from '@shared/StreetViewPane.vue';
 import { MapView } from '@/2d_map/index.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
+import { useRouteAutopilot } from '@shared-composables/useRouteAutopilot.js';
+import { useRoutes } from '@shared-composables/useRoutes.js';
+import { useVideos } from '@shared-composables/useVideos.js';
 import { useDrone } from '@shared-composables/useDrone.js';
 import { useSessionState } from '@shared-composables/useSessionState.js';
 import { useAltitudeGate, PHASES, DESCEND_THRESHOLD, ASCEND_THRESHOLD } from '@shared-composables/useAltitudeGate.js';
@@ -26,6 +29,7 @@ import ConnectionError from '@shared/ConnectionError.vue';
 const { t } = useI18n();
 
 const router = useRouter();
+const route = useRoute();
 
 const { drone, gimbal } = useDrone();
 const { session } = useSessionState();
@@ -129,6 +133,64 @@ const routeScene = useRouteScene3D();
 const viewCtx = session.view.aerial;
 const isStreet = computed(() => viewCtx.subView !== 'steer');
 const mapTypeId = computed(() => 'roadmap');
+
+// ── /play?r=<route-uuid> shareable play link ─────────────────────────────
+// The Gallery's "Explore the Scene in 3D" (or any shared copy of the URL)
+// lands here: fetch the route publicly, seed the session route domain (the
+// 2D Route view then shows its read-only dots), draw the 3D overlay and
+// hand the drone to the waypoint autopilot. ?v=<video-uuid> is the fallback
+// for gallery videos whose source route was deleted (the frozen waypoint
+// snapshot rides on the video row).
+const autopilot = useRouteAutopilot();
+const { getPublicRoute } = useRoutes();
+const { listPublicVideos } = useVideos();
+let playOwnedOverlay = false;
+
+function stopPlay() {
+  autopilot.stop();
+  if (playOwnedOverlay) {
+    routeScene.hideRouteOverlay();
+    playOwnedOverlay = false;
+  }
+}
+
+async function applyPlayQuery() {
+  const r = typeof route.query.r === 'string' ? route.query.r : '';
+  const v = typeof route.query.v === 'string' ? route.query.v : '';
+  if (!r && !v) {
+    stopPlay();
+    return;
+  }
+  let payload = null;
+  try {
+    if (r) {
+      const row = await getPublicRoute(r);
+      payload = { ...row, sourceRouteId: row.id };
+    } else {
+      const list = await listPublicVideos();
+      const vid = (list || []).find((x) => x.id === v);
+      if (vid) payload = { ...vid, sourceRouteId: vid.route_id };
+    }
+  } catch {
+    /* offline or unknown id: stay on the default view */
+  }
+  const wps = ((payload && payload.waypoints) || []).map((w, i) => ({ ...w, id: i + 1, index: i + 1 }));
+  if (!wps.length) {
+    stopPlay();
+    return;
+  }
+  session.route.sourceRouteId = payload.sourceRouteId ?? null;
+  session.route.title = payload.title || '';
+  session.route.description = payload.description || '';
+  session.route.createdAt = payload.created_at || '';
+  session.route.waypoints = wps;
+  session.route.selectedWpId = null;
+  viewCtx.subView = 'steer';
+  routeScene.showRouteOverlay(wps, null);
+  playOwnedOverlay = true;
+  autopilot.start(wps);
+}
+watch(() => route.query, applyPlayQuery);
 
 // ── Search panel state (address finding — same workflow as Route Planning) ──
 const mapViewRef = ref(null);
@@ -634,7 +696,14 @@ function updateDroneState() {
   let enuMove = null;
 
   if (showFlight.value) {
-    enuMove = computeDesiredEnuMove(dt, allowAltitude);
+    // Play-link autopilot: with the Flight stick / keys released the drone
+    // flies on toward the next waypoint; any manual input takes over the
+    // flight domain for that frame (same movement + collision path).
+    if (autopilot.active.value && autopilot.flightIdle()) {
+      enuMove = autopilot.stepFlight(dt);
+    } else {
+      enuMove = computeDesiredEnuMove(dt, allowAltitude);
+    }
   }
 
   const collision = checkCollisionAhead();
@@ -671,6 +740,11 @@ function updateDroneState() {
 
   if (showCamera.value) {
     stepCameraPhysics(dt, { applyMovement: true });
+    // Released Gimbal stick / keys during play: ease the camera back to the
+    // target waypoint's saved angles (cinematic playback of the route).
+    if (autopilot.active.value && autopilot.cameraIdle()) {
+      autopilot.stepGimbal(dt);
+    }
   }
 }
 
@@ -708,6 +782,9 @@ onMounted(() => {
   // Mounted already in street mode (restored sub-view): remember the map
   // state so an untouched lift back to Steer restores the 3D pose.
   if (isStreet.value) snapshotMap();
+
+  // /play?r=… deep link: arm the route autopilot (no-op without the query).
+  applyPlayQuery();
 
   // Initial connection check and periodic re-check.
   checkGoogleConnection();
@@ -812,6 +889,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  stopPlay();
   resetRecorder();
   stopFlightKeyboard();
   stopCameraKeyboard();

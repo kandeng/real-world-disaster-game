@@ -84,5 +84,13 @@ export function useRoutes() {
     return res.json();
   }
 
-  return { listRoutes, saveRoute, createRoute };
+  /** GET /api/routes/{id} — public single-route read (unlisted link);
+   *  backs the /play?r=<id> deep link. No auth header needed. */
+  async function getPublicRoute(id) {
+    const res = await fetch(`${API_BASE}/api/routes/${id}`);
+    if (!res.ok) throw new Error('route_unavailable');
+    return res.json();
+  }
+
+  return { listRoutes, saveRoute, createRoute, getPublicRoute };
 }

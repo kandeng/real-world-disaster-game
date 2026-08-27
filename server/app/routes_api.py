@@ -3,6 +3,10 @@
 GET /api/routes        -> the caller's routes, most recent first. A brand
                           new account is seeded with a few demo routes on
                           Stanford campus so the list is never empty.
+GET /api/routes/{id}   -> public single-route read (unlisted-link semantics:
+                          the UUID is the secret, like the public video
+                          feed's waypoints). Backs the /play?r=<id> deep
+                          link rendered by 3D Exploration.
 POST /api/routes       -> save a new route (the Route Planning Video flow,
                           case 1: a brand-new route).
 PUT /api/routes/{id}   -> replace a route's waypoint list and/or title
@@ -11,7 +15,8 @@ PUT /api/routes/{id}   -> replace a route's waypoint list and/or title
                           Also refreshes created_at so Content -> Route
                           shows the fresh Creation Time.
 
-Both require an active user (Bearer JWT), matching the rest of the API.
+List/create/update require an active user (Bearer JWT); the single-route
+GET is open so anonymous visitors can fly a shared route.
 """
 
 import uuid
@@ -132,6 +137,19 @@ async def list_routes(
             await session.refresh(row)
         rows.sort(key=lambda r: r.created_at, reverse=True)
     return [_serialize(r) for r in rows]
+
+
+@router.get("/routes/{route_id}")
+async def get_route(
+    route_id: uuid.UUID,
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Public read for the /play?r=<id> deep link: the UUID plays the role
+    of the secret (unlisted), same exposure as the public video feed."""
+    row = (await session.execute(select(Route).where(Route.id == route_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="ROUTE_NOT_FOUND")
+    return _serialize(row)
 
 
 @router.put("/routes/{route_id}")
