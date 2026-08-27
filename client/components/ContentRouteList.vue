@@ -90,9 +90,11 @@ async function onSave(r) {
   try {
     const updated = await saveRoute(r.id, {
       title: r.title,
+      description: r.description || '',
       waypoints: r.waypoints,
     });
     r.title = updated.title;
+    r.description = updated.description;
     r.waypoints = updated.waypoints;
     savedId.value = r.id;
     clearTimeout(savedTimer);
@@ -164,6 +166,13 @@ function onSteer(r) {
       </div>
 
       <template v-if="expanded[r.id]">
+        <textarea
+          v-model="r.description"
+          class="rlist__desc"
+          rows="3"
+          maxlength="2000"
+          :placeholder="t('contentroutelist.description_ph')"
+        ></textarea>
         <WaypointCards :waypoints="r.waypoints" @edit="onEditWp(r, $event)" />
         <div class="rlist__actions">
           <button
@@ -245,6 +254,29 @@ function onSteer(r) {
 .rlist__date {
   font-size: 0.95rem;
   color: #1d1d1f;
+}
+
+/* Editable description while expanded — same box language as the video
+   card's description textarea in Content -> Video. */
+.rlist__desc {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid #8e8e93;
+  border-radius: 8px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #111827;
+  resize: vertical;
+  min-height: 72px;
+}
+
+.rlist__desc:focus {
+  outline: 1px solid rgba(37, 99, 235, 0.5);
 }
 
 .rlist__toggle {

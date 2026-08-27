@@ -26,8 +26,11 @@ const scene = useRouteScene3D();
 const { job, isActive, startVideoJob } = useVideoJob();
 
 const displayCanvas = ref(null);
+// Title and description start as copies of the Route panel's values; the
+// user can edit both here so the video's metadata may differ from the
+// route's afterwards.
 const title = ref(props.route.title);
-const description = ref('');
+const description = ref(props.route.description || '');
 // Creation time is copied from the route (the video card shows the same).
 const createdAt = computed(() => new Date(props.route.created_at));
 const publish = ref(true);
