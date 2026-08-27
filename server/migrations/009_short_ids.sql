@@ -25,9 +25,9 @@ ALTER TABLE route ADD COLUMN new_id VARCHAR(16);
 ALTER TABLE video ADD COLUMN new_id VARCHAR(16), ADD COLUMN new_route_id VARCHAR(16);
 ALTER TABLE video_source ADD COLUMN new_id VARCHAR(16), ADD COLUMN new_video_id VARCHAR(16);
 
-UPDATE route SET new_id = encode(gen_random_bytes(8), 'hex');
-UPDATE video SET new_id = encode(gen_random_bytes(8), 'hex');
-UPDATE video_source SET new_id = encode(gen_random_bytes(8), 'hex');
+UPDATE route SET new_id = substr(md5(random()::text || random()::text), 1, 16);
+UPDATE video SET new_id = substr(md5(random()::text || random()::text), 1, 16);
+UPDATE video_source SET new_id = substr(md5(random()::text || random()::text), 1, 16);
 UPDATE video v SET new_route_id = r.new_id FROM route r WHERE v.route_id = r.id;
 UPDATE video_source s SET new_video_id = v.new_id FROM video v WHERE s.video_id = v.id;
 
