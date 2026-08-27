@@ -8,7 +8,6 @@ import WaypointCards from '@shared/WaypointCards.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useRoutes, setRouteVideoSignal, cachedRoutes } from '@shared-composables/useRoutes.js';
 import { useSessionState } from '@shared-composables/useSessionState.js';
-import { useDrone } from '@shared-composables/useDrone.js';
 
 // Content -> Route: the user's saved routes, most recent first, separated
 // by thin horizontal lines. Each entry collapses to title + creation time
@@ -20,7 +19,6 @@ const router = useRouter();
 const { isAuthenticated } = useAuth();
 const { listRoutes, saveRoute } = useRoutes();
 const { session } = useSessionState();
-const { drone, gimbal } = useDrone();
 
 // Phase 2 (session-state migration): the Steer / Video jumps seed the
 // session store's route domain BEFORE navigating, replacing the old
@@ -115,26 +113,15 @@ function onVideo(r) {
   router.push({ name: 'RoutePlanning' });
 }
 
-// Steer this route in 3D Exploration: the virtual drone is placed at the
-// FIRST waypoint (position / altitude plus its camera angles, heading 0 —
-// the same convention as Route Planning's waypoint focus) and the page
-// lands on 3D Exploration -> Steer. The route rides along in session.route,
-// so 3D Exploration -> Route illustrates it there as read-only blue dots
-// linked by the blue spline on the 2D map.
+// Steer this route in 3D Exploration: the SAME path as the Gallery's
+// "Explore the Scene in 3D" — the /play?r=<16-char route id> deep link.
+// AerialView fetches the route, seeds session.route (the 2D Route view then
+// shows its read-only dots linked by the blue spline), draws the 3D overlay
+// and hands the drone to the waypoint autopilot: cinematic playback of the
+// route starts right away, and the Flight / Gimbal disks take over at any
+// time.
 function onSteer(r) {
-  seedSessionRoute(r);
-  const wp = session.route.waypoints[0];
-  if (wp) {
-    drone.lat = wp.lat;
-    drone.lon = wp.lng;
-    drone.alt = wp.alt;
-    drone.heading = 0;
-    gimbal.yaw = wp.camYaw;
-    gimbal.pitch = wp.camPitch;
-    gimbal.roll = wp.camRoll;
-  }
-  session.view.aerial.subView = 'steer';
-  router.push({ name: 'Aerial' });
+  router.push({ path: '/play', query: { r: r.id } });
 }
 </script>
 
