@@ -42,6 +42,7 @@ export const IconMap = {
   MENU_CHAR_3D: '../../icons/char_3d.svg',
   MENU_LIST: '../../icons/list.svg',
   MENU_SEARCH: '../../icons/search.svg',
+  MENU_RESET: '../../icons/reset.svg',
   MENU_ARCHIVE: '../../icons/archive.svg',
   MENU_NOTE: '../../icons/note.svg',
   MENU_TOOL: '../../icons/tool.svg',

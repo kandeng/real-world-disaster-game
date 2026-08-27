@@ -224,13 +224,14 @@ function onClickSearch() {
   }
 }
 
-function onClickRoute() {
-  // Route shows the same 2D street map as Search (same center / zoom) but
-  // WITHOUT the red balloon. Leaving 3D first matches the current view.
-  if (!isStreet.value) enterStreetFrom3d();
-  viewCtx.subView = 'route';
-  snapshotMap();
-  mapViewRef.value?.setSelectionMarkerVisible(false);
+// Reset: clear all waypoints of the current route (stopping any /play
+// autopilot playback of it), then open the address search popup — the
+// popup itself behaves exactly as before.
+function onClickReset() {
+  stopPlay();
+  session.route.waypoints = [];
+  session.route.selectedWpId = null;
+  onClickSearch();
 }
 
 function enterStreetFrom3d() {
@@ -795,11 +796,11 @@ onMounted(() => {
   }, 10000);
 
   registerRight({
-    id: 'search',
-    icon: 'MENU_SEARCH',
-    titleKey: 'aerialview.search',
+    id: 'reset',
+    icon: 'MENU_RESET',
+    titleKey: 'aerialview.reset',
     active: showSearchPanel,
-    onClick: onClickSearch,
+    onClick: onClickReset,
   });
   registerRight({
     id: 'steer',
@@ -807,13 +808,6 @@ onMounted(() => {
     titleKey: 'aerialview.steer',
     active: showFlight.value,
     onClick: toggleSteer,
-  });
-  registerRight({
-    id: 'route',
-    icon: 'MENU_MAP',
-    titleKey: 'aerialview.route',
-    active: routeActive,
-    onClick: onClickRoute,
   });
   registerRight({
     id: 'screenshot',

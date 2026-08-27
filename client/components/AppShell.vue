@@ -112,17 +112,17 @@ function toggleLocale() {
       </div>
       <div
         class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/route-planning') }"
-        @click="go('/route-planning')"
-      >
-        {{ t('aerialview.page_routeplanning') }}
-      </div>
-      <div
-        class="shell-nav__item shell-nav__item--link"
         :class="{ 'shell-nav__item--active': isActive('/gallery') }"
         @click="go('/gallery')"
       >
         {{ t('aerialview.page_gallery') }}
+      </div>
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/route-planning') }"
+        @click="go('/route-planning')"
+      >
+        {{ t('aerialview.page_routeplanning') }}
       </div>
       <div
         class="shell-nav__item shell-nav__item--link"
