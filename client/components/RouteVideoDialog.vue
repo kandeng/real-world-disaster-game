@@ -1,20 +1,20 @@
 <script setup>
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
-import { useVideos } from '@shared-composables/useVideos.js';
+import { useVideoJob } from '@shared-composables/useVideoJob.js';
 
-// Content -> Route -> Video: renders the route's mp4 frame by frame with
-// the shared offline renderer (WebCodecs + mp4-muxer; MediaRecorder capture
-// flight as fallback) and shows the frames being generated live in the
-// panel. Below: a progress bar, the "Publish to the gallery" checkbox
-// (checked by default) and the download button — grey until the clip is
-// finished, blue afterwards (same grey/blue as the Account Save button).
-// The Video flow no longer saves the route when the dialog opens: the
-// route is persisted only when Download / Upload to YouTube is clicked.
-// ensureRoute (provided by the host page) performs that deferred
-// create/update and returns the saved route; its id anchors the video
-// record. Closing the dialog without clicking either abandons the route.
+// Produce -> Video (and Content -> Route -> Video): the dialog collects
+// title / description / the publish options, and the Generate button
+// starts the BACKGROUND video job (useVideoJob). The job renders the
+// route into an mp4 and — with the publish checkbox on — publishes it to
+// the Plaza and to YouTube, all INDEPENDENT of this dialog: the window
+// can be closed at any moment, the job keeps running until it is done,
+// and the shell top bar shows a completion notice. This dialog is only a
+// viewer of the job state: it blits the frames live while they are
+// rendered, shows the progress bar, and plays the clip once finished.
+// The route is persisted only by the job (at publish time), so Generate
+// with the checkbox off leaves the route unsaved.
 const props = defineProps({
   route: { type: Object, required: true },
   ensureRoute: { type: Function, default: null },
@@ -23,33 +23,29 @@ const emit = defineEmits(['close']);
 
 const { t, locale } = useI18n();
 const scene = useRouteScene3D();
-const { publishVideo, uploadToYouTube } = useVideos();
+const { job, isActive, startVideoJob } = useVideoJob();
 
 const displayCanvas = ref(null);
-const state = ref('rendering'); // 'rendering' | 'done' | 'failed'
-const videoUrl = ref('');
-let clipBlob = null;
 const title = ref(props.route.title);
 const description = ref('');
 // Creation time is copied from the route (the video card shows the same).
 const createdAt = computed(() => new Date(props.route.created_at));
 const publish = ref(true);
 const deletePrevious = ref(true);
-const published = ref(false);
-const publishedId = ref(null); // gallery record id (anchors the YouTube source)
-const publishFailed = ref(false);
-const publishing = ref(false);
-const uploading = ref(false); // mp4 -> server -> YouTube in flight
-const uploadPct = ref(0);
-const uploadedUrl = ref('');
-const uploadFailed = ref(false);
 let blitRaf = null;
-let finished = false;
 
-// Blue live status line at the top of the dialog, driven by the
-// renderer's phase code (same 0.95rem blue as the top-bar reminders).
+const rendering = computed(() => job.phase === 'rendering');
+// Everything after the render pass (publish / upload / terminal states).
+const finished = computed(() => rendering.value === false && job.phase !== 'idle');
+
+// Blue live status line at the top of the dialog, driven by the job's
+// phase (same 0.95rem blue as the top-bar reminders).
 const statusText = computed(() => {
-  if (state.value !== 'rendering') return '';
+  if (job.phase === 'publishing') return t('routevideodialog.publishing');
+  if (job.phase === 'uploading') {
+    return `${t('routevideodialog.uploading_youtube')} ${Math.round(job.uploadPct * 100)}%`;
+  }
+  if (job.phase !== 'rendering') return '';
   switch (scene.renderStatus.value) {
     case 'tiles': return t('routevideodialog.status_tiles');
     case 'render': return t('routevideodialog.status_render');
@@ -62,13 +58,15 @@ const statusText = computed(() => {
 // Errors surface as the red pulsing warning line (same style as the
 // 3D Exploration collision warning).
 const errorMsg = computed(() => {
-  if (state.value === 'failed') return t('routevideodialog.failed');
-  if (publishFailed.value) return t('routevideodialog.publish_failed');
-  if (uploadFailed.value) return t('routevideodialog.upload_failed');
-  return '';
+  if (job.phase !== 'failed') return '';
+  if (job.error === 'publish') return t('routevideodialog.publish_failed');
+  if (job.error === 'youtube') return t('routevideodialog.upload_failed');
+  return t('routevideodialog.failed');
 });
 // Offline pass: { frame, total }; fallback capture flight: distance %.
+// After the render pass the bar stays full (publish / upload follow).
 const progress = computed(() => {
+  if (!rendering.value) return { pct: finished.value ? 1 : 0, text: '' };
   const rp = scene.renderProgress.value;
   if (rp && rp.total > 0) {
     return { pct: rp.frame / rp.total, text: `${rp.frame} / ${rp.total}` };
@@ -94,8 +92,11 @@ function localeOf() {
   return locale.value === 'zh' ? 'zh-CN' : 'en-US';
 }
 
-// Blit the frames the renderer finishes into the visible panel canvas.
+// Blit the frames the renderer finishes into the visible panel canvas —
+// active exactly while the job's render pass runs (incl. when the dialog
+// is reopened mid-render).
 function startBlit() {
+  if (blitRaf) return;
   const blit = () => {
     const src = scene.peekMirrorCanvas();
     const dst = displayCanvas.value;
@@ -108,138 +109,40 @@ function startBlit() {
   };
   blitRaf = requestAnimationFrame(blit);
 }
-
-onMounted(async () => {
-  startBlit();
-  const ok = await scene.saveClip(props.route.waypoints);
-  const clip = ok ? scene.takeLastClip() : null;
-  finished = true;
-  if (blitRaf) cancelAnimationFrame(blitRaf);
-  blitRaf = null;
-  if (ok && clip) {
-    clipBlob = clip.blob;
-    videoUrl.value = URL.createObjectURL(clip.blob);
-    state.value = 'done';
-  } else {
-    state.value = 'failed';
+function stopBlit() {
+  if (blitRaf) {
+    cancelAnimationFrame(blitRaf);
+    blitRaf = null;
   }
-});
+}
+watch(rendering, (on) => {
+  if (on) startBlit();
+  else stopBlit();
+}, { immediate: true });
 
+// Closing the dialog NEVER aborts the job: the render / publish / upload
+// keep running in the background (the shell top bar reports completion).
 onBeforeUnmount(() => {
-  if (!finished) scene.stopPreview(); // closing mid-render aborts the pass
-  if (blitRaf) cancelAnimationFrame(blitRaf);
-  if (videoUrl.value) URL.revokeObjectURL(videoUrl.value);
+  stopBlit();
 });
 
 function onClose() {
   emit('close');
 }
 
-// Deferred route save: returns the persisted route's id (Case 2 may
-// already carry one, but the click still commits title/description/
-// waypoint edits), or null when the save failed.
-async function resolveRouteId() {
-  if (typeof props.ensureRoute === 'function') {
-    try {
-      const saved = await props.ensureRoute();
-      if (saved && saved.id != null) return saved.id;
-    } catch {
-      /* fall back to the id the route object carries */
-    }
-  }
-  return props.route.id ?? null;
-}
-
-// Clicking the (blue, ready) button: 1) persist the route (deferred save —
-// Download = keep the route, regardless of the publish checkbox), 2) publish
-// the video card when the checkbox is on (optionally deleting the previous
-// video of this route), 3) pop the native "Save As" dialog for the mp4.
-async function onDownload() {
-  const blob = clipBlob;
-  if (!blob || publishing.value) return;
-  // Commit the route first so the anchor exists even if publishing is off.
-  const rid = await resolveRouteId();
-  if (publish.value && !published.value) {
-    publishing.value = true;
-    try {
-      if (rid == null) throw new Error('route save failed');
-      const created = await publishVideo({
-        route_id: rid,
-        title: title.value.trim() || props.route.title,
-        description: description.value,
-        delete_previous: deletePrevious.value,
-      });
-      published.value = true;
-      publishedId.value = created.id;
-    } catch {
-      publishFailed.value = true;
-    } finally {
-      publishing.value = false;
-    }
-  }
-  const ext = 'mp4';
-  const pad = (n) => String(n).padStart(2, '0');
-  const d = new Date();
-  const name = `route-video-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.${ext}`;
-  if (typeof window.showSaveFilePicker === 'function') {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: name,
-        types: [{ description: 'Video', accept: { 'video/mp4': ['.mp4'] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return;
-    } catch (err) {
-      if (err && err.name === 'AbortError') return; // user cancelled
-    }
-  }
-  const anchor = document.createElement('a');
-  anchor.href = videoUrl.value;
-  anchor.download = name;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-}
-
-// "Upload to YouTube": ensure the gallery record exists (its id anchors
-// the source rewrite server-side), then multipart the mp4 — the server
-// uploads it to the site channel + drone-navigation playlist and returns
-// the watch URL, shown as a link once done.
-async function onUploadYouTube() {
-  const blob = clipBlob;
-  if (!blob || uploading.value || publishing.value) return;
-  uploadFailed.value = false;
-  try {
-    let id = publishedId.value;
-    if (!id) {
-      publishing.value = true;
-      const rid = await resolveRouteId();
-      if (rid == null) throw new Error('route save failed');
-      const created = await publishVideo({
-        route_id: rid,
-        title: title.value.trim() || props.route.title,
-        description: description.value,
-        delete_previous: deletePrevious.value,
-      });
-      published.value = true;
-      publishedId.value = created.id;
-      id = created.id;
-    }
-    uploading.value = true;
-    uploadPct.value = 0;
-    const updated = await uploadToYouTube(id, blob, (p) => {
-      uploadPct.value = p;
-    });
-    const yt = (updated.sources || []).find((s) => s.provider === 'youtube');
-    uploadedUrl.value = yt ? yt.url : '';
-  } catch {
-    uploadFailed.value = true;
-  } finally {
-    uploading.value = false;
-    publishing.value = false;
-  }
+// Generate: snapshot the fields + checkboxes and hand them to the
+// background job. Edits made afterwards do not affect the running job.
+function onGenerate() {
+  if (isActive.value) return;
+  startVideoJob({
+    waypoints: props.route.waypoints,
+    title: title.value.trim() || props.route.title,
+    description: description.value,
+    publish: publish.value,
+    deletePrevious: deletePrevious.value,
+    ensureRoute: props.ensureRoute,
+    fallbackRouteId: props.route.id ?? null,
+  });
 }
 </script>
 
@@ -253,19 +156,16 @@ async function onUploadYouTube() {
             <span class="vd__error-text">{{ errorMsg }}</span>
             <span class="vd__error-icon">⚠</span>
           </div>
-          <div v-else-if="uploading" class="vd__status">
-            {{ t('routevideodialog.uploading_youtube') }} {{ Math.round(uploadPct * 100) }}%
-          </div>
-          <div v-else-if="state === 'rendering'" class="vd__status">{{ statusText }}</div>
+          <div v-else-if="statusText" class="vd__status">{{ statusText }}</div>
         </div>
         <button class="vd__close" :title="t('routevideodialog.close')" @click="onClose">&times;</button>
       </div>
 
       <div class="vd__panel">
-        <canvas v-show="state === 'rendering'" ref="displayCanvas" class="vd__screen"></canvas>
+        <canvas v-show="rendering" ref="displayCanvas" class="vd__screen"></canvas>
         <video
-          v-if="state === 'done'"
-          :src="videoUrl"
+          v-if="job.videoUrl && !rendering"
+          :src="job.videoUrl"
           class="vd__screen"
           controls
           autoplay
@@ -293,48 +193,40 @@ async function onUploadYouTube() {
         <div class="vd__progress-track">
           <div
             class="vd__progress-fill"
-            :class="{ 'vd__progress-fill--done': state === 'done' }"
-            :style="{ width: `${Math.round((state === 'done' ? 1 : progress.pct) * 100)}%` }"
+            :class="{ 'vd__progress-fill--done': finished }"
+            :style="{ width: `${Math.round(progress.pct * 100)}%` }"
           ></div>
         </div>
-        <span v-if="state === 'rendering'" class="vd__progress-text">{{ progress.text }}</span>
+        <span v-if="rendering" class="vd__progress-text">{{ progress.text }}</span>
       </div>
 
       <label class="vd__publish">
-        <input v-model="publish" type="checkbox" :disabled="published" />
+        <input v-model="publish" type="checkbox" :disabled="isActive || !!job.publishedId" />
         <span>{{ t('routevideodialog.publish') }}</span>
       </label>
       <label class="vd__publish vd__publish--sub">
-        <input v-model="deletePrevious" type="checkbox" :disabled="published" />
+        <input v-model="deletePrevious" type="checkbox" :disabled="isActive || !!job.publishedId" />
         <span>{{ t('routevideodialog.delete_previous') }}</span>
       </label>
-      <div v-if="published" class="vd__published">{{ t('routevideodialog.published') }}</div>
-      <div v-if="uploadedUrl" class="vd__published">
+      <div v-if="job.publishedId" class="vd__published">{{ t('routevideodialog.published') }}</div>
+      <div v-if="job.uploadedUrl" class="vd__published">
         {{ t('routevideodialog.uploaded_youtube') }}
         <a
           class="vd__yt-link"
-          :href="uploadedUrl"
+          :href="job.uploadedUrl"
           target="_blank"
           rel="noopener"
-        >{{ uploadedUrl }}</a>
+        >{{ job.uploadedUrl }}</a>
       </div>
 
       <div class="vd__actions-row">
         <button
-          class="vd__download vd__download--yt"
-          :class="{ 'vd__download--ready': state === 'done' }"
-          :disabled="state !== 'done' || uploading || publishing"
-          @click="onUploadYouTube"
-        >
-          {{ t('routevideodialog.upload_youtube') }}
-        </button>
-        <button
           class="vd__download"
-          :class="{ 'vd__download--ready': state === 'done' }"
-          :disabled="state !== 'done'"
-          @click="onDownload"
+          :class="{ 'vd__download--ready': !isActive }"
+          :disabled="isActive"
+          @click="onGenerate"
         >
-          {{ t('routevideodialog.download') }}
+          {{ t('routevideodialog.generate') }}
         </button>
       </div>
     </div>
@@ -584,14 +476,6 @@ async function onUploadYouTube() {
 .vd__download--ready {
   background: #007aff;
   color: #ffffff;
-}
-
-/* Upload to YouTube: outline variant of the ready state so the two
-   actions stay visually distinct side by side. */
-.vd__download--yt.vd__download--ready {
-  background: #ffffff;
-  border-color: #007aff;
-  color: #007aff;
 }
 
 .vd__actions-row {

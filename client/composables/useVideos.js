@@ -27,6 +27,14 @@ export function cachedPublicVideos() {
   return publicVideosCache;
 }
 
+// Called by the background video job after it publishes (or replaces) a
+// video: Content -> Video and the Plaza then refetch fresh lists instead
+// of painting the stale cached copy first.
+export function invalidateVideoCaches() {
+  videosCache = null;
+  publicVideosCache = null;
+}
+
 export function useVideos() {
   const { token } = useAuth();
 

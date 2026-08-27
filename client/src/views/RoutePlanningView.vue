@@ -713,10 +713,10 @@ async function onClickSaveRoute() {
 }
 
 // Video button: open the video generation dialog WITHOUT saving the
-// route first. The route is persisted only when the dialog's Download /
-// Upload to YouTube button calls ensureVideoRouteSaved; closing the
-// dialog without clicking either abandons the route (no create, no
-// update in Content -> Route).
+// route first. The route is persisted only when the dialog's Generate
+// button starts the background job with the publish checkbox on; closing
+// the dialog (or Generate with the checkbox off) abandons the route (no
+// create, no update in Content -> Route).
 function onClickVideo() {
   if (controlsLocked.value || videoRoute.value) return;
   if (waypoints.value.length < 2) {
@@ -759,9 +759,10 @@ function makeTransientRoute() {
   };
 }
 
-// Deferred save of the Video flow: the dialog calls this when Download /
-// Upload to YouTube is clicked. Same create/update semantics as the Save
-// button; the returned route's id anchors the video record.
+// Deferred save of the Video flow: the background video job calls this
+// when it publishes (Generate click starts the job). Same create/update
+// semantics as the Save button; the returned route's id anchors the video
+// record.
 function ensureVideoRouteSaved() {
   return saveCurrentRoute();
 }
@@ -773,6 +774,22 @@ function onVideoClose() {
     routeScene.showRouteOverlay(waypoints.value, null);
   }
 }
+
+// Background video job: the dialog can be closed mid-render (the job keeps
+// running). When the render pass then ends with no dialog open, restore the
+// route overlay in the 3D overview here instead of in onVideoClose.
+watch(
+  routeScene.saving,
+  (saving, wasSaving) => {
+    if (
+      wasSaving && !saving &&
+      !videoRoute.value && is3d.value &&
+      !routeScene.previewActive.value
+    ) {
+      routeScene.showRouteOverlay(waypoints.value, null);
+    }
+  },
+);
 
 // 3D entry: the nadir overview at the 2D map's center and scale, with the
 // blue dots + B-spline overlay. convertAlt=true is the live 2D->3D

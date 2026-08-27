@@ -95,5 +95,10 @@
   "extensions_sub_drone_swarm": "Drone Swarm",
   "extensions_simple_crazyflie": "Simple Crazyflie",
   "extensions_crazyflie_bridge": "Crazyflie Bridge",
-  "extensions_crazyswarm": "Crazyswarm"
+  "extensions_crazyswarm": "Crazyswarm",
+  "videojob_done": "Video generated.",
+  "videojob_done_published": "Video published to the plaza and YouTube.",
+  "videojob_failed_render": "Video generation failed.",
+  "videojob_failed_publish": "Publishing to the plaza failed.",
+  "videojob_failed_youtube": "YouTube upload failed."
 }

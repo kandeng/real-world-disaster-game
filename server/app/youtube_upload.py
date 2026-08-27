@@ -175,6 +175,22 @@ def upload_mp4(fileobj, title: str, description: str) -> tuple[str, str]:
     return video_id, f"https://www.youtube.com/watch?v={video_id}"
 
 
+def delete_video(video_id: str) -> None:
+    """Delete a video from the site channel (previous post of a route).
+
+    Deleting the video also drops the playlist items referencing it, so
+    the drone-navigation playlist entry disappears automatically. A 404
+    means the video is already gone and counts as success.
+    """
+    youtube = get_youtube_service()
+    try:
+        youtube.videos().delete(id=video_id).execute()
+        log.info("[youtube] deleted video %s", video_id)
+    except HttpError as err:
+        if err.resp.status != 404:
+            raise
+
+
 def translate_error(err: Exception) -> YouTubeUploadError:
     """Map Google/client failures to the typed error the API layer raises."""
     if isinstance(err, YouTubeUploadError):

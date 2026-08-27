@@ -1,8 +1,9 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '@shared-composables/useAuth.js';
+import { useVideoJob } from '@shared-composables/useVideoJob.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import ChatbotOverlay from '@shared/ChatbotOverlay.vue';
 import bannerUrl from '../assets/media/drone_earth.png';
@@ -87,6 +88,15 @@ function toggleLocale() {
   locale.value = locale.value === 'en' ? 'zh' : 'en';
   localStorage.setItem('user-lang', locale.value);
 }
+
+/* ─── Background video job notice ─── */
+// The video generation job (Produce -> Video -> Generate) keeps running
+// after its dialog is closed; its terminal notice is shown here in the
+// top bar so completion / failure is never missed (auto-clears).
+const { job: videoJob } = useVideoJob();
+const videoJobNoticeText = computed(() =>
+  videoJob.notice ? t(`aerialview.videojob_${videoJob.notice.text}`) : ''
+);
 </script>
 
 <template>
@@ -200,8 +210,19 @@ function toggleLocale() {
 
         <!-- Canonical slot for every page's reminders / warnings: pages
              <Teleport> their .shell-notice divs here (centered; the bar
-             grows when a notice wraps onto multiple lines). -->
-        <div id="shell-notices" class="shell-topbar__notices"></div>
+             grows when a notice wraps onto multiple lines). The video job
+             notice renders as a sibling so it shows even with the dialog
+             closed. -->
+        <div class="shell-topbar__notices">
+          <div id="shell-notices" style="display: contents"></div>
+          <div
+            v-if="videoJob.notice"
+            class="shell-notice"
+            :class="{ 'shell-notice--warning': videoJob.notice.kind === 'warning' }"
+          >
+            {{ videoJobNoticeText }}
+          </div>
+        </div>
 
         <div class="shell-topbar__right">
           <!-- User: uploaded avatar when signed in, default glyph otherwise -->

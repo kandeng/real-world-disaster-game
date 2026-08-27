@@ -95,5 +95,10 @@
   "extensions_sub_drone_swarm": "无人机群",
   "extensions_simple_crazyflie": "Simple Crazyflie",
   "extensions_crazyflie_bridge": "Crazyflie Bridge",
-  "extensions_crazyswarm": "Crazyswarm"
+  "extensions_crazyswarm": "Crazyswarm",
+  "videojob_done": "视频已生成。",
+  "videojob_done_published": "视频已发布到广场和 YouTube。",
+  "videojob_failed_render": "视频生成失败。",
+  "videojob_failed_publish": "发布到广场失败。",
+  "videojob_failed_youtube": "上传到 YouTube 失败。"
 }

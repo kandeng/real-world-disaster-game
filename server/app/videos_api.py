@@ -24,8 +24,10 @@ per the CMS schema decision).
 import uuid
 from datetime import datetime, timedelta, timezone
 from tempfile import SpooledTemporaryFile
+from urllib.parse import parse_qs, urlparse
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
@@ -33,12 +35,26 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import youtube_upload
+from .config import CONFIG
 from .db import get_async_session
 from .models import Route, User, Video, VideoSource
 from .routes_api import WaypointIn, _seed_rows
 from .users import current_active_user
 
 router = APIRouter(tags=["videos"])
+log = logging.getLogger(__name__)
+
+
+def _youtube_id(url: str) -> str | None:
+    """Extract the YouTube video id from a watch / share URL, if any."""
+    try:
+        parsed = urlparse(url)
+        if "youtu.be" in parsed.netloc:
+            return parsed.path.lstrip("/").split("/")[0] or None
+        ids = parse_qs(parsed.query).get("v", [])
+        return ids[0] if ids else None
+    except Exception:
+        return None
 
 
 class SourceIn(BaseModel):
@@ -216,6 +232,25 @@ async def create_video(
             )
         ).scalars().all()
         for ov in old:
+            # Also retire the previous YouTube post of this route. This is
+            # best-effort: the site channel token may be missing/expired,
+            # and a stuck YouTube video must never block the new publish.
+            yt_sources = (
+                await session.execute(
+                    select(VideoSource).where(
+                        VideoSource.video_id == ov.id,
+                        VideoSource.provider == "youtube",
+                    )
+                )
+            ).scalars().all()
+            for src in yt_sources:
+                yt_id = _youtube_id(src.url)
+                if not yt_id:
+                    continue
+                try:
+                    await asyncio.to_thread(youtube_upload.delete_video, yt_id)
+                except Exception as err:
+                    log.warning("[videos] youtube delete %s failed: %s", yt_id, err)
             await session.execute(delete(VideoSource).where(VideoSource.video_id == ov.id))
             await session.delete(ov)
     video = Video(
@@ -310,12 +345,22 @@ async def upload_video_to_youtube(
                 raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
             spool.write(chunk)
         spool.seek(0)
+        # The YouTube description carries a final Play! deep link: an
+        # anonymous viewer clicking it lands on our Play! page with this
+        # route loaded (frontend_base_url is the public site origin).
+        description = video.description or ""
+        base = CONFIG.get("frontend_base_url", "").rstrip("/")
+        if video.route_id and base:
+            play_url = f"{base}/play?r={video.route_id}"
+            description = (
+                f"{description}\n\n{play_url}" if description.strip() else play_url
+            )
         try:
             _, watch_url = await asyncio.to_thread(
                 youtube_upload.upload_mp4,
                 spool,
                 video.title or "Drone route video",
-                video.description or "",
+                description,
             )
         except youtube_upload.YouTubeUploadError as err:
             raise HTTPException(
