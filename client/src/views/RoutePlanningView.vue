@@ -129,6 +129,23 @@ function onClickSearch() {
   viewCtx.subView = showSearchPanel.value ? 'map' : 'search';
 }
 
+// Reset (same name / icon / behavior as the Play! page): throw away the
+// current route entirely — waypoints, selection, title and the saved-route
+// anchor — so the next save mints a brand-new route, then open the address
+// search popup unchanged.
+function onClickReset() {
+  if (controlsLocked.value) return;
+  waypoints.value = [];
+  selectedWpId.value = null;
+  sourceRouteId.value = null;
+  routeTitle.value = '';
+  routeDescription.value = '';
+  mapViewRef.value?.redrawWaypointMarkers([], null);
+  mapViewRef.value?.redrawWaypointPath([]);
+  if (is3d.value) routeScene.hideRouteOverlay();
+  onClickSearch();
+}
+
 // ── Waypoint picking (green reminder + numbered blue rectangles) ──────────
 const showWaypointHint = computed(() => viewCtx.subView === 'waypoint');
 // Maintained waypoint list (session.route.waypoints); indices start at 1
@@ -422,14 +439,14 @@ function onPoisError(message) {
   }
 }
 
-// ── Right dock: Search + Waypoint + Steer + Route (same in every mode) ──
+// ── Right dock: Reset + Waypoint + Steer + Route (same in every mode) ──
 function registerRightDock() {
   registerRight({
-    id: 'search',
-    icon: 'MENU_SEARCH',
-    titleKey: 'routeplanningview.search',
+    id: 'reset',
+    icon: 'MENU_RESET',
+    titleKey: 'aerialview.reset',
     active: showSearchPanel.value,
-    onClick: onClickSearch,
+    onClick: onClickReset,
   });
   // No waypoint editing panel on this page: the button arms the green
   // "click the map to add a waypoint" reminder instead.
@@ -868,7 +885,7 @@ onMounted(() => {
         bv.disabled = controlsLocked.value;
       }
 
-      const bs = rightItems.find((i) => i.id === 'search');
+      const bs = rightItems.find((i) => i.id === 'reset');
       if (bs) {
         bs.active = showSearchPanel.value;
         bs.disabled = controlsLocked.value;

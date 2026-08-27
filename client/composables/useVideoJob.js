@@ -18,7 +18,7 @@
  * the user sees completion even after closing the dialog.
  */
 
-import { reactive } from 'vue';
+import { reactive, ref } from 'vue';
 import { useRouteScene3D } from './useRouteScene3D.js';
 import { useVideos, invalidateVideoCaches } from './useVideos.js';
 
@@ -35,7 +35,7 @@ export const job = reactive({
   notice: null, // { text: i18n suffix, kind: 'info' | 'warning' }
 });
 
-export const isActive = reactive({ value: false });
+export const isActive = ref(false);
 
 let noticeTimer = null;
 
