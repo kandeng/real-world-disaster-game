@@ -37,6 +37,7 @@ import shutil
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,15 +52,36 @@ from .users import current_active_user
 router = APIRouter(tags=["videos"])
 log = logging.getLogger(__name__)
 
-# Persistent mp4 store: every mp4 received via upload-youtube is also kept
-# on disk here so Content -> Video's Download button can serve it back
-# later (the workspace/ directory is excluded from the deploy rsync, so
-# the files survive backend redeploys).
+# Bounded mp4 cache: every mp4 received via upload-youtube is kept on disk
+# here so Content -> Video's Download button can serve it back (the
+# workspace/ directory is excluded from the deploy rsync, so the files
+# survive backend redeploys). The cache is capped by file count:
+#  - a download consumes its file (unlinked after the response is sent);
+#  - a new upload that overflows the cap evicts the oldest entries.
+# The canonical copy of every published video lives on YouTube, so losing
+# a cache entry only disables re-download of that render.
 VIDEO_DIR = Path(__file__).resolve().parent.parent / "workspace" / "videos"
+CACHE_MAX_FILES = int(CONFIG.get("video_cache_max_files", 10))
 
 
 def _mp4_path(video_id: str) -> Path:
     return VIDEO_DIR / f"{video_id}.mp4"
+
+
+def _evict_overflow() -> None:
+    """Keep at most CACHE_MAX_FILES mp4s in the cache: while over the
+    cap, unlink the oldest entries (by modification time). Best-effort —
+    an eviction hiccup must never fail the upload that triggered it."""
+    try:
+        files = [p for p in VIDEO_DIR.glob("*.mp4") if p.is_file()]
+        overflow = len(files) - CACHE_MAX_FILES
+        if overflow <= 0:
+            return
+        for p in sorted(files, key=lambda q: q.stat().st_mtime)[:overflow]:
+            p.unlink(missing_ok=True)
+            log.info("[videos] cache eviction: removed %s", p.name)
+    except OSError as err:
+        log.warning("[videos] cache eviction failed: %s", err)
 
 
 async def _retire_video(session: AsyncSession, video: Video) -> None:
@@ -363,7 +385,9 @@ async def download_video(
     session: AsyncSession = Depends(get_async_session),
 ) -> FileResponse:
     """Serve the persisted mp4 of one of the caller's videos (the
-    Content -> Video Download button). 404 when no mp4 was ever stored
+    Content -> Video Download button). The download CONSUMES the cache
+    entry: once the response is fully sent the file is unlinked, so the
+    cache frees itself as it is used. 404 when no mp4 was ever stored
     for it (e.g. demo seeds or videos published before persistence)."""
     stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
     video = (await session.execute(stmt)).scalar_one_or_none()
@@ -374,7 +398,14 @@ async def download_video(
         raise HTTPException(status_code=404, detail="NO_MP4")
     safe = "".join(c for c in (video.title or "") if c not in '\\/:*?"<>|').strip()
     filename = f"{safe or video.id}.mp4"
-    return FileResponse(path, media_type="video/mp4", filename=filename)
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename=filename,
+        # Runs AFTER the response is fully sent, so the streamed file is
+        # never removed mid-transfer (POSIX keeps the open fd readable).
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
 
 
 @router.post("/videos/{video_id}/upload-youtube")
@@ -409,11 +440,13 @@ async def upload_video_to_youtube(
             spool.write(chunk)
         # Keep a persistent copy for the Download button BEFORE the
         # YouTube upload: a YouTube failure must not lose the mp4.
+        # Overflowing the file-count cap evicts the oldest entries.
         try:
             VIDEO_DIR.mkdir(parents=True, exist_ok=True)
             spool.seek(0)
             with open(_mp4_path(video.id), "wb") as fh:
                 shutil.copyfileobj(spool, fh)
+            _evict_overflow()
         except OSError as err:
             log.warning("[videos] persist mp4 %s failed: %s", video.id, err)
         spool.seek(0)
