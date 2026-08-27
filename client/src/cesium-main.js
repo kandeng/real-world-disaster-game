@@ -192,8 +192,11 @@ async function loadArena() {
     const targetHeight = settings.defaultAlt;
     const initialPosition = Cesium.Cartesian3.fromDegrees(targetLongitude, targetLatitude, targetHeight);
 
-    // Apply default direction from settings (yaw → heading, pitch, roll)
-    const initialHeading = Cesium.Math.toRadians(settings.defaultYaw);
+    // Apply default direction from settings. The live view composes the
+    // camera azimuth as drone heading + gimbal yaw, so the prefetch view
+    // uses the same sum (plus the default gimbal pitch / roll) and the
+    // first tiles downloaded match what syncCesiumCamera will show.
+    const initialHeading = Cesium.Math.toRadians(settings.defaultYaw + settings.defaultCamYaw);
     const initialPitch = Cesium.Math.toRadians(settings.defaultPitch);
     const initialRoll = Cesium.Math.toRadians(settings.defaultRoll);
 

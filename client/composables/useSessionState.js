@@ -33,7 +33,7 @@ export const session = reactive({
     speed: 0,
   },
   gimbal: {
-    yaw: 0.0,
+    yaw: settings.defaultCamYaw,
     pitch: settings.defaultPitch,
     roll: settings.defaultRoll,
   },

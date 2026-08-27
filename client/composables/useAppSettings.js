@@ -11,12 +11,13 @@ const defaults = {
   fontSize: '16px',
   takeoffAltitude: 100,
   safetyBuffer: 8,
-  defaultLat: 37.4286,
-  defaultLon: -122.1699,
+  defaultLat: 37.4288,
+  defaultLon: -122.1665,
   defaultAlt: 150,
   defaultYaw: 180,
-  defaultPitch: 0,
-  defaultRoll: 0,
+  defaultCamYaw: -54.9,
+  defaultPitch: -36.6,
+  defaultRoll: 0.8,
   audioVolume: 0.9,
   enterpriseProxy: '',
 };
@@ -84,6 +85,11 @@ export function useAppSettings() {
     state.defaultYaw = ((n % 360) + 360) % 360;
   }
 
+  function setDefaultCamYaw(val) {
+    const n = Number(val) || 0;
+    state.defaultCamYaw = ((((n + 180) % 360) + 360) % 360) - 180;
+  }
+
   function setDefaultPitch(val) {
     const n = Number(val) || 0;
     state.defaultPitch = Math.max(-90, Math.min(90, n));
@@ -116,6 +122,7 @@ export function useAppSettings() {
     state.defaultLon = defaults.defaultLon;
     state.defaultAlt = defaults.defaultAlt;
     state.defaultYaw = defaults.defaultYaw;
+    state.defaultCamYaw = defaults.defaultCamYaw;
     state.defaultPitch = defaults.defaultPitch;
     state.defaultRoll = defaults.defaultRoll;
   }
@@ -143,6 +150,7 @@ export function useAppSettings() {
     setDefaultLon,
     setDefaultAlt,
     setDefaultYaw,
+    setDefaultCamYaw,
     setDefaultPitch,
     setDefaultRoll,
     resetFontDefaults,
