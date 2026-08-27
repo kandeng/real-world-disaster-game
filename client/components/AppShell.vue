@@ -34,6 +34,12 @@ onMounted(() => {
 // Starts collapsed (mockup left state); the circular toggle flips the
 // chevron right→left when the panel unfolds.
 const open = ref(false);
+// After a successful login (Account -> Login) expand the left panel so the
+// functional menu is immediately visible; only on the logged-out -> logged-in
+// transition, not on page reloads where the session is already alive.
+watch(isAuthenticated, (now, was) => {
+  if (now && !was) open.value = true;
+});
 
 /* ─── Chatbot overlay (top-bar question button) ─── */
 // The question button toggles a translucent assistant layer that floats

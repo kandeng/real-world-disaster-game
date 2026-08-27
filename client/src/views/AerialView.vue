@@ -137,21 +137,66 @@ const mapTypeId = computed(() => 'roadmap');
 // ── /play?r=<16-char route id> shareable play link ───────────────────────
 // The Gallery's "Explore the Scene in 3D" (or any shared copy of the URL)
 // lands here: fetch the route publicly, seed the session route domain (the
-// 2D Route view then shows its read-only dots), draw the 3D overlay and
-// hand the drone to the waypoint autopilot. ?v=<16-char video id> is the
-// fallback for gallery videos whose source route was deleted (the frozen
-// waypoint snapshot rides on the video row).
+// 2D Route view then shows its read-only dots) and hand the drone to the
+// waypoint autopilot. The 3D waypoint overlay (blue dots + spline) is NOT
+// drawn here — the play view keeps a clean cinematic scene. ?v=<16-char
+// video id> is the fallback for gallery videos whose source route was
+// deleted (the frozen waypoint snapshot rides on the video row).
 const autopilot = useRouteAutopilot();
 const { getPublicRoute } = useRoutes();
 const { listPublicVideos } = useVideos();
-let playOwnedOverlay = false;
 
 function stopPlay() {
   autopilot.stop();
-  if (playOwnedOverlay) {
-    routeScene.hideRouteOverlay();
-    playOwnedOverlay = false;
+}
+
+// ── Play-link tile loading progress bar ──────────────────────────────────
+// Deep links (Plaza -> "Explore the scene in 3D", Content -> Route ->
+// Steer) land on a fresh camera pose, so Google Earth 3D tiles for the
+// route area stream in from scratch — show a progress bar until every
+// tileset reports tilesLoaded. Cesium exposes no per-tileset percentage
+// in this build, so the bar eases toward 90% (pseudo-progress) and snaps
+// to 100% once the scene stays ready for a short streak; a 45 s safety
+// cap mirrors waitForTilesRendered in cesium-main.js so the bar never
+// blocks forever on a flaky connection.
+const playLoading = ref(false);
+const playLoadPct = ref(0);
+let playLoadTimer = null;
+
+function stopPlayLoading() {
+  if (playLoadTimer) {
+    clearInterval(playLoadTimer);
+    playLoadTimer = null;
   }
+  playLoading.value = false;
+  playLoadPct.value = 0;
+}
+
+function startPlayLoading() {
+  stopPlayLoading();
+  playLoading.value = true;
+  playLoadPct.value = 0;
+  let readyStreak = 0;
+  let elapsed = 0;
+  playLoadTimer = setInterval(() => {
+    elapsed += 100;
+    if (routeScene.sceneTilesReady()) {
+      readyStreak += 1;
+      // Ease faster while tiles demonstrably arrive.
+      playLoadPct.value = Math.min(0.95, playLoadPct.value + (0.95 - playLoadPct.value) * 0.08);
+    } else {
+      readyStreak = 0;
+      playLoadPct.value = Math.min(0.9, playLoadPct.value + (0.9 - playLoadPct.value) * 0.03);
+    }
+    if (readyStreak >= 5 || elapsed >= 45000) {
+      playLoadPct.value = 1;
+      clearInterval(playLoadTimer);
+      playLoadTimer = null;
+      setTimeout(() => {
+        playLoading.value = false;
+      }, 400);
+    }
+  }, 100);
 }
 
 async function applyPlayQuery() {
@@ -159,6 +204,7 @@ async function applyPlayQuery() {
   const v = typeof route.query.v === 'string' ? route.query.v : '';
   if (!r && !v) {
     stopPlay();
+    stopPlayLoading();
     return;
   }
   let payload = null;
@@ -177,6 +223,7 @@ async function applyPlayQuery() {
   const wps = ((payload && payload.waypoints) || []).map((w, i) => ({ ...w, id: i + 1, index: i + 1 }));
   if (!wps.length) {
     stopPlay();
+    stopPlayLoading();
     return;
   }
   session.route.sourceRouteId = payload.sourceRouteId ?? null;
@@ -186,8 +233,7 @@ async function applyPlayQuery() {
   session.route.waypoints = wps;
   session.route.selectedWpId = null;
   viewCtx.subView = 'steer';
-  routeScene.showRouteOverlay(wps, null);
-  playOwnedOverlay = true;
+  startPlayLoading();
   autopilot.start(wps);
 }
 watch(() => route.query, applyPlayQuery);
@@ -884,6 +930,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopPlay();
+  stopPlayLoading();
   resetRecorder();
   stopFlightKeyboard();
   stopCameraKeyboard();
@@ -949,6 +996,17 @@ onUnmounted(() => {
     <template #top-overlay>
       <ConnectionError :visible="showConnectionError" :message="connectionMessage" />
 
+      <!-- /play deep-link progress: Google Earth 3D tiles streaming in -->
+      <div v-if="playLoading" class="play-load-mask">
+        <div class="play-load-box">
+          <div class="play-load-text">{{ t('aerialview.loading_assets') }}</div>
+          <div class="play-load-track">
+            <div class="play-load-fill" :style="{ width: `${Math.round(playLoadPct * 100)}%` }"></div>
+          </div>
+          <div class="play-load-pct">{{ Math.round(playLoadPct * 100) }}%</div>
+        </div>
+      </div>
+
       <!-- Address search panel (same workflow as Route Planning) -->
       <div v-if="showSearchPanel && isStreet" class="search-panel">
         <form class="search-panel__row" @submit.prevent="onSearchSubmit">
@@ -1009,6 +1067,50 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* /play deep-link tile-loading progress overlay */
+.play-load-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.play-load-box {
+  min-width: 300px;
+  max-width: 420px;
+  padding: 18px 22px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.play-load-text {
+  font-size: 13px;
+  color: #1c1c1e;
+}
+.play-load-track {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+.play-load-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: #007aff;
+  transition: width 0.15s linear;
+}
+.play-load-pct {
+  font-size: 12px;
+  color: #6e6e73;
+  text-align: right;
+}
+
 :deep(.view-composer__background) {
   position: fixed;
   inset: 0;

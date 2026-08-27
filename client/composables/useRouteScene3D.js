@@ -1277,6 +1277,7 @@ export function useRouteScene3D() {
     trueAltForMapScale,
     modelAltForMapScale,
     prefetchTiles,
+    sceneTilesReady,
     // Re-exported so the view binds one object only.
     showFlight,
     showCamera,
