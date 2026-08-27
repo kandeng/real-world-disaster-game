@@ -134,13 +134,13 @@ const viewCtx = session.view.aerial;
 const isStreet = computed(() => viewCtx.subView !== 'steer');
 const mapTypeId = computed(() => 'roadmap');
 
-// ── /play?r=<route-uuid> shareable play link ─────────────────────────────
+// ── /play?r=<16-char route id> shareable play link ───────────────────────
 // The Gallery's "Explore the Scene in 3D" (or any shared copy of the URL)
 // lands here: fetch the route publicly, seed the session route domain (the
 // 2D Route view then shows its read-only dots), draw the 3D overlay and
-// hand the drone to the waypoint autopilot. ?v=<video-uuid> is the fallback
-// for gallery videos whose source route was deleted (the frozen waypoint
-// snapshot rides on the video row).
+// hand the drone to the waypoint autopilot. ?v=<16-char video id> is the
+// fallback for gallery videos whose source route was deleted (the frozen
+// waypoint snapshot rides on the video row).
 const autopilot = useRouteAutopilot();
 const { getPublicRoute } = useRoutes();
 const { listPublicVideos } = useVideos();

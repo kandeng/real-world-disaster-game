@@ -4,9 +4,10 @@ GET /api/routes        -> the caller's routes, most recent first. A brand
                           new account is seeded with a few demo routes on
                           Stanford campus so the list is never empty.
 GET /api/routes/{id}   -> public single-route read (unlisted-link semantics:
-                          the UUID is the secret, like the public video
-                          feed's waypoints). Backs the /play?r=<id> deep
-                          link rendered by 3D Exploration.
+                          the 16-char id is the secret — 64-bit unlisted
+                          semantics, like the public video feed's waypoints).
+                          Backs the /play?r=<id> deep link rendered by 3D
+                          Exploration.
 POST /api/routes       -> save a new route (the Route Planning Video flow,
                           case 1: a brand-new route).
 PUT /api/routes/{id}   -> replace a route's waypoint list and/or title
@@ -141,11 +142,11 @@ async def list_routes(
 
 @router.get("/routes/{route_id}")
 async def get_route(
-    route_id: uuid.UUID,
+    route_id: str,
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
-    """Public read for the /play?r=<id> deep link: the UUID plays the role
-    of the secret (unlisted), same exposure as the public video feed."""
+    """Public read for the /play?r=<id> deep link: the 16-char id plays the
+    role of the secret (unlisted), same exposure as the public video feed."""
     row = (await session.execute(select(Route).where(Route.id == route_id))).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="ROUTE_NOT_FOUND")
@@ -154,7 +155,7 @@ async def get_route(
 
 @router.put("/routes/{route_id}")
 async def update_route(
-    route_id: uuid.UUID,
+    route_id: str,
     body: RouteUpdate,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),

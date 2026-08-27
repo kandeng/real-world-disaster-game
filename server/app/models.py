@@ -7,6 +7,7 @@ Facebook/GitHub/Instagram only need a new httpx-oauth client — no migration.
 
 from datetime import datetime
 
+import secrets
 import uuid
 
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
@@ -16,6 +17,16 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+
+def new_short_id() -> str:
+    """16-hex-char (64-bit) identifier for route/video/video_source rows.
+
+    These tables use short URL-friendly ids — the id itself is the
+    unlisted secret in share links (/play?r=<id>) — while user.id stays
+    a UUID under fastapi-users.
+    """
+    return secrets.token_hex(8)
 
 
 class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, Base):
@@ -102,7 +113,9 @@ class Route(Base):
 
     __tablename__ = "route"
 
-    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    id: Mapped[str] = mapped_column(
+        String(length=16), primary_key=True, default=new_short_id
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -139,15 +152,17 @@ class Video(Base):
 
     __tablename__ = "video"
 
-    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    id: Mapped[str] = mapped_column(
+        String(length=16), primary_key=True, default=new_short_id
+    )
     user_id: Mapped[uuid.UUID] = mapped_column(
         GUID,
         ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    route_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID,
+    route_id: Mapped[str | None] = mapped_column(
+        String(length=16),
         ForeignKey("route.id", ondelete="SET NULL"),
         nullable=True,
     )
@@ -182,9 +197,11 @@ class VideoSource(Base):
         UniqueConstraint("video_id", "provider", name="uq_video_source_provider"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
-    video_id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
+    id: Mapped[str] = mapped_column(
+        String(length=16), primary_key=True, default=new_short_id
+    )
+    video_id: Mapped[str] = mapped_column(
+        String(length=16),
         ForeignKey("video.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

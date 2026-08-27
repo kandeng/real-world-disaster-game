@@ -48,7 +48,7 @@ class SourceIn(BaseModel):
 
 
 class VideoCreate(BaseModel):
-    route_id: uuid.UUID
+    route_id: str
     title: str | None = Field(default=None, max_length=200)
     description: str = Field(default="", max_length=2000)
     delete_previous: bool = False
@@ -234,7 +234,7 @@ async def create_video(
 
 @router.put("/videos/{video_id}")
 async def update_video(
-    video_id: uuid.UUID,
+    video_id: str,
     body: VideoUpdate,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
@@ -281,7 +281,7 @@ _YT_STATUS = {
 
 @router.post("/videos/{video_id}/upload-youtube")
 async def upload_video_to_youtube(
-    video_id: uuid.UUID,
+    video_id: str,
     file: UploadFile = File(...),
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),

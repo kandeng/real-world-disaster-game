@@ -13,7 +13,7 @@ const routes = [
     component: AerialView,
   },
   {
-    // Shareable play link (/play?r=<route-uuid>): the same 3D Exploration
+    // Shareable play link (/play?r=<16-char route id>): the same 3D Exploration
     // page, but the query arms the route autopilot (fly-along playback).
     // The address bar keeps the /play URL so the link stays copyable.
     path: '/play',
