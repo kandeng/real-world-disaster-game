@@ -6,36 +6,18 @@ import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import LoadingSpinner from '@shared/LoadingSpinner.vue';
 import WaypointCards from '@shared/WaypointCards.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
-import { useRoutes, setRouteVideoSignal, cachedRoutes } from '@shared-composables/useRoutes.js';
-import { useSessionState } from '@shared-composables/useSessionState.js';
+import { useRoutes, cachedRoutes } from '@shared-composables/useRoutes.js';
 
 // Content -> Route: the user's saved routes, most recent first, separated
 // by thin horizontal lines. Each entry collapses to title + creation time
-// with an Expand/Collapse toggle at the right end; expanded, the title
-// becomes an editable input and the waypoint card list (same style as the
-// Route Planning -> Route popup) appears with Save / Video / Steer below.
+// with an Expand/Collapse toggle at the right end; expanded: Title and
+// Description editors (drag the bottom border to resize), the editable
+// waypoint card list, the Creation/Update Time and Play! URL lines, and
+// the Save / Play! action row.
 const { t, locale } = useI18n();
 const router = useRouter();
 const { isAuthenticated } = useAuth();
 const { listRoutes, saveRoute } = useRoutes();
-const { session } = useSessionState();
-
-// Phase 2 (session-state migration): the Steer / Video jumps seed the
-// session store's route domain BEFORE navigating, replacing the old
-// one-shot handoff. Assigning a fresh array/object keeps reactivity clean
-// and the local row ids (:key) unique; Route Planning derives its wpSeq
-// from the carried ids on mount.
-function seedSessionRoute(r) {
-  session.route.sourceRouteId = r.id != null ? r.id : null;
-  session.route.title = r.title || '';
-  session.route.description = r.description || '';
-  session.route.createdAt = r.created_at || '';
-  session.route.waypoints = (r.waypoints || []).map((w, i) => ({ ...w, id: i + 1, index: i + 1 }));
-  session.route.selectedWpId = null;
-  // Phase 3: the handoff lands with the Route panel open (the view context
-  // of Route Planning is restored from this slot on every mount).
-  session.view.route.subView = 'route';
-}
 
 const routes = ref([]);
 const loading = ref(false);
@@ -75,6 +57,29 @@ function fmtDate(iso) {
   });
 }
 
+// "Aug 28, 17:40" (en) / "8月28日 17:40" (zh) — the card's single
+// Creation/Update Time value: the last change wins.
+function fmtShort(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return d.toLocaleString(locale.value === 'zh' ? 'zh-CN' : 'en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+function displayTime(r) {
+  return fmtShort(r.updated_at || r.created_at);
+}
+
+// Read-only deep link: the Play! page with this route loaded.
+function playUrl(r) {
+  return `${window.location.origin}/play?r=${r.id}`;
+}
+
 function toggle(r) {
   expanded.value = { ...expanded.value, [r.id]: !expanded.value[r.id] };
 }
@@ -96,6 +101,7 @@ async function onSave(r) {
     r.title = updated.title;
     r.description = updated.description;
     r.waypoints = updated.waypoints;
+    r.updated_at = updated.updated_at;
     savedId.value = r.id;
     clearTimeout(savedTimer);
     savedTimer = setTimeout(() => (savedId.value = null), 1600);
@@ -106,23 +112,14 @@ async function onSave(r) {
   }
 }
 
-// Video generation along the route: jump to Route Planning (like Steer)
-// and open the video generation dialog THERE — same code path as clicking
-// Route Planning -> Video, so the dialog lives in one place only.
-function onVideo(r) {
-  seedSessionRoute(r);
-  setRouteVideoSignal(true);
-  router.push({ name: 'RoutePlanning' });
-}
-
-// Steer this route in 3D Exploration: the SAME path as the Gallery's
-// "Explore the Scene in 3D" — the /play?r=<16-char route id> deep link.
-// AerialView fetches the route, seeds session.route (the 2D Route view then
-// shows its read-only dots linked by the blue spline), draws the 3D overlay
-// and hands the drone to the waypoint autopilot: cinematic playback of the
-// route starts right away, and the Flight / Gimbal disks take over at any
-// time.
-function onSteer(r) {
+// Fly this route in the Play! page (the button is named after it): the
+// SAME path as the Gallery's "Explore the Scene in 3D" — the
+// /play?r=<16-char route id> deep link. AerialView fetches the route,
+// seeds session.route (the 2D Route view then shows its read-only dots
+// linked by the blue spline), draws the 3D overlay and hands the drone
+// to the waypoint autopilot: cinematic playback of the route starts
+// right away, and the Flight / Gimbal disks take over at any time.
+function onPlay(r) {
   router.push({ path: '/play', query: { r: r.id } });
 }
 </script>
@@ -141,15 +138,8 @@ function onSteer(r) {
       class="rlist__entry"
     >
       <div class="rlist__head">
-        <div class="rlist__meta">
-          <input
-            v-if="expanded[r.id]"
-            v-model="r.title"
-            class="rlist__title-input"
-            type="text"
-            maxlength="200"
-          />
-          <div v-else class="rlist__title">{{ r.title }}</div>
+        <div class="rlist__head-info">
+          <div class="rlist__title">{{ r.title }}</div>
           <div class="rlist__date">{{ fmtDate(r.created_at) }}</div>
         </div>
         <button
@@ -166,14 +156,37 @@ function onSteer(r) {
       </div>
 
       <template v-if="expanded[r.id]">
+        <div class="rlist__label-line">{{ t('contentroutelist.title_label') }}</div>
+        <textarea
+          v-model="r.title"
+          class="rlist__title-input"
+          rows="2"
+          maxlength="200"
+        ></textarea>
+
+        <div class="rlist__label-line">{{ t('contentroutelist.description_label') }}</div>
         <textarea
           v-model="r.description"
           class="rlist__desc"
           rows="3"
           maxlength="2000"
-          :placeholder="t('contentroutelist.description_ph')"
         ></textarea>
+
+        <div class="rlist__label-line">{{ t('contentroutelist.waypoints_label') }}</div>
         <WaypointCards :waypoints="r.waypoints" @edit="onEditWp(r, $event)" />
+
+        <div class="rlist__meta">{{ t('contentroutelist.time_label') }} {{ displayTime(r) }}</div>
+
+        <div class="rlist__meta">
+          {{ t('contentroutelist.play_url_label') }}
+          <a
+            :href="playUrl(r)"
+            target="_blank"
+            rel="noopener"
+            class="rlist__link"
+          >{{ playUrl(r) }}</a>
+        </div>
+
         <div class="rlist__actions">
           <button
             class="rlist__action"
@@ -183,10 +196,7 @@ function onSteer(r) {
           >
             <ConfigurableIcon name="MENU_SAVE" :size="26" />
           </button>
-          <button class="rlist__action" :title="t('contentroutelist.video')" @click="onVideo(r)">
-            <ConfigurableIcon name="MENU_RECORDER" :size="26" />
-          </button>
-          <button class="rlist__action" :title="t('contentroutelist.steer')" @click="onSteer(r)">
+          <button class="rlist__action" :title="t('contentroutelist.play')" @click="onPlay(r)">
             <ConfigurableIcon name="MENU_CONTROL_STICK" :size="26" />
           </button>
           <span v-if="savedId === r.id" class="rlist__saved">{{ t('contentroutelist.saved') }}</span>
@@ -220,7 +230,7 @@ function onSteer(r) {
   gap: 24px;
 }
 
-.rlist__meta {
+.rlist__head-info {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -233,17 +243,23 @@ function onSteer(r) {
   color: #111827;
 }
 
-/* Editable title while the entry is expanded. */
+/* Editable Title box in the expanded body — same language as the video
+   card's title textarea (drag the bottom border to resize). */
 .rlist__title-input {
   box-sizing: border-box;
-  max-width: 480px;
-  padding: 6px 12px;
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  padding: 8px 12px;
   border: 1px solid #8e8e93;
   border-radius: 8px;
   background: #ffffff;
-  font-size: 1.15rem;
+  font-family: inherit;
+  font-size: 1.05rem;
   font-weight: 600;
   color: #111827;
+  resize: vertical;
+  min-height: 56px;
 }
 
 .rlist__title-input:focus {
@@ -256,6 +272,15 @@ function onSteer(r) {
   color: #1d1d1f;
 }
 
+/* Field labels sit on their own line above the editor boxes and the
+   waypoint list (Title: / Description: / Waypoint List:). */
+.rlist__label-line {
+  margin-top: 18px;
+  margin-bottom: 6px;
+  font-size: 0.95rem;
+  color: #1d1d1f;
+}
+
 /* Editable description while expanded — same box language as the video
    card's description textarea in Content -> Video. */
 .rlist__desc {
@@ -263,7 +288,6 @@ function onSteer(r) {
   display: block;
   width: 100%;
   max-width: 640px;
-  margin-top: 12px;
   padding: 8px 12px;
   border: 1px solid #8e8e93;
   border-radius: 8px;
@@ -277,6 +301,23 @@ function onSteer(r) {
 
 .rlist__desc:focus {
   outline: 1px solid rgba(37, 99, 235, 0.5);
+}
+
+/* Read-only meta lines: Creation/Update Time, Play! URL. */
+.rlist__meta {
+  margin-top: 12px;
+  font-size: 0.95rem;
+  color: #1d1d1f;
+}
+
+.rlist__link {
+  color: #007aff;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.rlist__link:hover {
+  text-decoration: underline;
 }
 
 .rlist__toggle {

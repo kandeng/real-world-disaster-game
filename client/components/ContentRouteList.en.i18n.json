@@ -4,9 +4,12 @@
   "empty": "No routes yet.",
   "expand": "Expand",
   "collapse": "Collapse",
+  "title_label": "Title:",
+  "description_label": "Description:",
+  "waypoints_label": "Waypoint List:",
+  "time_label": "Creation/Update Time:",
+  "play_url_label": "Play! URL:",
   "save": "Save",
-  "video": "Video",
-  "steer": "Steer",
-  "saved": "Saved",
-  "description_ph": "Description"
+  "play": "Play!",
+  "saved": "Saved"
 }

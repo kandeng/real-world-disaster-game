@@ -4,9 +4,12 @@
   "empty": "暂无航线。",
   "expand": "展开",
   "collapse": "收起",
+  "title_label": "标题：",
+  "description_label": "描述：",
+  "waypoints_label": "航点列表：",
+  "time_label": "创建/更新时间：",
+  "play_url_label": "Play! URL：",
   "save": "保存",
-  "video": "视频",
-  "steer": "操控",
-  "saved": "已保存",
-  "description_ph": "描述"
+  "play": "玩！",
+  "saved": "已保存"
 }

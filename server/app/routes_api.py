@@ -13,8 +13,8 @@ POST /api/routes       -> save a new route (the Route Planning Video flow,
 PUT /api/routes/{id}   -> replace a route's waypoint list and/or title
                           (title optional: omitted = kept, which is what
                           the Route Planning Video flow case 2 wants).
-                          Also refreshes created_at so Content -> Route
-                          shows the fresh Creation Time.
+                          The card's Creation/Update Time then shows the
+                          fresh updated_at.
 
 List/create/update require an active user (Bearer JWT); the single-route
 GET is open so anonymous visitors can fly a shared route.
@@ -115,6 +115,7 @@ def _serialize(row: Route) -> dict:
         "title": row.title,
         "description": row.description,
         "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
         "waypoints": row.waypoints,
     }
 
@@ -169,9 +170,8 @@ async def update_route(
     if body.description is not None:
         row.description = body.description
     row.waypoints = [w.model_dump() for w in body.waypoints]
-    # Update flow (Route Planning case 2): the route in Content -> Route
-    # shows the fresh Creation Time. updated_at follows via onupdate.
-    row.created_at = datetime.now(timezone.utc)
+    # created_at stays the mint moment; the card's Creation/Update Time
+    # shows updated_at, which the column's onupdate bumps on this commit.
     await session.commit()
     await session.refresh(row)
     return _serialize(row)
