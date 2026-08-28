@@ -8,7 +8,10 @@ GET /api/videos        -> the caller's videos, most recent first, each with
 GET /api/videos/public -> the Gallery feed: every user's published videos,
                           most recent first, with author names. Open to
                           anonymous callers (the Gallery page is public).
-PUT /api/videos/{id}   -> replace title / waypoint snapshot / sources.
+PUT /api/videos/{id}   -> replace title / waypoint snapshot / sources and
+                          keep the YouTube post in step: title and
+                          description always, the footage too when the
+                          cached mp4 is newer than the post.
 DELETE /api/videos/{id}
                        -> retire one of the caller's videos: the YouTube
                           post (best-effort), the playback sources, the
@@ -63,9 +66,54 @@ log = logging.getLogger(__name__)
 VIDEO_DIR = Path(__file__).resolve().parent.parent / "workspace" / "videos"
 CACHE_MAX_FILES = int(CONFIG.get("video_cache_max_files", 10))
 
+# One-shot temp files for Download's fetch-from-YouTube fallback. Kept
+# OUTSIDE the cache dir so the file-count cap and eviction never see
+# them; each entry is unlinked after its response is sent.
+TMP_DIR = VIDEO_DIR.parent / "videos_tmp"
+
+# Operator-exported browser cookies (Netscape format) authenticating
+# yt-dlp against YouTube — needed because datacenter IPs hit the
+# "Sign in to confirm you're not a bot" wall on anonymous fetches.
+_YT_COOKIES_PATH = Path(__file__).resolve().parent.parent / "workspace" / "youtube_cookies.txt"
+
 
 def _mp4_path(video_id: str) -> Path:
     return VIDEO_DIR / f"{video_id}.mp4"
+
+
+# Marker recording that the cached mp4 and the YouTube footage match.
+# Written after every successful YouTube upload of the cache file,
+# removed whenever the cache file is replaced; its absence (with a
+# cache file present) tells Save to re-upload the footage.
+def _yt_marker_path(video_id: str) -> Path:
+    return VIDEO_DIR / f"{video_id}.ytsync"
+
+
+def _write_yt_marker(video_id: str) -> None:
+    try:
+        VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+        _yt_marker_path(video_id).touch()
+    except OSError as err:
+        log.warning("[videos] write ytsync marker %s failed: %s", video_id, err)
+
+
+def _remove_yt_marker(video_id: str) -> None:
+    try:
+        _yt_marker_path(video_id).unlink(missing_ok=True)
+    except OSError as err:
+        log.warning("[videos] remove ytsync marker %s failed: %s", video_id, err)
+
+
+def _youtube_description(video: Video, description: str) -> str:
+    """The YouTube description carries a final Play! deep-link line: an
+    anonymous viewer clicking it lands on our Play! page with this
+    route loaded (frontend_base_url is the public site origin)."""
+    text = description or ""
+    base = CONFIG.get("frontend_base_url", "").rstrip("/")
+    if video.route_id and base:
+        line = f"Play! URL: {base}/play?r={video.route_id}"
+        text = f"{text}\n\n{line}" if text.strip() else line
+    return text
 
 
 def _evict_overflow() -> None:
@@ -111,6 +159,7 @@ async def _retire_video(session: AsyncSession, video: Video) -> None:
         _mp4_path(video.id).unlink(missing_ok=True)
     except OSError as err:
         log.warning("[videos] unlink mp4 %s failed: %s", video.id, err)
+    _remove_yt_marker(video.id)
 
 
 def _youtube_id(url: str) -> str | None:
@@ -230,6 +279,7 @@ async def _serialize(
         "route_id": str(video.route_id) if video.route_id else None,
         "author_name": author_name,
         "created_at": video.created_at.isoformat(),
+        "updated_at": video.updated_at.isoformat(),
         "waypoints": video.waypoints,
         "sources": [
             {"provider": s.provider, "url": s.url, "position": s.position}
@@ -315,6 +365,88 @@ async def create_video(
     return await _serialize(session, video, user.display_name)
 
 
+async def _sync_youtube(session: AsyncSession, video: Video) -> str:
+    """Push the card's current state to its YouTube post (the Save
+    button's third place): title and description always; the footage
+    too when the cached mp4 is newer than the post — YouTube cannot
+    replace a video's media, so a fresh copy is uploaded, the old post
+    retired and the youtube source pointed at the new watch URL.
+
+    Returns "ok", "skipped" (no youtube source), or the error code —
+    the local row is already committed either way, so a sync failure
+    only downgrades the response hint, never the save itself.
+    """
+    yt_src = (
+        await session.execute(
+            select(VideoSource)
+            .where(
+                VideoSource.video_id == video.id,
+                VideoSource.provider == "youtube",
+            )
+            .order_by(VideoSource.position.asc())
+        )
+    ).scalars().first()
+    yt_id = _youtube_id(yt_src.url) if yt_src else None
+    title = video.title or "Drone route video"
+    description = _youtube_description(video, video.description or "")
+    mp4 = _mp4_path(video.id)
+    try:
+        if mp4.is_file() and not _yt_marker_path(video.id).is_file():
+            with open(mp4, "rb") as fh:
+                new_id, watch_url = await asyncio.to_thread(
+                    youtube_upload.upload_mp4, fh, title, description
+                )
+            if yt_id:
+                try:
+                    await asyncio.to_thread(youtube_upload.delete_video, yt_id)
+                except Exception as err:
+                    log.warning(
+                        "[videos] youtube delete %s failed: %s", yt_id, err
+                    )
+            if yt_src is not None:
+                yt_src.url = watch_url
+            else:
+                yt_src = VideoSource(
+                    video_id=video.id,
+                    provider="youtube",
+                    url=watch_url,
+                    position=0,
+                )
+                session.add(yt_src)
+                await session.flush()
+            # The fresh footage post becomes the primary source; the
+            # other providers keep their relative order behind it.
+            others = (
+                await session.execute(
+                    select(VideoSource)
+                    .where(
+                        VideoSource.video_id == video.id,
+                        VideoSource.id != yt_src.id,
+                    )
+                    .order_by(VideoSource.position.asc())
+                )
+            ).scalars().all()
+            yt_src.position = 0
+            for pos, s in enumerate(others, start=1):
+                s.position = pos
+            await session.commit()
+            _write_yt_marker(video.id)
+            log.info("[videos] re-uploaded footage of %s as %s", video.id, new_id)
+            return "ok"
+        if not yt_id:
+            return "skipped"
+        await asyncio.to_thread(
+            youtube_upload.update_metadata, yt_id, title, description
+        )
+        return "ok"
+    except youtube_upload.YouTubeUploadError as err:
+        log.warning("[videos] youtube sync for %s failed: %s", video.id, err)
+        return err.code
+    except Exception as err:
+        log.warning("[videos] youtube sync for %s failed: %s", video.id, err)
+        return "youtube_sync_failed"
+
+
 @router.put("/videos/{video_id}")
 async def update_video(
     video_id: str,
@@ -322,6 +454,11 @@ async def update_video(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
+    """Content -> Video Save button: one write lands in all three
+    places — the owner's card, the Plaza feed (same table) and the
+    YouTube post (title/description always, footage when it changed;
+    see _sync_youtube). The response carries youtube_sync so the card
+    can tell a full save from a local-only one."""
     stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
     video = (await session.execute(stmt)).scalar_one_or_none()
     if video is None:
@@ -349,7 +486,10 @@ async def update_video(
         )
     await session.commit()
     await session.refresh(video)
-    return await _serialize(session, video, user.display_name)
+    yt_status = await _sync_youtube(session, video)
+    payload = await _serialize(session, video, user.display_name)
+    payload["youtube_sync"] = yt_status
+    return payload
 
 
 # youtube_upload error codes -> HTTP status (detail carries the code so
@@ -378,24 +518,82 @@ async def delete_video_entry(
     await session.commit()
 
 
+def _fetch_from_youtube(yt_id: str, dest_stem: Path) -> Path:
+    """Blocking yt-dlp fetch of a YouTube video's best single-file mp4
+    rendition into dest_stem.<ext>; returns the written path. Runs in a
+    worker thread (a fetch can take tens of seconds for large videos).
+
+    YouTube answers anonymous requests from datacenter IPs with a bot
+    wall ("Sign in to confirm you're not a bot"), so the operator
+    exports browser cookies once (Netscape format) to
+    server/workspace/youtube_cookies.txt; present, they authenticate
+    every fetch.
+    """
+    import yt_dlp
+
+    opts = {
+        # One progressive mp4 stream: no ffmpeg merge step needed. The
+        # footage is our own re-hosted render, so the platform's best
+        # mp4 rendition is exactly what the Download button promises.
+        "format": "b[ext=mp4]/best",
+        "outtmpl": f"{dest_stem}.%(ext)s",
+        "quiet": True,
+        "no_warnings": True,
+    }
+    if _YT_COOKIES_PATH.is_file():
+        opts["cookiefile"] = str(_YT_COOKIES_PATH)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(
+            f"https://www.youtube.com/watch?v={yt_id}", download=True
+        )
+    downs = (info or {}).get("requested_downloads") or []
+    filepath = downs[0].get("filepath") if downs else None
+    if not filepath:
+        raise RuntimeError("yt-dlp produced no file")
+    return Path(filepath)
+
+
 @router.get("/videos/{video_id}/download")
 async def download_video(
     video_id: str,
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> FileResponse:
-    """Serve the persisted mp4 of one of the caller's videos (the
-    Content -> Video Download button). The download CONSUMES the cache
-    entry: once the response is fully sent the file is unlinked, so the
-    cache frees itself as it is used. 404 when no mp4 was ever stored
-    for it (e.g. demo seeds or videos published before persistence)."""
+    """Serve the mp4 of one of the caller's videos (the Content ->
+    Video Download button). Serves the cached copy when present; when
+    the cache no longer holds it, the footage is fetched back from
+    YouTube (the canonical store) into a one-shot temp file. Either
+    way the served file is CONSUMED: unlinked after the response is
+    fully sent, so the server keeps no growing pile of downloads.
+    404 when there is neither a cache file nor a YouTube source."""
     stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
     video = (await session.execute(stmt)).scalar_one_or_none()
     if video is None:
         raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
     path = _mp4_path(video.id)
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="NO_MP4")
+        yt_src = (
+            await session.execute(
+                select(VideoSource)
+                .where(
+                    VideoSource.video_id == video.id,
+                    VideoSource.provider == "youtube",
+                )
+                .order_by(VideoSource.position.asc())
+            )
+        ).scalars().first()
+        yt_id = _youtube_id(yt_src.url) if yt_src else None
+        if not yt_id:
+            raise HTTPException(status_code=404, detail="NO_MP4")
+        try:
+            TMP_DIR.mkdir(parents=True, exist_ok=True)
+            stem = TMP_DIR / f"{video.id}-{uuid.uuid4().hex[:8]}"
+            path = await asyncio.to_thread(_fetch_from_youtube, yt_id, stem)
+        except Exception as err:
+            log.warning(
+                "[videos] youtube fetch for %s failed: %s", video.id, err
+            )
+            raise HTTPException(status_code=502, detail="YOUTUBE_FETCH_FAILED")
     safe = "".join(c for c in (video.title or "") if c not in '\\/:*?"<>|').strip()
     filename = f"{safe or video.id}.mp4"
     return FileResponse(
@@ -406,6 +604,52 @@ async def download_video(
         # never removed mid-transfer (POSIX keeps the open fd readable).
         background=BackgroundTask(path.unlink, missing_ok=True),
     )
+
+
+@router.put("/videos/{video_id}/file")
+async def replace_video_file(
+    video_id: str,
+    file: UploadFile = File(...),
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Content -> Video "update the mp4 video file": replace the cached
+    mp4 of one of the caller's videos with a fresh upload. The YouTube
+    post and the playback sources stay untouched — this only swaps the
+    file the Download button serves, then bumps updated_at."""
+    stmt = select(Video).where(Video.id == video_id, Video.user_id == user.id)
+    video = (await session.execute(stmt)).scalar_one_or_none()
+    if video is None:
+        raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
+    ctype = file.content_type or ""
+    if ctype not in ("", "video/mp4") and not (file.filename or "").endswith(".mp4"):
+        raise HTTPException(status_code=415, detail="NOT_MP4")
+
+    spool = SpooledTemporaryFile(max_size=64 * 1024 * 1024)
+    size = 0
+    while chunk := await file.read(1024 * 1024):
+        size += len(chunk)
+        if size > youtube_upload.MAX_SIZE:
+            raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
+        spool.write(chunk)
+    if size == 0:
+        raise HTTPException(status_code=400, detail="EMPTY_FILE")
+    try:
+        VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+        spool.seek(0)
+        with open(_mp4_path(video.id), "wb") as fh:
+            shutil.copyfileobj(spool, fh)
+        _evict_overflow()
+    except OSError as err:
+        log.warning("[videos] replace mp4 %s failed: %s", video.id, err)
+        raise HTTPException(status_code=500, detail="FILE_STORE_FAILED")
+    # The cache now differs from the YouTube footage: Save's next sync
+    # must re-upload it.
+    _remove_yt_marker(video.id)
+    video.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    await session.refresh(video)
+    return await _serialize(session, video, user.display_name)
 
 
 @router.post("/videos/{video_id}/upload-youtube")
@@ -450,16 +694,9 @@ async def upload_video_to_youtube(
         except OSError as err:
             log.warning("[videos] persist mp4 %s failed: %s", video.id, err)
         spool.seek(0)
-        # The YouTube description carries a final Play! deep link: an
-        # anonymous viewer clicking it lands on our Play! page with this
-        # route loaded (frontend_base_url is the public site origin).
-        description = video.description or ""
-        base = CONFIG.get("frontend_base_url", "").rstrip("/")
-        if video.route_id and base:
-            play_url = f"{base}/play?r={video.route_id}"
-            description = (
-                f"{description}\n\n{play_url}" if description.strip() else play_url
-            )
+        # The YouTube description carries a final Play! deep-link line
+        # (see _youtube_description).
+        description = _youtube_description(video, video.description or "")
         try:
             _, watch_url = await asyncio.to_thread(
                 youtube_upload.upload_mp4,
@@ -471,6 +708,8 @@ async def upload_video_to_youtube(
             raise HTTPException(
                 status_code=_YT_STATUS.get(err.code, 502), detail=err.code
             )
+        # Cache file and YouTube footage now match.
+        _write_yt_marker(video.id)
 
         # Rewrite sources: the fresh YouTube URL first, the rest behind it.
         existing = (

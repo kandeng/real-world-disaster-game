@@ -175,6 +175,38 @@ def upload_mp4(fileobj, title: str, description: str) -> tuple[str, str]:
     return video_id, f"https://www.youtube.com/watch?v={video_id}"
 
 
+def update_metadata(video_id: str, title: str, description: str) -> None:
+    """Update the title and description of a video on the site channel.
+
+    videos.update rewrites the whole snippet, so the current snippet
+    (categoryId is required, tags/languages carried over) is fetched
+    first and only title/description are replaced. An empty items list
+    means the video is gone from the channel — reported as a typed
+    error, not silently swallowed.
+    """
+    youtube = get_youtube_service()
+    try:
+        page = youtube.videos().list(part="snippet", id=video_id).execute()
+        items = page.get("items", [])
+        if not items:
+            raise YouTubeUploadError(
+                "youtube_video_missing",
+                f"video {video_id} not found on the channel",
+            )
+        snippet = dict(items[0].get("snippet", {}))
+        snippet["title"] = title
+        snippet["description"] = description
+        snippet.setdefault("categoryId", "28")  # Science & Technology
+        youtube.videos().update(
+            part="snippet", body={"id": video_id, "snippet": snippet}
+        ).execute()
+        log.info("[youtube] updated metadata of %s", video_id)
+    except YouTubeUploadError:
+        raise
+    except Exception as err:  # HttpError (quota/auth) + network failures
+        raise translate_error(err) from err
+
+
 def delete_video(video_id: str) -> None:
     """Delete a video from the site channel (previous post of a route).
 

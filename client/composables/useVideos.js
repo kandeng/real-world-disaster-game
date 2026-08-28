@@ -135,6 +135,36 @@ export function useVideos() {
     return res.blob();
   }
 
+  /** PUT /api/videos/{id}/file — replace the cached mp4 of one of the
+   *  caller's videos (Content -> Video "update the mp4 video file").
+   *  XHR instead of fetch: upload progress events. onProgress receives
+   *  0..1. Resolves with the serialized video (fresh updated_at). */
+  function updateVideoFile(id, file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', `${API_BASE}/api/videos/${id}/file`);
+      xhr.setRequestHeader('Authorization', `Bearer ${token.value}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            reject(new Error('video_file_upload_failed'));
+          }
+          return;
+        }
+        reject(new Error('video_file_upload_failed'));
+      };
+      xhr.onerror = () => reject(new Error('video_file_upload_failed'));
+      const form = new FormData();
+      form.append('file', file, file.name || 'route-video.mp4');
+      xhr.send(form);
+    });
+  }
+
   /** DELETE /api/videos/{id} — retire the video card (owner list and
    *  the Plaza feed), its YouTube post and the persisted mp4. */
   async function deleteVideo(id) {
@@ -145,5 +175,5 @@ export function useVideos() {
     if (!res.ok) throw new Error('video_delete_failed');
   }
 
-  return { listVideos, listPublicVideos, saveVideo, publishVideo, uploadToYouTube, fetchVideoFile, deleteVideo };
+  return { listVideos, listPublicVideos, saveVideo, publishVideo, uploadToYouTube, fetchVideoFile, updateVideoFile, deleteVideo };
 }

@@ -9,14 +9,13 @@ import { useVideoJob } from '@shared-composables/useVideoJob.js';
 
 // Content -> Video: the user's published videos, most recent first,
 // separated by thin horizontal lines — same layout language as the Route
-// list. Expanded, the title is editable and the owner can edit the video
-// URL rows (URL input + Open + delete). Save persists the edits (icon
-// button, same language as Content -> Route); Download saves the mp4 to
-// a local file (this session's in-memory render first, else the server's
-// persisted copy).
+// list. Collapsed, a card is its thumbnail; expanded: thumbnail on top,
+// then the mp4 update control, Title + Description editors, the creation/
+// update time, the read-only Play!/video links, and the Save / Download /
+// Delete action row.
 const { t, locale } = useI18n();
 const { isAuthenticated } = useAuth();
-const { listVideos, saveVideo, fetchVideoFile, deleteVideo } = useVideos();
+const { listVideos, saveVideo, fetchVideoFile, updateVideoFile, deleteVideo } = useVideos();
 const { job: videoJob } = useVideoJob();
 
 const videos = ref([]);
@@ -27,12 +26,20 @@ const brokenThumbs = ref({}); // videoId -> true once the thumb image proves unu
 const savingId = ref(null);
 const savedId = ref(null); // transient "Saved" hint next to the buttons
 const failedId = ref(null); // transient "Save failed" hint
+const syncFailedId = ref(null); // "saved locally, YouTube sync failed" hint
 const downloadingId = ref(null);
 const downloadFailedId = ref(null); // transient "Download failed" hint
+const uploadingId = ref(null);
+const uploadedId = ref(null); // transient "Uploaded" hint
+const uploadFailedId = ref(null); // transient "Upload failed" hint
 const deletingId = ref(null);
 const deleteFailedId = ref(null); // transient "Delete failed" hint
+const pendingDelete = ref(null); // video waiting in the Delete warning dialog
+const filePicker = ref(null); // hidden <input type="file">
+let pickTargetId = null; // the video the next picked mp4 belongs to
 let hintTimer = null;
 let downloadHintTimer = null;
+let uploadHintTimer = null;
 
 onMounted(async () => {
   if (!isAuthenticated.value) return;
@@ -50,18 +57,38 @@ onMounted(async () => {
   }
 });
 
-// "Aug 22, 2026, 15:25" (en) / "2026年8月22日 15:25" (zh)
+// "Aug 28, 17:40" (en) / "8月28日 17:40" (zh)
 function fmtDate(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '';
   return d.toLocaleString(locale.value === 'zh' ? 'zh-CN' : 'en-US', {
-    year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   });
+}
+
+// The card's single "Creation/Update Time" value: the last change wins
+// (a video is minted from a route, so updated_at is the mint/last-edit
+// moment the owner cares about).
+function displayTime(v) {
+  return fmtDate(v.updated_at || v.created_at);
+}
+
+// Read-only deep links on the card: the Play! link lands on the Play!
+// page with this video's route loaded; the video link is the primary
+// (lowest-position) playback URL.
+function playUrl(v) {
+  return v.route_id ? `${window.location.origin}/play?r=${v.route_id}` : null;
+}
+
+function videoUrl(v) {
+  const src = [...(v.sources || [])]
+    .sort((a, b) => a.position - b.position)
+    .find((s) => s.url && s.url.trim());
+  return src ? src.url.trim() : null;
 }
 
 function toggle(v) {
@@ -104,35 +131,10 @@ function markThumbBroken(v) {
   brokenThumbs.value = { ...brokenThumbs.value, [v.id]: true };
 }
 
-// Embed URL of the primary (lowest-position) playable source, so the card
-// tops with a real video displaying window. Returns null when nothing
-// parseable is configured yet (black placeholder panel instead).
-function embedUrl(v) {
-  const src = [...(v.sources || [])]
-    .sort((a, b) => a.position - b.position)
-    .find((s) => s.url && s.url.trim());
-  if (!src) return null;
-  const url = src.url.trim();
-  if (src.provider === 'youtube') {
-    const m = url.match(/(?:youtu\.be\/|[?/]v=|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)
-      || url.match(/^([A-Za-z0-9_-]{6,})$/);
-    // Plain youtube.com (NOT youtube-nocookie.com): the nocookie domain
-    // cannot share cookies with a signed-in Google session, so YouTube's
-    // bot detection walls anonymous embeds with "Sign in to confirm
-    // you're not a bot". hl pins the player UI to the app language.
-    if (m) return `https://www.youtube.com/embed/${m[1]}?hl=${locale.value === 'zh' ? 'zh_CN' : 'en_US'}`;
-  } else if (src.provider === 'bilibili') {
-    const bv = url.match(/(BV[0-9A-Za-z]+)/);
-    const av = url.match(/av(\d+)/i);
-    if (bv) return `https://player.bilibili.com/player.html?bvid=${bv[1]}&autoplay=0&high_quality=1`;
-    if (av) return `https://player.bilibili.com/player.html?aid=${av[1]}&autoplay=0&high_quality=1`;
-  } else if (src.provider === 'vimeo') {
-    const m = url.match(/vimeo\.com\/(\d+)/);
-    if (m) return `https://player.vimeo.com/video/${m[1]}`;
-  }
-  return null;
-}
-
+// Save lands in three places: this card, the Plaza feed (same server
+// row) and the YouTube post — the server does the YouTube sync and
+// reports it back in youtube_sync ("ok" / "skipped" / error code). A
+// sync problem downgrades the hint, never the local save.
 async function onSave(v) {
   if (savingId.value) return;
   savingId.value = v.id;
@@ -149,7 +151,9 @@ async function onSave(v) {
     v.description = updated.description;
     v.waypoints = updated.waypoints;
     v.sources = updated.sources;
-    flash(v.id, 'saved');
+    v.updated_at = updated.updated_at;
+    const sync = updated.youtube_sync;
+    flash(v.id, sync && sync !== 'ok' && sync !== 'skipped' ? 'sync_failed' : 'saved');
   } catch {
     flash(v.id, 'failed');
   } finally {
@@ -161,10 +165,57 @@ function flash(id, kind) {
   clearTimeout(hintTimer);
   savedId.value = kind === 'saved' ? id : null;
   failedId.value = kind === 'failed' ? id : null;
+  syncFailedId.value = kind === 'sync_failed' ? id : null;
   hintTimer = setTimeout(() => {
     savedId.value = null;
     failedId.value = null;
+    syncFailedId.value = null;
+  }, 2400);
+}
+
+function flashUpload(id, kind) {
+  clearTimeout(uploadHintTimer);
+  uploadedId.value = kind === 'uploaded' ? id : null;
+  uploadFailedId.value = kind === 'failed' ? id : null;
+  uploadHintTimer = setTimeout(() => {
+    uploadedId.value = null;
+    uploadFailedId.value = null;
   }, 1600);
+}
+
+// "Video: update the mp4 video file" — the icon control opens the native
+// file picker; the chosen mp4 replaces the server's cached copy (the one
+// the Download button serves). The YouTube post stays untouched.
+function pickFile(v) {
+  if (uploadingId.value) return;
+  pickTargetId = v.id;
+  const input = filePicker.value;
+  if (!input) return;
+  input.value = ''; // allow re-picking the very same file
+  input.click();
+}
+
+async function onFilePicked(e) {
+  const file = e.target.files && e.target.files[0];
+  const id = pickTargetId;
+  pickTargetId = null;
+  if (!file || !id) return;
+  const v = videos.value.find((x) => x.id === id);
+  if (!v) return;
+  if (file.type !== 'video/mp4' && !/\.mp4$/i.test(file.name)) {
+    flashUpload(id, 'failed');
+    return;
+  }
+  uploadingId.value = id;
+  try {
+    const updated = await updateVideoFile(id, file);
+    v.updated_at = updated.updated_at;
+    flashUpload(id, 'uploaded');
+  } catch {
+    flashUpload(id, 'failed');
+  } finally {
+    uploadingId.value = null;
+  }
 }
 
 // Download the mp4 to a local file directory. Source order: 1) the mp4
@@ -226,8 +277,21 @@ async function saveBlobAsMp4(blob, title) {
 // Delete this video everywhere: the card disappears from Content ->
 // Video and from the Plaza feed, and the related YouTube post is
 // retired server-side (best-effort). The persisted mp4 is unlinked.
-async function onDelete(v) {
+// The card's Delete button only OPENS the warning dialog; the actual
+// delete runs once the user confirms with the dialog's blue button.
+function onDelete(v) {
   if (deletingId.value) return;
+  pendingDelete.value = v;
+}
+
+function cancelDelete() {
+  pendingDelete.value = null;
+}
+
+async function confirmDelete() {
+  const v = pendingDelete.value;
+  pendingDelete.value = null;
+  if (!v || deletingId.value) return;
   deletingId.value = v.id;
   deleteFailedId.value = null;
   try {
@@ -260,9 +324,9 @@ async function onDelete(v) {
       class="vlist__entry"
     >
       <div class="vlist__head">
-        <!-- Collapsed: the video's front-page image thumbnail (title +
-             creation time move into the expanded editor). -->
-        <div v-if="!expanded[v.id]" class="vlist__thumb">
+        <!-- The video's front-page image thumbnail, same size collapsed
+             and expanded (the expanded editor unfolds below it). -->
+        <div class="vlist__thumb">
           <img
             v-if="thumbUrl(v) && !brokenThumbs[v.id]"
             :src="thumbUrl(v)"
@@ -274,7 +338,6 @@ async function onDelete(v) {
           />
           <div v-else class="vlist__thumb-empty">{{ t('contentvideolist.no_video') }}</div>
         </div>
-        <div v-else class="vlist__spacer"></div>
         <button
           class="vlist__toggle"
           :title="expanded[v.id] ? t('contentvideolist.collapse') : t('contentvideolist.expand')"
@@ -289,60 +352,60 @@ async function onDelete(v) {
       </div>
 
       <template v-if="expanded[v.id]">
-        <div class="vlist__screen">
-          <iframe
-            v-if="embedUrl(v)"
-            :src="embedUrl(v)"
-            class="vlist__iframe"
-            frameborder="0"
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-            allowfullscreen
-          ></iframe>
-          <div v-else class="vlist__screen-empty">{{ t('contentvideolist.no_source') }}</div>
+        <!-- Video: update the mp4 video file (native picker; replaces the
+             server's cached mp4 that the Download button serves). -->
+        <div class="vlist__video-row">
+          <span class="vlist__inline-label">{{ t('contentvideolist.video_label') }}</span>
+          <button
+            class="vlist__upload"
+            :disabled="uploadingId === v.id"
+            @click="pickFile(v)"
+          >
+            <span>{{ t('contentvideolist.update_mp4') }}</span>
+            <ConfigurableIcon name="MENU_FILE_UPLOAD" :size="20" />
+          </button>
         </div>
 
-        <div class="vlist__field">
-          <span class="vlist__label">{{ t('contentvideolist.title_label') }}</span>
-          <textarea
-            v-model="v.title"
-            class="vlist__title-input"
-            rows="2"
-            maxlength="200"
-          ></textarea>
-        </div>
+        <div class="vlist__label-line">{{ t('contentvideolist.title_label') }}</div>
+        <textarea
+          v-model="v.title"
+          class="vlist__title-input"
+          rows="2"
+          maxlength="200"
+        ></textarea>
 
-        <div class="vlist__created">{{ t('contentvideolist.created_at') }} {{ fmtDate(v.created_at) }}</div>
-
+        <div class="vlist__label-line">{{ t('contentvideolist.description_label') }}</div>
         <textarea
           v-model="v.description"
           class="vlist__desc"
           rows="3"
           maxlength="2000"
-          :placeholder="t('contentvideolist.description_ph')"
         ></textarea>
 
-        <div class="vlist__sources">
-          <div class="vlist__sources-title">{{ t('contentvideolist.video_url') }}</div>
-          <div
-            v-for="(s, i) in v.sources"
-            :key="i"
-            class="vlist__source-row"
-          >
-            <input
-              v-model="s.url"
-              class="vlist__source-url"
-              type="url"
-              :placeholder="t('contentvideolist.url_placeholder')"
-            />
-            <a
-              v-if="s.url.trim()"
-              :href="s.url"
-              target="_blank"
-              rel="noopener"
-              class="vlist__source-open"
-              :title="t('contentvideolist.open')"
-            >{{ t('contentvideolist.open') }}</a>
-          </div>
+        <div class="vlist__meta">{{ t('contentvideolist.time_label') }} {{ displayTime(v) }}</div>
+
+        <div class="vlist__meta">
+          {{ t('contentvideolist.play_url_label') }}
+          <a
+            v-if="playUrl(v)"
+            :href="playUrl(v)"
+            target="_blank"
+            rel="noopener"
+            class="vlist__link"
+          >{{ playUrl(v) }}</a>
+          <span v-else class="vlist__none">—</span>
+        </div>
+
+        <div class="vlist__meta">
+          {{ t('contentvideolist.video_url_label') }}
+          <a
+            v-if="videoUrl(v)"
+            :href="videoUrl(v)"
+            target="_blank"
+            rel="noopener"
+            class="vlist__link"
+          >{{ videoUrl(v) }}</a>
+          <span v-else class="vlist__none">—</span>
         </div>
 
         <div class="vlist__actions">
@@ -360,7 +423,7 @@ async function onDelete(v) {
             :disabled="downloadingId === v.id"
             @click="onDownload(v)"
           >
-            <ConfigurableIcon name="MENU_DOWNLOAD_FILE" :size="26" />
+            <ConfigurableIcon name="MENU_FILE_DOWNLOAD" :size="26" />
           </button>
           <button
             class="vlist__action"
@@ -372,10 +435,39 @@ async function onDelete(v) {
           </button>
           <span v-if="savedId === v.id" class="vlist__saved">{{ t('contentvideolist.saved') }}</span>
           <span v-else-if="failedId === v.id" class="vlist__failed">{{ t('contentvideolist.save_failed') }}</span>
+          <span v-else-if="syncFailedId === v.id" class="vlist__failed">{{ t('contentvideolist.sync_failed') }}</span>
           <span v-else-if="downloadFailedId === v.id" class="vlist__failed">{{ t('contentvideolist.download_failed') }}</span>
           <span v-else-if="deleteFailedId === v.id" class="vlist__failed">{{ t('contentvideolist.delete_failed') }}</span>
+          <span v-else-if="uploadedId === v.id" class="vlist__saved">{{ t('contentvideolist.uploaded') }}</span>
+          <span v-else-if="uploadFailedId === v.id" class="vlist__failed">{{ t('contentvideolist.upload_failed') }}</span>
         </div>
       </template>
+    </div>
+
+    <!-- Shared hidden mp4 picker for every card's "update the mp4 video
+         file" control (pickFile remembers which card opened it). -->
+    <input
+      ref="filePicker"
+      type="file"
+      accept="video/mp4,.mp4"
+      style="display: none"
+      @change="onFilePicked"
+    />
+
+    <!-- Delete warning dialog: the card's Delete button only opens it;
+         the blue Delete button inside performs the three-place delete. -->
+    <div v-if="pendingDelete" class="vlist__dialog-overlay" @click.self="cancelDelete">
+      <div class="vlist__dialog">
+        <p class="vlist__dialog-text">{{ t('contentvideolist.delete_warning') }}</p>
+        <div class="vlist__dialog-actions">
+          <button class="vlist__dialog-cancel" @click="cancelDelete">
+            {{ t('contentvideolist.cancel') }}
+          </button>
+          <button class="vlist__dialog-confirm" @click="confirmDelete">
+            {{ t('contentvideolist.delete') }}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -436,15 +528,20 @@ async function onDelete(v) {
   text-align: center;
 }
 
-.vlist__spacer {
-  flex: 1;
+/* Field labels sit on their own line above the editor boxes (Title: /
+   Description:); editors are vertically resizable (drag the bottom
+   border). */
+.vlist__label-line {
+  margin-top: 18px;
+  margin-bottom: 6px;
+  font-size: 0.95rem;
+  color: #1d1d1f;
 }
 
-/* Editable title while the entry is expanded. */
 .vlist__title-input {
   box-sizing: border-box;
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  max-width: 640px;
   padding: 8px 12px;
   border: 1px solid #8e8e93;
   border-radius: 8px;
@@ -461,61 +558,66 @@ async function onDelete(v) {
   outline: 1px solid rgba(37, 99, 235, 0.5);
 }
 
-/* The video displaying window: embedded primary playback URL. */
-.vlist__screen {
-  width: 100%;
-  max-width: 640px;
-  aspect-ratio: 16 / 9;
-  border-radius: 10px;
-  background: #000000;
-  overflow: hidden;
+/* "Video: update the mp4 video file <icon>" row. */
+.vlist__video-row {
+  margin-top: 18px;
   display: flex;
   align-items: center;
-  justify-content: center;
-}
-
-.vlist__iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
-}
-
-.vlist__screen-empty {
-  font-size: 0.9rem;
-  color: #f5f5f7;
-  text-align: center;
-  padding: 0 24px;
-}
-
-/* Title row: label + editable multi-line input (same box language as the
-   description textarea: wraps and is vertically resizable). */
-.vlist__field {
-  margin-top: 16px;
-  display: flex;
-  align-items: flex-start;
   gap: 10px;
-  max-width: 640px;
 }
 
-.vlist__label {
-  flex-shrink: 0;
-  padding-top: 8px;
+.vlist__inline-label {
   font-size: 0.95rem;
   color: #1d1d1f;
 }
 
-.vlist__created {
+.vlist__upload {
+  border: none;
+  background: none;
+  padding: 2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #515151;
+}
+
+.vlist__upload:hover:not(:disabled) {
+  color: #007aff;
+}
+
+.vlist__upload:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Read-only meta lines: Creation/Update Time, Play! URL, Video URL. */
+.vlist__meta {
   margin-top: 12px;
   font-size: 0.95rem;
   color: #1d1d1f;
+}
+
+.vlist__link {
+  color: #007aff;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.vlist__link:hover {
+  text-decoration: underline;
+}
+
+.vlist__none {
+  color: #6e6e73;
 }
 
 .vlist__desc {
   box-sizing: border-box;
   width: 100%;
   max-width: 640px;
-  margin-top: 12px;
   padding: 8px 12px;
   border: 1px solid #8e8e93;
   border-radius: 8px;
@@ -547,52 +649,6 @@ async function onDelete(v) {
   color: #007aff;
 }
 
-.vlist__sources {
-  margin-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  max-width: 640px;
-}
-
-.vlist__sources-title {
-  font-size: 0.95rem;
-  color: #1d1d1f;
-}
-
-.vlist__source-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.vlist__source-url {
-  box-sizing: border-box;
-  flex: 1;
-  min-width: 0;
-  padding: 6px 12px;
-  border: 1px solid #8e8e93;
-  border-radius: 8px;
-  background: #ffffff;
-  font-size: 0.9rem;
-  color: #111827;
-}
-
-.vlist__source-url:focus {
-  outline: 1px solid rgba(37, 99, 235, 0.5);
-}
-
-.vlist__source-open {
-  flex-shrink: 0;
-  font-size: 0.85rem;
-  color: #007aff;
-  text-decoration: none;
-}
-
-.vlist__source-open:hover {
-  text-decoration: underline;
-}
-
 .vlist__actions {
   margin-top: 18px;
   display: flex;
@@ -600,8 +656,8 @@ async function onDelete(v) {
   gap: 22px;
 }
 
-/* Icon-only action buttons (Save / Download) — same language as the
-   Content -> Route action row. */
+/* Icon-only action buttons (Save / Download / Delete) — same language as
+   the Content -> Route action row. */
 .vlist__action {
   border: none;
   background: none;
@@ -629,5 +685,71 @@ async function onDelete(v) {
 .vlist__failed {
   font-size: 0.85rem;
   color: #dc143c;
+}
+
+/* Delete warning dialog (dimmed full-screen overlay, centered card). */
+.vlist__dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.vlist__dialog {
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+  padding: 24px;
+}
+
+/* The warning text is a single i18n string with \n separators. */
+.vlist__dialog-text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: #1d1d1f;
+  white-space: pre-line;
+}
+
+.vlist__dialog-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.vlist__dialog-cancel {
+  border: none;
+  background: none;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: #6e6e73;
+}
+
+.vlist__dialog-cancel:hover {
+  color: #1d1d1f;
+}
+
+.vlist__dialog-confirm {
+  border: none;
+  background: #007aff;
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 8px 26px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.vlist__dialog-confirm:hover {
+  background: #0066d6;
 }
 </style>
