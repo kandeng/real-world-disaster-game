@@ -1027,6 +1027,50 @@ async function saveClip(waypoints) {
   }
 }
 
+// ── Idle first-waypoint preview (Video dialog before Generate) ───────────
+// Park the shared camera at the first waypoint's authored pose (same
+// defaults as the preview flight jump) so the dialog panel can show the
+// static start view instead of a black box.
+function parkAtFirstWaypoint(list) {
+  const wps = list || [];
+  if (!wps.length) return false;
+  const w0 = wps[0];
+  drone.lat = w0.lat;
+  drone.lon = w0.lng;
+  drone.alt = wpNum(w0.alt, WP_DEFAULT_ALT_M);
+  drone.heading = wps.length > 1 ? bearingDeg(w0.lat, w0.lng, wps[1].lat, wps[1].lng) : 0;
+  drone.speed = 0;
+  // Authored view azimuth kept absolute (see stepPreviewFrame).
+  gimbal.yaw = normDeg(wpNum(w0.camYaw, 0) - drone.heading);
+  gimbal.pitch = wpNum(w0.camPitch, WP_DEFAULT_CAM_PITCH_DEG);
+  gimbal.roll = wpNum(w0.camRoll, 0);
+  syncCesiumCamera();
+  return true;
+}
+
+// Blit the viewer's 16:9 center crop into `dst` on every postRender (the
+// WebGL buffer is only readable inside postRender). Returns a stop fn.
+function startViewerBlit(dst) {
+  const viewer = getViewer();
+  if (!viewer || !viewer.canvas || !viewer.scene || !viewer.scene.postRender || !dst) {
+    return () => {};
+  }
+  const ctx = dst.getContext('2d');
+  const onPostRender = () => {
+    const crop = computeCropRect(viewer.canvas.width, viewer.canvas.height);
+    if (!crop) return;
+    if (dst.width !== crop.w) dst.width = crop.w;
+    if (dst.height !== crop.h) dst.height = crop.h;
+    try {
+      ctx.drawImage(viewer.canvas, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+    } catch (err) {
+      // buffer momentarily unreadable — skip the frame
+    }
+  };
+  viewer.scene.postRender.addEventListener(onPostRender);
+  return () => viewer.scene.postRender.removeEventListener(onPostRender);
+}
+
 // The 16:9 mirror canvas the offline renderer / capture flight draws every
 // finished frame into. Exposed so external progress UIs (the Content ->
 // Route -> Video dialog) can blit the frames being generated live.
@@ -1263,6 +1307,8 @@ export function useRouteScene3D() {
     renderStatus,
     flightProgress,
     peekMirrorCanvas,
+    parkAtFirstWaypoint,
+    startViewerBlit,
     startLoop,
     stopLoop,
     startPreview,

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
 import { useVideoJob } from '@shared-composables/useVideoJob.js';
@@ -40,6 +40,11 @@ let blitRaf = null;
 const rendering = computed(() => job.phase === 'rendering');
 // Everything after the render pass (publish / upload / terminal states).
 const finished = computed(() => rendering.value === false && job.phase !== 'idle');
+// Before Generate (or after a render failure) the 16:9 panel shows the
+// live static view of the first waypoint instead of a black box.
+const previewing = computed(
+  () => !rendering.value && !job.videoUrl && (props.route.waypoints || []).length > 0
+);
 
 // Blue live status line at the top of the dialog, driven by the job's
 // phase (same 0.95rem blue as the top-bar reminders).
@@ -123,10 +128,34 @@ watch(rendering, (on) => {
   else stopBlit();
 }, { immediate: true });
 
+// Idle preview: park the shared camera at the first waypoint's authored
+// pose and blit the live viewer crop into the panel canvas until Generate
+// takes over (rendering) or the clip is ready (video player).
+let stopViewerBlit = null;
+function startPreviewBlit() {
+  if (stopViewerBlit) return;
+  scene.parkAtFirstWaypoint(props.route.waypoints);
+  stopViewerBlit = scene.startViewerBlit(displayCanvas.value);
+}
+function endPreviewBlit() {
+  if (stopViewerBlit) {
+    stopViewerBlit();
+    stopViewerBlit = null;
+  }
+}
+watch(previewing, (on) => {
+  if (on) startPreviewBlit();
+  else endPreviewBlit();
+});
+onMounted(() => {
+  if (previewing.value) startPreviewBlit();
+});
+
 // Closing the dialog NEVER aborts the job: the render / publish / upload
 // keep running in the background (the shell top bar reports completion).
 onBeforeUnmount(() => {
   stopBlit();
+  endPreviewBlit();
 });
 
 function onClose() {
@@ -165,7 +194,7 @@ function onGenerate() {
       </div>
 
       <div class="vd__panel">
-        <canvas v-show="rendering" ref="displayCanvas" class="vd__screen"></canvas>
+        <canvas v-show="rendering || previewing" ref="displayCanvas" class="vd__screen"></canvas>
         <video
           v-if="job.videoUrl && !rendering"
           :src="job.videoUrl"
