@@ -163,6 +163,19 @@ const playLoading = ref(false);
 const playLoadPct = ref(0);
 let playLoadTimer = null;
 
+// Deep-link journey gating (all six Play! entrances funnel here):
+//   playArmed      – a rideable route was loaded from the ?r/?v query;
+//   playTilesReady – the progress bar finished (tiles downloaded + rendered);
+//   playLaunched   – the user clicked Steer to start the flight.
+// The blue top-bar reminder shows only in the armed + ready + not-launched
+// window; the waypoint animation only runs once launched.
+const playArmed = ref(false);
+const playTilesReady = ref(false);
+const playLaunched = ref(false);
+const showPlayReady = computed(
+  () => playArmed.value && playTilesReady.value && !playLaunched.value
+);
+
 function stopPlayLoading() {
   if (playLoadTimer) {
     clearInterval(playLoadTimer);
@@ -194,6 +207,7 @@ function startPlayLoading() {
       playLoadTimer = null;
       setTimeout(() => {
         playLoading.value = false;
+        playTilesReady.value = true;
       }, 400);
     }
   }, 100);
@@ -203,6 +217,8 @@ async function applyPlayQuery() {
   const r = typeof route.query.r === 'string' ? route.query.r : '';
   const v = typeof route.query.v === 'string' ? route.query.v : '';
   if (!r && !v) {
+    playArmed.value = false;
+    playLaunched.value = false;
     stopPlay();
     stopPlayLoading();
     return;
@@ -222,6 +238,8 @@ async function applyPlayQuery() {
   }
   const wps = ((payload && payload.waypoints) || []).map((w, i) => ({ ...w, id: i + 1, index: i + 1 }));
   if (!wps.length) {
+    playArmed.value = false;
+    playLaunched.value = false;
     stopPlay();
     stopPlayLoading();
     return;
@@ -232,9 +250,16 @@ async function applyPlayQuery() {
   session.route.createdAt = payload.created_at || '';
   session.route.waypoints = wps;
   session.route.selectedWpId = null;
+  // Journey gating: park the drone at the first waypoint (static authored
+  // view, no animation) while the progress bar runs; the disks stay hidden
+  // and the flight only launches when the user clicks Steer.
+  playArmed.value = true;
+  playLaunched.value = false;
+  showFlight.value = false;
+  showCamera.value = false;
   viewCtx.subView = 'steer';
   startPlayLoading();
-  autopilot.start(wps);
+  autopilot.prime(wps);
 }
 watch(() => route.query, applyPlayQuery);
 
@@ -288,11 +313,14 @@ function onClickReplay() {
   const wps = session.route.waypoints;
   if (!wps.length) return;
   viewCtx.subView = 'steer'; // leave the popup (and 2D map) for the 3D view
+  playLaunched.value = true; // explicit replay: never re-show the reminder
   autopilot.start(wps);
 }
 
 function onClickRestart() {
   stopPlay();
+  playArmed.value = false;
+  playLaunched.value = false;
   session.route.sourceRouteId = null;
   session.route.title = '';
   session.route.description = '';
@@ -588,6 +616,13 @@ function toggleSteer() {
     return;
   }
   const next = !showFlight.value;
+  // First Steer press of an armed deep link: launch the waypoint flight —
+  // the disks appear and the journey runs from the first waypoint to the
+  // last (grabbing a disk mid-flight takes that domain over per-frame).
+  if (next && playArmed.value && !playLaunched.value) {
+    playLaunched.value = true;
+    autopilot.launch();
+  }
   showFlight.value = next;
   showCamera.value = next;
 }
@@ -1090,6 +1125,11 @@ onUnmounted(() => {
         </div>
         <div v-if="captureAuthNotice" class="shell-notice">
           {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
+        </div>
+        <!-- Deep link armed + tiles ready: remind the user to start the
+             journey with the Steer button (blue reminder, top bar). -->
+        <div v-if="showPlayReady" class="shell-notice">
+          {{ t('aerialview.play_ready') }}
         </div>
       </Teleport>
     </template>

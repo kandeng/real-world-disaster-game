@@ -382,10 +382,13 @@ async function confirmDelete() {
           maxlength="2000"
         ></textarea>
 
-        <div class="vlist__meta">{{ t('contentvideolist.time_label') }} {{ displayTime(v) }}</div>
+        <div class="vlist__meta">
+          <div class="vlist__meta-label">{{ t('contentvideolist.time_label') }}</div>
+          <div class="vlist__meta-value">{{ displayTime(v) }}</div>
+        </div>
 
         <div class="vlist__meta">
-          {{ t('contentvideolist.play_url_label') }}
+          <div class="vlist__meta-label">{{ t('contentvideolist.play_url_label') }}</div>
           <a
             v-if="playUrl(v)"
             :href="playUrl(v)"
@@ -397,7 +400,7 @@ async function confirmDelete() {
         </div>
 
         <div class="vlist__meta">
-          {{ t('contentvideolist.video_url_label') }}
+          <div class="vlist__meta-label">{{ t('contentvideolist.video_url_label') }}</div>
           <a
             v-if="videoUrl(v)"
             :href="videoUrl(v)"
@@ -529,12 +532,13 @@ async function confirmDelete() {
 }
 
 /* Field labels sit on their own line above the editor boxes (Title: /
-   Description:); editors are vertically resizable (drag the bottom
-   border). */
+   Description:), bold; editors are vertically resizable (drag the
+   bottom border). */
 .vlist__label-line {
   margin-top: 18px;
   margin-bottom: 6px;
   font-size: 0.95rem;
+  font-weight: 700;
   color: #1d1d1f;
 }
 
@@ -568,6 +572,7 @@ async function confirmDelete() {
 
 .vlist__inline-label {
   font-size: 0.95rem;
+  font-weight: 700;
   color: #1d1d1f;
 }
 
@@ -593,11 +598,21 @@ async function confirmDelete() {
   cursor: default;
 }
 
-/* Read-only meta lines: Creation/Update Time, Play! URL, Video URL. */
+/* Read-only meta lines: Creation/Update Time, Play! URL, Video URL.
+   The bold label sits on its own line; the regular-weight value
+   (datetime or link) starts on the next line. */
 .vlist__meta {
   margin-top: 12px;
   font-size: 0.95rem;
   color: #1d1d1f;
+}
+
+.vlist__meta-label {
+  font-weight: 700;
+}
+
+.vlist__meta-value {
+  font-weight: 400;
 }
 
 .vlist__link {

@@ -138,7 +138,11 @@ function onPlay(r) {
       class="rlist__entry"
     >
       <div class="rlist__head">
-        <div class="rlist__head-info">
+        <!-- Collapsed identity row: title + creation time. Expanded, both
+             values live in the editor body below (Title box and the
+             Creation/Update Time line), so the head keeps only the
+             toggle. -->
+        <div v-if="!expanded[r.id]" class="rlist__head-info">
           <div class="rlist__title">{{ r.title }}</div>
           <div class="rlist__date">{{ fmtDate(r.created_at) }}</div>
         </div>
@@ -175,10 +179,13 @@ function onPlay(r) {
         <div class="rlist__label-line">{{ t('contentroutelist.waypoints_label') }}</div>
         <WaypointCards :waypoints="r.waypoints" @edit="onEditWp(r, $event)" />
 
-        <div class="rlist__meta">{{ t('contentroutelist.time_label') }} {{ displayTime(r) }}</div>
+        <div class="rlist__meta">
+          <div class="rlist__meta-label">{{ t('contentroutelist.time_label') }}</div>
+          <div class="rlist__meta-value">{{ displayTime(r) }}</div>
+        </div>
 
         <div class="rlist__meta">
-          {{ t('contentroutelist.play_url_label') }}
+          <div class="rlist__meta-label">{{ t('contentroutelist.play_url_label') }}</div>
           <a
             :href="playUrl(r)"
             target="_blank"
@@ -273,11 +280,12 @@ function onPlay(r) {
 }
 
 /* Field labels sit on their own line above the editor boxes and the
-   waypoint list (Title: / Description: / Waypoint List:). */
+   waypoint list (Title: / Description: / Waypoint List:), bold. */
 .rlist__label-line {
   margin-top: 18px;
   margin-bottom: 6px;
   font-size: 0.95rem;
+  font-weight: 700;
   color: #1d1d1f;
 }
 
@@ -303,11 +311,21 @@ function onPlay(r) {
   outline: 1px solid rgba(37, 99, 235, 0.5);
 }
 
-/* Read-only meta lines: Creation/Update Time, Play! URL. */
+/* Read-only meta lines: Creation/Update Time, Play! URL. The bold
+   label sits on its own line; the regular-weight value (datetime or
+   link) starts on the next line. */
 .rlist__meta {
   margin-top: 12px;
   font-size: 0.95rem;
   color: #1d1d1f;
+}
+
+.rlist__meta-label {
+  font-weight: 700;
+}
+
+.rlist__meta-value {
+  font-weight: 400;
 }
 
 .rlist__link {
@@ -322,6 +340,7 @@ function onPlay(r) {
 
 .rlist__toggle {
   flex-shrink: 0;
+  margin-left: auto; /* stays right-aligned when the head-info hides */
   border: none;
   background: none;
   padding: 4px;

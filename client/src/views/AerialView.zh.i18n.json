@@ -16,6 +16,7 @@
   "recorder_cancel": "取消回放",
   "replaying": "回放并录制中… {pct}%",
   "loading_assets": "资源加载并渲染中 ...",
+  "play_ready": "场景已就绪！点击「操控」按钮开始飞行旅程。",
   "loading_livestream": "正在连接直播 ...",
   "loading_realdrone": "正在连接无人机本体 ...",
   "livestream_connect_failed": "连接失败 - 请参照以下指南对接无人机本体",

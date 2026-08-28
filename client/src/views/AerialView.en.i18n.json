@@ -16,6 +16,7 @@
   "recorder_cancel": "Cancel Replay",
   "replaying": "Replaying and recording… {pct}%",
   "loading_assets": "Loading and rendering assets ...",
+  "play_ready": "Scene ready! Click the Steer button to begin the flying journey.",
   "loading_livestream": "Connecting to livestream ...",
   "loading_realdrone": "Connecting to livestream ...",
   "livestream_connect_failed": "Connection failed - Please follow this guide to set up the bridge to your real drone.",

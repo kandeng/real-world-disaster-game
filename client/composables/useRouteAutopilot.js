@@ -79,7 +79,10 @@ export function useRouteAutopilot() {
     return Math.max(0, Math.min(1, 1 - remain / legLen));
   }
 
-  function start(wps) {
+  // Store the route and park the drone at the first waypoint (authored pose)
+  // WITHOUT arming the stepping: the scene shows a static view of the leg's
+  // start — the /play deep-link loading state — until launch() arms it.
+  function prime(wps) {
     const list = wps || [];
     if (!list.length) return;
     waypoints.value = list;
@@ -96,7 +99,17 @@ export function useRouteAutopilot() {
     gimbal.pitch = num(w0.camPitch, -90);
     gimbal.roll = num(w0.camRoll);
     drone.speed = 0;
-    active.value = true;
+    active.value = false;
+  }
+
+  // Arm the stepping so the next disk-visible frame flies the route.
+  function launch() {
+    if (waypoints.value.length) active.value = true;
+  }
+
+  function start(wps) {
+    prime(wps);
+    launch();
   }
 
   function stop() {
@@ -194,6 +207,8 @@ export function useRouteAutopilot() {
     active,
     waypoints,
     leg,
+    prime,
+    launch,
     start,
     stop,
     flightIdle,
