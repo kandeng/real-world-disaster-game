@@ -207,14 +207,64 @@ def update_metadata(video_id: str, title: str, description: str) -> None:
         raise translate_error(err) from err
 
 
+def _playlist_item_ids_for(youtube, video_id: str) -> list:
+    """Ids of every item of the channel playlist that references the video.
+
+    Collected fully BEFORE any deletion so pagination stays consistent.
+    """
+    ids = []
+    playlist_id = _get_playlist_id(youtube)
+    page_token = ""
+    while True:
+        page = youtube.playlistItems().list(
+            part="id,snippet",
+            playlistId=playlist_id,
+            maxResults=50,
+            pageToken=page_token,
+        ).execute()
+        for item in page.get("items", []):
+            vid = (item.get("snippet", {}).get("resourceId") or {}).get("videoId")
+            if vid == video_id:
+                ids.append(item["id"])
+        page_token = page.get("nextPageToken") or ""
+        if not page_token:
+            break
+    return ids
+
+
+def remove_playlist_items_for(video_id: str) -> int:
+    """Drop every playlist item referencing the video; returns the count.
+
+    Deleting a YouTube video does NOT remove its playlist entries — the
+    playlist keeps an "unavailable video that is hidden" placeholder until
+    the item itself is deleted. Best-effort: failures are logged, never
+    raised, so a playlist hiccup can't block the video deletion.
+    """
+    youtube = get_youtube_service()
+    removed = 0
+    try:
+        for item_id in _playlist_item_ids_for(youtube, video_id):
+            try:
+                youtube.playlistItems().delete(id=item_id).execute()
+                removed += 1
+                log.info("[youtube] removed playlist item %s", item_id)
+            except HttpError as err:
+                log.warning("[youtube] playlist item delete failed: %s", err)
+    except Exception as err:
+        log.warning("[youtube] playlist cleanup failed for %s: %s", video_id, err)
+    return removed
+
+
 def delete_video(video_id: str) -> None:
     """Delete a video from the site channel (previous post of a route).
 
-    Deleting the video also drops the playlist items referencing it, so
-    the drone-navigation playlist entry disappears automatically. A 404
-    means the video is already gone and counts as success.
+    The channel playlist items referencing the video are removed FIRST —
+    videos.delete alone would leave an "unavailable video" placeholder in
+    the drone-navigation playlist. A 404 means the video is already gone
+    and counts as success.
     """
     youtube = get_youtube_service()
+    remove_playlist_items_for(video_id)
     try:
         youtube.videos().delete(id=video_id).execute()
         log.info("[youtube] deleted video %s", video_id)

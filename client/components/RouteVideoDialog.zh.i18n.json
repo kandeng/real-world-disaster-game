@@ -14,6 +14,7 @@
   "published": "已发布到广场",
   "publish_failed": "发布失败",
   "publishing": "正在发布到广场…",
+  "publishing_youtube": "正在发布到 YouTube，约需几分钟；可安全关闭此窗口，稍后到「内容 → 视频」查看进度。",
   "generate": "制作视频",
   "uploading_youtube": "正在上传到 YouTube…",
   "uploaded_youtube": "已上传到 YouTube：",

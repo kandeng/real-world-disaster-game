@@ -212,7 +212,12 @@ function onGenerate() {
         <span>{{ t('routevideodialog.delete_previous') }}</span>
       </label>
       <div v-if="job.publishedId" class="vd__published">{{ t('routevideodialog.published') }}</div>
-      <div v-if="job.uploadedUrl" class="vd__published">
+      <!-- While the YouTube upload runs the line reads "Publishing…"; once
+           the watch URL lands it flips to "Uploaded to YouTube: <link>". -->
+      <div v-if="job.phase === 'uploading'" class="vd__published">
+        {{ t('routevideodialog.publishing_youtube') }}
+      </div>
+      <div v-else-if="job.uploadedUrl" class="vd__published">
         {{ t('routevideodialog.uploaded_youtube') }}
         <a
           class="vd__yt-link"
