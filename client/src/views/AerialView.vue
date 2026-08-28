@@ -275,18 +275,22 @@ const searchBusy = ref(false);
 // True once at least one query has been submitted (gates the
 // "No results found." hint so it never shows while merely typing).
 const hasSearched = ref(false);
-// Route button green border: on the 2D map without the search panel.
-const routeActive = computed(() => isStreet.value && !showSearchPanel.value);
+// Read-only route illustration (blue dots + spline) whenever the 2D
+// street map is up — including under the Reset popup, which hosts the
+// Replay / Restart actions.
+const routeActive = computed(() => isStreet.value);
 // The address the user picked from the search results (the red balloon),
 // carried in the session store so the balloon is re-shown when returning to
 // the Search view after the map was recreated (e.g. after a 3D excursion or
 // a page switch).
 const selectedLatLng = toRef(viewCtx, 'selectionLatLng');
 
-function onClickSearch() {
-  // Address search always shows the 2D street map, matched to the location /
-  // zoom the user currently has (leaving 3D first if needed).
-  if (!isStreet.value) enterStreetFrom3d();
+function onClickSearch(altOverride = null) {
+  // Address search always shows the 2D street map. Without an override it
+  // matches the location / zoom the user currently has (leaving 3D first);
+  // an override (Reset with a carried route) frames the map instead.
+  if (altOverride != null) mapAlt.value = altOverride;
+  else if (!isStreet.value) enterStreetFrom3d();
   viewCtx.subView = 'search';
   snapshotMap();
   // The Search view marks the picked address with the red balloon.
@@ -298,8 +302,16 @@ function onClickSearch() {
 // Reset: open the address search popup. The popup hosts the route-aware
 // actions (Replay / Restart) above the address lookup; the current route
 // is left untouched until the user explicitly clicks Restart inside.
+// With a carried route, the 2D street map opens framed at TWICE the
+// average waypoint altitude so the read-only blue dots + spline fit.
 function onClickReset() {
-  onClickSearch();
+  const wps = session.route.waypoints;
+  let altOverride = null;
+  if (wps.length) {
+    const avgAlt = wps.reduce((s, w) => s + (Number(w.alt) || 0), 0) / wps.length;
+    altOverride = Math.max(0, Math.min(100000, 2 * avgAlt));
+  }
+  onClickSearch(altOverride);
 }
 
 // Route-aware popup actions:
@@ -1258,22 +1270,24 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.75);
 }
 
-/* Full-width route-aware actions (Replay / Restart) in the search popup. */
+/* Full-width route-aware actions (Replay / Restart) in the search popup:
+   same blue fill / white font as the Plaza "Explore the scene in 3D"
+   button (gcard__explore). */
 .search-panel__action {
   width: 100%;
   padding: 9px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.7);
+  border: none;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.55);
-  color: rgba(30, 40, 60, 0.95);
-  font-size: 0.9rem;
+  background: #007aff;
+  color: #ffffff;
+  font-size: 0.95rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease;
 }
 
 .search-panel__action:hover {
-  background: rgba(255, 255, 255, 0.75);
+  background: #0066d6;
 }
 
 /* Static (not draggable) separator below Replay. */
