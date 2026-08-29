@@ -289,6 +289,13 @@ onUnmounted(() => {
     selectionMarker.setMap(null);
     selectionMarker = null;
   }
+  // The Google Map itself is session-persistent (mapSingleton), so any
+  // marker not removed here would orphan onto the next mount — two live
+  // dots on the same map. Always clear the orange position marker.
+  if (liveMarker) {
+    liveMarker.setMap(null);
+    liveMarker = null;
+  }
   waypointMarkers.forEach((m) => m.setMap(null));
   waypointMarkers = [];
   if (wpDrag) {

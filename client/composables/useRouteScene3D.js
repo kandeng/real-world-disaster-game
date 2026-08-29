@@ -1283,6 +1283,49 @@ function modelAltForMapScale(trueAlt, lat) {
   return (2 * Math.tan(verticalFovRad(viewer) / 2) * trueAlt) / (H * mppPerAlt);
 }
 
+// ── Terrain-aware nadir floor ───────────────────────────────────────────────
+// The 2D→3D lift is scale-matched, but a searched address can sit on high
+// terrain or tall buildings, which puts a scale-only camera BELOW the ground
+// (the nadir view renders black/underground). We sample the top surface under
+// the lift point and decide the 3D altitude in two branches:
+//   (1) 2D altitude already sits above ground + NADIR_KEEP_MARGIN_M ->
+//       keep that same altitude (the 3D view matches the 2D map).
+//   (2) otherwise -> lift to ground + NADIR_CLEARANCE_M (a safe overview).
+// NOTE: in Google photorealistic mode the globe is a flat ellipsoid
+// (globe.show=false), so globe.getHeight is useless — the tile surface must
+// be sampled from the scene instead.
+const NADIR_KEEP_MARGIN_M = 100;   // ground + this: threshold to keep the 2D altitude
+const NADIR_CLEARANCE_M = 1000;    // otherwise lift to ground + this
+
+// Async ('MostDetailed' streams the finest available tiles for the spot).
+// Returns the surface height (m) above the ellipsoid, or null when nothing
+// is loaded there.
+async function sampleGroundAltitude(lat, lon) {
+  const viewer = getViewer();
+  const Cesium = window.Cesium;
+  if (!viewer || !Cesium || typeof viewer.scene.sampleHeightMostDetailed !== 'function') return null;
+  try {
+    const carto = await viewer.scene.sampleHeightMostDetailed(
+      Cesium.Cartographic.fromDegrees(lon, lat)
+    );
+    return carto && Number.isFinite(carto.height) ? carto.height : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Safe nadir altitude for a lift (see the branch rules above). Falls back to
+// the scale height when the surface cannot be sampled.
+async function safeNadirAltitude(scaleAlt, lat, lon) {
+  const ground = await sampleGroundAltitude(lat, lon);
+  if (ground == null) return scaleAlt;
+  // (1) The 2D map already sits comfortably above the ground -> keep the
+  //     same altitude so the 3D nadir view matches the 2D map.
+  if (scaleAlt > ground + NADIR_KEEP_MARGIN_M) return scaleAlt;
+  // (2) The 2D map is at/below ground level -> lift to a safe overview.
+  return ground + NADIR_CLEARANCE_M;
+}
+
 // ── Background 3D-tile prefetch while the 2D map is showing ───────────────
 // The shared Cesium canvas keeps rendering (opacity 0) underneath the 2D
 // map, so aiming its hidden camera at the current 2D view (nadir, same
@@ -1322,6 +1365,7 @@ export function useRouteScene3D() {
     setFocusWaypoint,
     trueAltForMapScale,
     modelAltForMapScale,
+    safeNadirAltitude,
     prefetchTiles,
     sceneTilesReady,
     // Re-exported so the view binds one object only.

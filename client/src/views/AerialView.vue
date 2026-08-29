@@ -305,6 +305,12 @@ function onClickSearch(altOverride = null) {
 // With a carried route, the 2D street map opens framed at TWICE the
 // average waypoint altitude so the read-only blue dots + spline fit.
 function onClickReset() {
+  // Toggle: a second click closes the popup and lifts back to the 3D view
+  // (the flight keeps running underneath, so the orange dot rides on).
+  if (showSearchPanel.value) {
+    viewCtx.subView = 'steer';
+    return;
+  }
   const wps = session.route.waypoints;
   let altOverride = null;
   if (wps.length) {
@@ -630,7 +636,14 @@ function toggleSteer() {
       // altitude; convert it to the true camera altitude that shows the SAME
       // ground scale in the 3D nadir view (otherwise the 3D view looks ~4-6x
       // more zoomed in).
-      drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
+      const scaleAlt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
+      drone.alt = scaleAlt;
+      // Terrain-aware floor: a searched address can sit on high ground or
+      // tall buildings, which would put a scale-only camera underground.
+      // Raise to at least ground + 1000 m (never lower the scale height).
+      routeScene.safeNadirAltitude(scaleAlt, drone.lat, drone.lon).then((alt) => {
+        if (!isStreet.value && alt > drone.alt) drone.alt = alt;
+      });
       drone.heading = 0;
       gimbal.yaw = 0;
       gimbal.pitch = -90; // look straight down, satellite style

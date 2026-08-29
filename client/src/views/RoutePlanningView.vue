@@ -846,7 +846,14 @@ function enter3dNadirOverview(convertAlt) {
     // The 2D map altitude is Google's nominal model altitude; convert it to
     // the true camera altitude that shows the SAME ground scale in the 3D
     // nadir view (otherwise the 3D view looks ~4-6x more zoomed in).
-    drone.alt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
+    const scaleAlt = routeScene.trueAltForMapScale(mapAlt.value, drone.lat);
+    drone.alt = scaleAlt;
+    // Terrain-aware floor: a searched address can sit on high ground or tall
+    // buildings, which would put a scale-only camera underground. Raise to
+    // at least ground + 1000 m (never lower the chosen scale height).
+    routeScene.safeNadirAltitude(scaleAlt, drone.lat, drone.lon).then((alt) => {
+      if (is3d.value && alt > drone.alt) drone.alt = alt;
+    });
     drone.heading = 0;
     gimbal.yaw = 0;
     gimbal.pitch = -90; // look straight down, satellite style
