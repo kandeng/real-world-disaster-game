@@ -66,7 +66,8 @@ export const session = reactive({
     aerial: { subView: 'steer', searchQuery: '', selectionLatLng: null },
     // Route Planning: 'map' (neutral 2D) | 'search' | 'waypoint' (picking
     // armed) | 'route' (route panel) | 'steer' (3D nadir overview).
-    route: { subView: 'map', searchQuery: '' },
+    // selectionLatLng = picked address (red balloon), same as aerial.
+    route: { subView: 'map', searchQuery: '', selectionLatLng: null },
   },
 
   // ── Identity mirror (set by useAuth on login/logout; optional phase) ────

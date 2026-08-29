@@ -127,6 +127,11 @@ function onClickSearch() {
   // Address search lives on the 2D map: leaving 'steer' makes the street
   // map the background (watch(is3d) handles the 3D cleanup).
   viewCtx.subView = showSearchPanel.value ? 'map' : 'search';
+  // Re-show the picked-address balloon when the search opens on a live 2D
+  // map (after a 3D excursion the recreated map is handled by onMapReady).
+  if (showSearchPanel.value && selectedLatLng.value) {
+    mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
+  }
 }
 
 // Reset (same name / icon / behavior as the Play! page): throw away the
@@ -184,6 +189,9 @@ function onMapClick({ lat, lng }) {
 // maintained waypoint circles and the spline link.
 function onMapReady() {
   mapViewRef.value?.redrawWaypointMarkers(waypoints.value, null);
+  if (showSearchPanel.value && selectedLatLng.value) {
+    mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
+  }
   scheduleTilePrefetch();
 }
 
@@ -342,6 +350,10 @@ function onWaypointMove({ id, lat, lng }) {
 // ── Search popup (address finding) ────────────────────────────────────────
 const mapViewRef = ref(null);
 const searchQuery = toRef(viewCtx, 'searchQuery');
+// The picked address (red balloon), carried in the session store so it is
+// re-shown after the map is recreated (3D excursion / page switch) — same
+// convention as the Play! page's aerial view domain.
+const selectedLatLng = toRef(viewCtx, 'selectionLatLng');
 const searchResults = ref([]);
 const searchError = ref('');
 // True while a search-popup text query is in flight; the next poisFound
@@ -364,6 +376,7 @@ function onSearchSubmit() {
 function onResultClick(poi) {
   const loc = poi?.geometry?.location;
   if (loc && mapViewRef.value) {
+    selectedLatLng.value = { lat: loc.lat(), lng: loc.lng() };
     mapViewRef.value.panTo(loc.lat(), loc.lng());
     // Mark the picked address with Google's default pin on the map.
     mapViewRef.value.setSelectionMarker(loc.lat(), loc.lng());

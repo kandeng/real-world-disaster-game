@@ -62,6 +62,7 @@ const ALT_ZOOM_K = 20971520; // exact: 10 m * 2^21
 // Guard flags to distinguish programmatic changes from user-initiated gestures.
 let lastProgrammaticCenter = null;
 let lastProgrammaticZoom = null;
+let lastProgrammaticPan = null;  // panTo target: its center_changed must reach the parent
 let lastZoomChangeTime = 0;  // timestamp (ms) of last user-initiated zoom
 let listeners = [];
 let wheelHandler = null;     // stored so we can removeEventListener on unmount
@@ -169,6 +170,18 @@ function handleCenterChanged() {
   if (!map.value) return;
   const center = map.value.getCenter();
   const target = { lat: center.lat(), lng: center.lng() };
+  // A search-result pan intentionally moves the map: its center_changed
+  // must reach the parent (the drone follows to the searched place) even
+  // though the accompanying setZoom stamps the zoom throttle below.
+  if (lastProgrammaticPan) {
+    const pan = lastProgrammaticPan;
+    lastProgrammaticPan = null;
+    if (isSameCenter(target, pan)) {
+      lastProgrammaticCenter = null;
+      emit('centerChange', target);
+      return;
+    }
+  }
   if (Date.now() - lastZoomChangeTime < 150) {
     return;
   }
@@ -413,6 +426,7 @@ async function searchPoisByText(text) {
 // searched place.
 function panTo(lat, lng, alt = 320) {
   if (!map.value) return;
+  lastProgrammaticPan = { lat, lng };
   map.value.setZoom(altToZoom(alt)); // z16 — campus/street level
   map.value.setCenter({ lat, lng });
 }
@@ -727,6 +741,51 @@ function redrawWaypointMarkers(entries, selectedId) {
   redrawWaypointPath(entries || []);
 }
 
+// ── Live position marker (orange circle, e.g. the flying drone) ──────────
+let liveMarker = null;
+
+// 22px orange dot with a white ring so it reads on both street and
+// satellite maps; drawn above the waypoint circles (high zIndex).
+function livePositionIcon() {
+  const D = 22;
+  const c = D / 2;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${D}" height="${D}">` +
+    `<circle cx="${c}" cy="${c}" r="${c - 2}" fill="#f97316" ` +
+    `stroke="#ffffff" stroke-width="2"/>` +
+    `</svg>`;
+  return {
+    url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+    scaledSize: new mapsApi.Size(D, D),
+    anchor: new mapsApi.Point(c, c),
+  };
+}
+
+// Move (or create) the orange dot at the given position. Inert marker:
+// the parent updates it every frame from the session drone state.
+function setLivePosition(lat, lng) {
+  if (!mapsApi || !map.value) return;
+  const position = new mapsApi.LatLng(lat, lng);
+  if (liveMarker) {
+    liveMarker.setPosition(position);
+  } else {
+    liveMarker = new mapsApi.Marker({
+      position,
+      map: map.value,
+      icon: livePositionIcon(),
+      clickable: false,
+      zIndex: 2000000,
+    });
+  }
+}
+
+function clearLivePosition() {
+  if (liveMarker) {
+    liveMarker.setMap(null);
+    liveMarker = null;
+  }
+}
+
 defineExpose({
   searchNearbyPoisAt,
   searchPoisByText,
@@ -734,6 +793,8 @@ defineExpose({
   searchRoutes,
   setSelectionMarker,
   setSelectionMarkerVisible,
+  setLivePosition,
+  clearLivePosition,
   getCursorLatLng,
   addWaypointMarker,
   redrawWaypointMarkers,

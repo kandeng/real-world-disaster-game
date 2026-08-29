@@ -402,6 +402,7 @@ function onMapReady() {
     mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
   }
   if (routeActive.value) redrawRouteMarkers();
+  if (showLivePos.value) mapViewRef.value?.setLivePosition(drone.lat, drone.lon);
 }
 
 // Read-only route illustration (Content -> Steer handoff): while the Route
@@ -420,6 +421,20 @@ watch(routeActive, (active) => {
   if (active) redrawRouteMarkers();
   else clearRouteMarkers();
 });
+
+// Live drone position on the 2D map (orange circle): the flight keeps
+// stepping while the Reset popup is up, so the dot rides the blue route —
+// and deviates from it whenever the player grabs the Flight / Gimbal disks.
+const showLivePos = computed(
+  () => isStreet.value && session.route.waypoints.length > 0
+);
+watch(
+  [() => drone.lat, () => drone.lon, showLivePos],
+  () => {
+    if (showLivePos.value) mapViewRef.value?.setLivePosition(drone.lat, drone.lon);
+    else mapViewRef.value?.clearLivePosition();
+  }
+);
 
 // Great-circle distance (meters) between two lat/lon pairs.
 function haversineMeters(aLat, aLng, bLat, bLng) {
