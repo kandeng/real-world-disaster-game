@@ -1,0 +1,18 @@
+{
+  "tool_mesh": "加载模型",
+  "tool_place": "2D 地图放置",
+  "tool_finetune": "3D 微调",
+  "tool_steer": "操控",
+  "panel_mesh": "选择模型",
+  "panel_place": "在地图上放置",
+  "panel_steer": "3D 微调",
+  "hint_place": "点击地图放置模型。",
+  "field_lat": "纬度",
+  "field_lon": "经度",
+  "field_heading": "朝向",
+  "field_length": "长度",
+  "field_alt": "高度",
+  "field_pitch": "俯仰",
+  "field_roll": "横滚",
+  "status_loading": "模型加载中..."
+}

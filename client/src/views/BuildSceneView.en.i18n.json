@@ -1,0 +1,18 @@
+{
+  "tool_mesh": "Load mesh",
+  "tool_place": "Place on 2D map",
+  "tool_finetune": "Finetune in 3D",
+  "tool_steer": "Steer",
+  "panel_mesh": "Choose a mesh",
+  "panel_place": "Place on the map",
+  "panel_steer": "Finetune in 3D",
+  "hint_place": "Click the map to place the mesh.",
+  "field_lat": "Lat",
+  "field_lon": "Lon",
+  "field_heading": "Orientation",
+  "field_length": "Length",
+  "field_alt": "Altitude",
+  "field_pitch": "Pitch",
+  "field_roll": "Roll",
+  "status_loading": "Loading mesh..."
+}

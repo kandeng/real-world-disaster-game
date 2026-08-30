@@ -37,6 +37,7 @@ export const IconMap = {
   MENU_HELICOPTER: '../../icons/helicopter.svg',
   MENU_MESH: '../../icons/mesh.svg',
   MENU_MAP: '../../icons/map.svg',
+  MENU_INSTRUMENT: '../../icons/instrument.svg',
   MENU_SATELLITE: '../../icons/satellite.svg',
   MENU_CHAR_2D: '../../icons/char_2d.svg',
   MENU_CHAR_3D: '../../icons/char_3d.svg',

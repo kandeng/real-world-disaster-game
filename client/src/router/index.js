@@ -26,6 +26,13 @@ const routes = [
     component: RoutePlanningView,
   },
   {
+    // Build Scene: place a mesh object into the Google Earth 3D scene
+    // (2D map placement + 3D fine-tune). Lazy: pulls in the large mesh GLBs.
+    path: '/build-scene',
+    name: 'BuildScene',
+    component: () => import('@/views/BuildSceneView.vue'),
+  },
+  {
     path: '/chat',
     name: 'Chat',
     component: ChatView,
@@ -99,6 +106,7 @@ router.afterEach((to) => {
   const { session } = useSessionState();
   if (to.name === 'Aerial' || to.name === 'Play') session.view.page = 'aerial';
   else if (to.name === 'RoutePlanning') session.view.page = 'route';
+  else if (to.name === 'BuildScene') session.view.page = 'build';
 });
 
 export default router;

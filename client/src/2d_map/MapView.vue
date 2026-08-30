@@ -296,6 +296,10 @@ onUnmounted(() => {
     liveMarker.setMap(null);
     liveMarker = null;
   }
+  if (meshFootprint) {
+    meshFootprint.setMap(null);
+    meshFootprint = null;
+  }
   waypointMarkers.forEach((m) => m.setMap(null));
   waypointMarkers = [];
   if (wpDrag) {
@@ -750,6 +754,8 @@ function redrawWaypointMarkers(entries, selectedId) {
 
 // ── Live position marker (orange circle, e.g. the flying drone) ──────────
 let liveMarker = null;
+// Oriented footprint polygon of the placed mesh (Build Scene page).
+let meshFootprint = null;
 
 // 22px orange dot with a white ring so it reads on both street and
 // satellite maps; drawn above the waypoint circles (high zIndex).
@@ -793,6 +799,27 @@ function clearLivePosition() {
   }
 }
 
+// Oriented footprint of the placed mesh: a green rectangle computed by the
+// parent from the mesh's lat/lon + heading + length (width derived as 40%
+// of the length). Pass null / too-few corners to clear it.
+function setMeshFootprint(corners) {
+  if (meshFootprint) {
+    meshFootprint.setMap(null);
+    meshFootprint = null;
+  }
+  if (!mapsApi || !map.value || !corners || corners.length < 3) return;
+  meshFootprint = new mapsApi.Polygon({
+    paths: corners.map((c) => new mapsApi.LatLng(c.lat, c.lng)),
+    map: map.value,
+    strokeColor: '#16a34a',
+    strokeOpacity: 0.9,
+    strokeWeight: 2,
+    fillColor: '#16a34a',
+    fillOpacity: 0.2,
+    clickable: false,
+  });
+}
+
 defineExpose({
   searchNearbyPoisAt,
   searchPoisByText,
@@ -802,6 +829,7 @@ defineExpose({
   setSelectionMarkerVisible,
   setLivePosition,
   clearLivePosition,
+  setMeshFootprint,
   getCursorLatLng,
   addWaypointMarker,
   redrawWaypointMarkers,

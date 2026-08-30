@@ -68,6 +68,9 @@ export const session = reactive({
     // armed) | 'route' (route panel) | 'steer' (3D nadir overview).
     // selectionLatLng = picked address (red balloon), same as aerial.
     route: { subView: 'map', searchQuery: '', selectionLatLng: null },
+    // Build Scene: which background the page shows ('2d' map | '3d' globe).
+    // The placed mesh itself lives in the useMeshPlacement singleton.
+    buildscene: { mode: '2d' },
   },
 
   // ── Identity mirror (set by useAuth on login/logout; optional phase) ────

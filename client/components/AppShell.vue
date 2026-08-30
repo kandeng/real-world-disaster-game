@@ -142,6 +142,13 @@ const videoJobNoticeText = computed(() =>
       </div>
       <div
         class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/build-scene') }"
+        @click="go('/build-scene')"
+      >
+        {{ t('aerialview.page_buildscene') }}
+      </div>
+      <div
+        class="shell-nav__item shell-nav__item--link"
         :class="{ 'shell-nav__item--active': isActive('/extensions') }"
         @click="go('/extensions')"
       >
