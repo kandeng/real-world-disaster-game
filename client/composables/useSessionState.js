@@ -68,9 +68,24 @@ export const session = reactive({
     // armed) | 'route' (route panel) | 'steer' (3D nadir overview).
     // selectionLatLng = picked address (red balloon), same as aerial.
     route: { subView: 'map', searchQuery: '', selectionLatLng: null },
-    // Build Scene: which background the page shows ('2d' map | '3d' globe).
-    // The placed mesh itself lives in the useMeshPlacement singleton.
-    buildscene: { mode: '2d' },
+    // Build Scene: which background the page shows ('2d' map | '3d' globe),
+    // the location-search query + picked address (red balloon), same
+    // convention as the other map pages.
+    buildscene: { mode: '2d', searchQuery: '', selectionLatLng: null },
+  },
+
+  // ── Scene: placed mesh assets (Build Scene page) ──────────────────────
+  // Each asset is an independent object in the 3D tiles: { id, meshUrl,
+  // meshName, lat, lon, alt (clearance over ground), heading, pitch, roll,
+  // length (m), groundAlt, ready }. The Cesium models / dots live in the
+  // useSceneAssets singleton; this is the plain data mirror.
+  scene: {
+    assets: [],
+    selectedId: null,
+    seq: 0,
+    // Mesh chosen from the library (file_folder) for the next placed asset.
+    meshUrl: '',
+    meshName: '',
   },
 
   // ── Identity mirror (set by useAuth on login/logout; optional phase) ────

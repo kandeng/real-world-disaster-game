@@ -15,9 +15,12 @@ const { user, isAuthenticated, fetchMe } = useAuth();
 
 /* ─── Left-panel navigation ─── */
 // Integrated pages navigate on click; the remaining names stay plain text
-// until their pages are wired into the shell.
+// until their pages are wired into the shell. Clicking the menu item of the
+// page already on screen dispatches 'shell-page-reenter' so the page can
+// re-run its landing behavior (e.g. Build Scene re-opens the Reset popup).
 function go(path) {
   if (router.currentRoute.value.path !== path) router.push(path);
+  else window.dispatchEvent(new CustomEvent('shell-page-reenter', { detail: path }));
 }
 
 // The entry for the page currently on screen turns blue.

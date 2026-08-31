@@ -31,7 +31,7 @@ const props = defineProps({
   waypointsEditable: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease']);
+const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease', 'assetPress', 'assetMove', 'assetRelease']);
 
 const containerRef = ref(null);
 const map = ref(null);
@@ -75,6 +75,12 @@ let waypointPath = null;     // spline polyline linking the waypoints in order
 let selectedWaypointId = null; // id of the red (selected) waypoint circle
 let wpDrag = null;           // active waypoint drag: { id, marker, moveL, upL }
 let lastWpDragEnd = 0;       // swallow the map click right after a drag
+// Build Scene asset dots (mutually independent blue circles, no spline).
+let assetMarkers = [];       // one circle per placed asset
+let assetDrag = null;        // active asset drag: { id, marker, moveL, endDrag, moved }
+let lastAssetDragEnd = 0;    // swallow the map click right after an asset drag
+let assetFlashTimer = null;  // pulses the dots whose mesh is still unspecified
+let assetFlashDim = false;   // current phase of the pulse
 
 function altToZoom(alt) {
   const clamped = Math.max(MIN_ALT, Math.min(MAX_ALT, alt));
@@ -296,9 +302,16 @@ onUnmounted(() => {
     liveMarker.setMap(null);
     liveMarker = null;
   }
-  if (meshFootprint) {
-    meshFootprint.setMap(null);
-    meshFootprint = null;
+  assetMarkers.forEach((m) => m.setMap(null));
+  assetMarkers = [];
+  if (assetDrag) {
+    mapsApi.event.removeListener(assetDrag.moveL);
+    window.removeEventListener('mouseup', assetDrag.endDrag);
+    assetDrag = null;
+  }
+  if (assetFlashTimer) {
+    window.clearInterval(assetFlashTimer);
+    assetFlashTimer = null;
   }
   waypointMarkers.forEach((m) => m.setMap(null));
   waypointMarkers = [];
@@ -609,8 +622,9 @@ function attachMapClickListener() {
   }
   if (props.isPicking || props.isPanelOpen) {
     clickListener = map.value.addListener('click', (e) => {
-      // Swallow the click that fires right after a waypoint drag ends.
+      // Swallow the click that fires right after a waypoint / asset drag ends.
       if (Date.now() - lastWpDragEnd < 300) return;
+      if (Date.now() - lastAssetDragEnd < 300) return;
       const lat = e.latLng.lat();
       const lng = e.latLng.lng();
       emit('mapClick', { lat, lng });
@@ -754,8 +768,6 @@ function redrawWaypointMarkers(entries, selectedId) {
 
 // ── Live position marker (orange circle, e.g. the flying drone) ──────────
 let liveMarker = null;
-// Oriented footprint polygon of the placed mesh (Build Scene page).
-let meshFootprint = null;
 
 // 22px orange dot with a white ring so it reads on both street and
 // satellite maps; drawn above the waypoint circles (high zIndex).
@@ -799,25 +811,104 @@ function clearLivePosition() {
   }
 }
 
-// Oriented footprint of the placed mesh: a green rectangle computed by the
-// parent from the mesh's lat/lon + heading + length (width derived as 40%
-// of the length). Pass null / too-few corners to clear it.
-function setMeshFootprint(corners) {
-  if (meshFootprint) {
-    meshFootprint.setMap(null);
-    meshFootprint = null;
-  }
-  if (!mapsApi || !map.value || !corners || corners.length < 3) return;
-  meshFootprint = new mapsApi.Polygon({
-    paths: corners.map((c) => new mapsApi.LatLng(c.lat, c.lng)),
-    map: map.value,
-    strokeColor: '#16a34a',
-    strokeOpacity: 0.9,
-    strokeWeight: 2,
-    fillColor: '#16a34a',
-    fillOpacity: 0.2,
-    clickable: false,
+// Replace the whole set of asset dots (Build Scene). Unlike the waypoints of
+// the Plan Route page, assets never link up: no polyline / spline is drawn
+// between them, each circle stands on its own.
+//
+// `dim` renders the faded phase of the attention pulse; entries flagged
+// `flash` (a position whose mesh has not been specified yet) are pulsed
+// periodically by syncAssetFlashPulse() below.
+function assetIcon(selected, dim) {
+  const D = 22;
+  const c = D / 2;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${D}" height="${D}">` +
+    `<circle cx="${c}" cy="${c}" r="${c - 2}" fill="${selected ? '#dc2626' : '#2563eb'}" ` +
+    `fill-opacity="${dim ? 0.15 : 1}" stroke="#ffffff" stroke-opacity="${dim ? 0.2 : 1}" ` +
+    `stroke-width="2"/>` +
+    `</svg>`;
+  return {
+    url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+    scaledSize: new mapsApi.Size(D, D),
+    anchor: new mapsApi.Point(c, c),
+  };
+}
+
+function paintAssetPulse() {
+  assetMarkers.forEach((m) => {
+    m.setIcon(assetIcon(m.assetPressed === true, !!m.flash && assetFlashDim));
   });
+}
+
+// Start / stop the pulse that highlights asset dots still waiting for a mesh.
+function syncAssetFlashPulse() {
+  const need = assetMarkers.some((m) => m.flash);
+  if (need && !assetFlashTimer) {
+    assetFlashTimer = window.setInterval(() => {
+      assetFlashDim = !assetFlashDim;
+      paintAssetPulse();
+    }, 500);
+  } else if (!need && assetFlashTimer) {
+    window.clearInterval(assetFlashTimer);
+    assetFlashTimer = null;
+    assetFlashDim = false;
+  }
+  paintAssetPulse();
+}
+
+function startAssetDrag(marker, id) {
+  if (assetDrag || !map.value) return;
+  map.value.setOptions({ draggable: false });
+  const moveL = map.value.addListener('mousemove', (e) => {
+    if (!assetDrag) return;
+    assetDrag.moved = true;
+    marker.setPosition(e.latLng);
+    emit('assetMove', { id, lat: e.latLng.lat(), lng: e.latLng.lng() });
+  });
+  // Same DOM-level release hook as the waypoint drag: the map's own 'mouseup'
+  // does not fire when the pointer is released over a marker.
+  const endDrag = () => {
+    const moved = !!assetDrag?.moved;
+    mapsApi.event.removeListener(moveL);
+    if (map.value) map.value.setOptions({ draggable: true });
+    assetDrag = null;
+    lastAssetDragEnd = Date.now();
+    // Release: back to plain blue (the parent redraws the set right after).
+    marker.assetPressed = false;
+    marker.setIcon(assetIcon(false, !!marker.flash && assetFlashDim));
+    emit('assetRelease', { id, moved });
+  };
+  window.addEventListener('mouseup', endDrag, { once: true });
+  assetDrag = { id, marker, moveL, endDrag, moved: false };
+}
+
+function setAssetMarkers(entries) {
+  assetMarkers.forEach((m) => m.setMap(null));
+  assetMarkers = [];
+  if (!mapsApi || !map.value) return;
+  (entries || []).forEach((e) => {
+    if (!e || e.lat == null || e.lon == null) return;
+    const marker = new mapsApi.Marker({
+      position: new mapsApi.LatLng(e.lat, e.lon),
+      map: map.value,
+      icon: assetIcon(false, false),
+      clickable: true,
+      cursor: 'pointer',
+      title: e.name || '',
+    });
+    marker.assetId = e.id;
+    marker.flash = !!e.flash;
+    marker.addListener('mousedown', () => {
+      // The pressed dot stops pulsing: it now carries the pointer.
+      marker.assetPressed = true;
+      marker.flash = false;
+      marker.setIcon(assetIcon(true, false));
+      emit('assetPress', e.id);
+      startAssetDrag(marker, e.id);
+    });
+    assetMarkers.push(marker);
+  });
+  syncAssetFlashPulse();
 }
 
 defineExpose({
@@ -829,11 +920,11 @@ defineExpose({
   setSelectionMarkerVisible,
   setLivePosition,
   clearLivePosition,
-  setMeshFootprint,
   getCursorLatLng,
   addWaypointMarker,
   redrawWaypointMarkers,
   redrawWaypointPath,
+  setAssetMarkers,
 });
 
 watch(() => [props.isPicking, props.isPanelOpen], () => {
