@@ -467,7 +467,7 @@ function registerRightDock() {
     id: 'waypoint',
     render: () => h(DockButton, {
       icon: 'MENU_LOCATION',
-      titleKey: 'aerialview.waypoint',
+      titleKey: 'routeplanningview.waypoint2d',
       size: 35,
       active: showWaypointHint.value,
       disabled: controlsLocked.value,
@@ -476,8 +476,8 @@ function registerRightDock() {
   });
   registerRight({
     id: 'steer',
-    icon: 'MENU_CONTROL_STICK',
-    titleKey: 'routeplanningview.steer',
+    icon: 'MENU_INSTRUMENT',
+    titleKey: 'routeplanningview.finetune',
     active: is3d.value,
     onClick: onClickSteer,
   });

@@ -86,6 +86,13 @@ function onDividerPointerUp() {
   document.removeEventListener('pointerup', onDividerPointerUp);
 }
 
+/* ─── Top-bar user button ─── */
+// A signed-out visitor clicking the user glyph is taken straight to
+// Account -> Login; a signed-in user lands on the same page's profile card.
+function onClickUser() {
+  go('/account');
+}
+
 /* ─── Language pill (top right) ─── */
 // Shows the *current* language (EN / 中文); clicking switches locale and
 // persists the choice exactly like the old LanguageSelector / Settings
@@ -243,6 +250,7 @@ const videoJobNoticeText = computed(() =>
             class="shell-round"
             :title="t('aerialview.topbar_user')"
             :aria-label="t('aerialview.topbar_user')"
+            @click="onClickUser"
           >
             <img
               v-if="user && user.avatar"
