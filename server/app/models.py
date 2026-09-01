@@ -221,8 +221,12 @@ class Mesh(Base):
     (user_id, sha256) constraint dedups a user's own re-uploads, and the
     sha256 index powers the cross-user blob-existence check. Deleting a row
     unlinks the blob only when no other row references the same hash
-    (refcount GC). visibility is schema-ready for a future public library;
-    v1 keeps everything private.
+    (refcount GC). visibility feeds the public library (Public Component);
+    category is its Public Component shelf — one of the twelve fixed ids
+    (vehicle/ship/plane/architecture/sculpture/human/animal/vegetation/
+    equipment/water/fire/cloud), auto-suggested by the LLM classifier
+    (chat_engine.classify_asset) at publish time and manually overridable;
+    NULL means not classified (never shown in the public library feed).
     """
 
     __tablename__ = "mesh"
@@ -248,6 +252,7 @@ class Mesh(Base):
     visibility: Mapped[str] = mapped_column(
         String(length=16), nullable=False, default="private"
     )
+    category: Mapped[str | None] = mapped_column(String(length=16), nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     original_filename: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(

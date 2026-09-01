@@ -311,3 +311,104 @@ async def stream_reply(
         "I'm sorry, the assistant is temporarily unavailable. "
         "Please try again in a moment."
     )
+
+
+# ─── 3D-asset category classification (Public Component) ────────────────────
+# One-shot, non-conversational classification of a mesh asset's metadata
+# into one of the twelve fixed Public Component category ids. Uses the
+# Bailian OpenAI-compatible endpoint directly (NOT the DSH harness: the
+# task is single-shot, and the harness runtime is serialized with the
+# customer-service chat). Any failure -> None -> the row stays
+# unclassified and the owner picks a shelf manually.
+
+MESH_CATEGORY_IDS = (
+    "vehicle",
+    "ship",
+    "plane",
+    "architecture",
+    "sculpture",
+    "human",
+    "animal",
+    "vegetation",
+    "equipment",
+    "water",
+    "fire",
+    "cloud",
+)
+
+_CLASSIFY_SYSTEM = """You classify 3D assets for a public library. Given an asset's metadata, reply with exactly one category id from this fixed list:
+vehicle, ship, plane, architecture, sculpture, human, animal, vegetation, equipment, water, fire, cloud.
+
+Meanings:
+- vehicle: ground/space vehicles (cars, trucks, trains, rovers, spacecraft)
+- ship: boats and watercraft
+- plane: aircraft (planes, helicopters, drones)
+- architecture: buildings, houses, structures, interiors
+- sculpture: statues and artistic/carved works, including sculptures OF animals or humans
+- human: human character models (not statues)
+- animal: animal character models (not statues)
+- vegetation: trees, plants, grass
+- equipment: tools, machines, devices, furniture
+- water / fire / cloud: the natural element itself
+
+Precedence rule: classify what the asset IS as an object. A lion statue is "sculpture", not "animal".
+
+Reply with only the single category id in lowercase. No punctuation, no explanation."""
+
+
+async def classify_asset(
+    name: str, description: str, filename: str
+) -> str | None:
+    """Classify one 3D asset into a Public Component category id, or None."""
+    if not API_KEY:
+        log.warning("classify_asset: no chat api key configured")
+        return None
+
+    lines = []
+    if (name or "").strip():
+        lines.append(f"Name: {name.strip()[:200]}")
+    if (description or "").strip():
+        lines.append(f"Description: {description.strip()[:500]}")
+    if (filename or "").strip():
+        lines.append(f"Filename: {filename.strip()[:200]}")
+    if not lines:
+        return None  # nothing to classify from
+
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": _CLASSIFY_SYSTEM},
+            {"role": "user", "content": "\n".join(lines)},
+        ],
+        "stream": False,
+        "max_tokens": 16,
+        "temperature": 0,
+    }
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=8.0)
+        ) as client:
+            res = await client.post(
+                f"{BASE_URL}/chat/completions", json=payload, headers=headers
+            )
+            if res.status_code != 200:
+                log.warning(
+                    "classify_asset: bailian http %s: %s",
+                    res.status_code,
+                    res.text[:200],
+                )
+                return None
+            text = (
+                res.json()["choices"][0]["message"].get("content") or ""
+            ).strip().lower()
+    except Exception as exc:  # noqa: BLE001 — never break the publish flow
+        log.warning("classify_asset failed: %r", exc)
+        return None
+
+    # Accept the first whitelisted id appearing anywhere in the answer.
+    for word in re.findall(r"[a-z]+", text):
+        if word in MESH_CATEGORY_IDS:
+            return word
+    log.info("classify_asset: answer %r matched no category", text[:80])
+    return None

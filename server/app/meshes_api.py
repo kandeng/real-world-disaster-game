@@ -10,7 +10,12 @@ Content-addressed storage with SHA-256 dedup:
                                      hashed while streaming; an identical file
                                      (same user or another) is stored once on
                                      disk and only a fresh catalog row is added.
-    PUT    /api/meshes/{id}       -> update name / description / animation_script.
+    PUT    /api/meshes/{id}       -> update name / description / animation_script /
+                                     visibility / category.
+    POST   /api/meshes/{id}/classify -> LLM auto-classification into one of the
+                                     twelve Public Component categories
+                                     (chat_engine.classify_asset); persists the
+                                     result on the row and returns it.
     GET    /api/meshes/{id}/file  -> serve the GLB bytes (owner-scoped). Unlike
                                      the video cache this does NOT consume the
                                      file, because other mesh rows may reference
@@ -55,6 +60,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .chat_engine import MESH_CATEGORY_IDS, classify_asset
 from .config import CONFIG
 from .db import async_session_maker, get_async_session
 from .models import Mesh, User
@@ -191,6 +197,9 @@ class MeshUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=4000)
     animation_script: str | None = Field(default=None, max_length=8000)
     visibility: str | None = Field(default=None, pattern="^(private|public)$")
+    category: str | None = Field(
+        default=None, pattern="^(" + "|".join(MESH_CATEGORY_IDS) + ")$"
+    )
 
 
 def _serialize(mesh: Mesh) -> dict:
@@ -201,6 +210,7 @@ def _serialize(mesh: Mesh) -> dict:
         "description": mesh.description,
         "animation_script": mesh.animation_script,
         "visibility": mesh.visibility,
+        "category": mesh.category,
         "size_bytes": mesh.size_bytes,
         "original_filename": mesh.original_filename,
         "created_at": mesh.created_at.isoformat(),
@@ -530,8 +540,35 @@ async def update_mesh(
         mesh.animation_script = body.animation_script
     if body.visibility is not None:
         mesh.visibility = body.visibility
+    if body.category is not None:
+        mesh.category = body.category
     await session.commit()
     await session.refresh(mesh)
+    return _serialize(mesh)
+
+
+@router.post("/meshes/{mesh_id}/classify")
+async def classify_mesh(
+    mesh_id: str,
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Auto-classify one of the caller's meshes into a Public Component
+    category (DSH/Bailian one-shot call over the asset's metadata). The
+    suggestion is persisted on the row; when the model cannot decide (or
+    the engine is down) the row keeps its current category and the owner
+    picks one manually."""
+    stmt = select(Mesh).where(Mesh.id == mesh_id, Mesh.user_id == user.id)
+    mesh = (await session.execute(stmt)).scalar_one_or_none()
+    if mesh is None:
+        raise HTTPException(status_code=404, detail="MESH_NOT_FOUND")
+    category = await classify_asset(
+        mesh.name, mesh.description or "", mesh.original_filename or ""
+    )
+    if category:
+        mesh.category = category
+        await session.commit()
+        await session.refresh(mesh)
     return _serialize(mesh)
 
 

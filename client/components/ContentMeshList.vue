@@ -29,13 +29,15 @@ import { jobs, startNewMeshJob, startReplaceMeshJob, jobRunningFor } from '@shar
 // so every upload runs a SHA-256 dedup check first.
 const { t, locale } = useI18n();
 const { isAuthenticated } = useAuth();
-const { listMeshes, saveMesh, fetchMeshFile, deleteMesh } = useMeshes();
+const { listMeshes, saveMesh, classifyMesh, fetchMeshFile, deleteMesh } = useMeshes();
 const meshes = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 const expanded = ref({}); // meshId -> bool
 const viewerReady = ref(false); // @google/model-viewer loaded + defined
 const modelUrls = ref({}); // meshId -> object URL feeding the viewer
+const modelLoading = ref({}); // meshId -> the GLB is still downloading
+const modelMissing = ref({}); // meshId -> the server has no GLB for this row
 const savingId = ref(null);
 const savedId = ref(null); // transient "Saved" hint
 const failedId = ref(null); // transient "Save failed" hint
@@ -49,6 +51,12 @@ const createHint = ref(null); // 'created' | 'failed' (set by the job watcher)
 // Persistent "Upload new 3D Asset" draft card at the top of the list.
 const draft = ref({ name: '', description: '', animation_script: '' });
 const draftPublic = ref(false); // "Make this 3D asset public" on the draft card
+// The twelve Public Component shelves (mirrors PublicComponentView.vue).
+const MESH_CATEGORIES = [
+  'vehicle', 'ship', 'plane', 'architecture', 'sculpture', 'human',
+  'animal', 'vegetation', 'equipment', 'water', 'fire', 'cloud',
+];
+const classifyingId = ref(null); // mesh whose DSH classification is in flight
 const draftExpanded = ref(true);
 const automationHint = ref(null); // 'draft' | meshId transient hint
 const pendingDelete = ref(null); // mesh waiting in the Delete warning dialog
@@ -130,6 +138,7 @@ function applyJobResult(job) {
       }
       ensureModelUrl(mesh);
       expanded.value = { ...expanded.value, [mesh.id]: true };
+      if (mesh.visibility === 'public') autoClassify(mesh); // DSH suggestion
       draft.value = { name: '', description: '', animation_script: '' };
       draftPublic.value = false;
       flashCreate('created');
@@ -175,18 +184,36 @@ function displayTime(m) {
 
 function toggle(m) {
   expanded.value = { ...expanded.value, [m.id]: !expanded.value[m.id] };
+  ensureModelUrl(m); // retry hook when an earlier fetch failed
 }
 
 // Fetch (once) and object-URL the GLB so the auth-scoped bytes can feed the
-// unauthenticated <model-viewer src>.
+// unauthenticated <model-viewer src>. While the (possibly large) download
+// runs the card shows a spinner; "No model available" is reserved for rows
+// whose GLB is genuinely absent. A transient network error is treated like
+// "missing" but can be retried by toggling the card again.
 async function ensureModelUrl(m) {
-  if (modelUrls.value[m.id]) return;
+  if (modelUrls.value[m.id] || modelLoading.value[m.id]) return;
   let blob = blobCache.get(m.id);
   if (!blob) {
-    blob = await fetchMeshFile(m.id);
-    if (!blob) return;
+    modelLoading.value = { ...modelLoading.value, [m.id]: true };
+    try {
+      blob = await fetchMeshFile(m.id);
+    } catch {
+      blob = null; // network hiccup: show unavailable, retry on re-open
+    }
+    const loadingNext = { ...modelLoading.value };
+    delete loadingNext[m.id];
+    modelLoading.value = loadingNext;
+    if (!blob) {
+      modelMissing.value = { ...modelMissing.value, [m.id]: true };
+      return;
+    }
     blobCache.set(m.id, blob);
   }
+  const missNext = { ...modelMissing.value };
+  delete missNext[m.id];
+  modelMissing.value = missNext;
   modelUrls.value = { ...modelUrls.value, [m.id]: URL.createObjectURL(blob) };
 }
 
@@ -306,7 +333,8 @@ function flashCreate(kind) {
 
 // "Make this 3D asset public": flip the row's visibility ('private' <->
 // 'public') and persist it right away; revert the optimistic toggle when
-// the save fails.
+// the save fails. Publishing triggers the DSH auto-classification into a
+// Public Component category.
 async function onTogglePublic(m) {
   const next = m.visibility === 'public' ? 'private' : 'public';
   const prev = m.visibility;
@@ -319,8 +347,45 @@ async function onTogglePublic(m) {
       visibility: next,
     });
     m.visibility = updated.visibility;
+    m.category = updated.category;
+    if (updated.visibility === 'public') autoClassify(m);
   } catch {
     m.visibility = prev;
+  }
+}
+
+// DSH auto-classification: ask the server LLM to shelf the asset into one
+// of the twelve Public Component categories. The suggestion is persisted
+// server-side and shown in the category select, which stays available as
+// the manual override. Failures are swallowed (manual pick remains).
+async function autoClassify(m) {
+  if (classifyingId.value) return;
+  classifyingId.value = m.id;
+  try {
+    const updated = await classifyMesh(m.id);
+    m.category = updated.category;
+  } catch {
+    /* engine unavailable: the owner picks a shelf manually */
+  } finally {
+    if (classifyingId.value === m.id) classifyingId.value = null;
+  }
+}
+
+// Manual shelf override (also covers a failed/absent classification).
+async function onCategoryChange(m, ev) {
+  const cat = ev.target.value;
+  const prev = m.category;
+  m.category = cat;
+  try {
+    const updated = await saveMesh(m.id, {
+      name: m.name,
+      description: m.description || '',
+      animation_script: m.animation_script || '',
+      category: cat,
+    });
+    m.category = updated.category;
+  } catch {
+    m.category = prev;
   }
 }
 
@@ -531,7 +596,10 @@ async function confirmDelete() {
             exposure="1"
             shadow-intensity="0.6"
           ></model-viewer>
-          <div v-else class="mlist__thumb-empty">{{ t('contentmeshlist.no_model') }}</div>
+          <div v-else-if="modelMissing[m.id]" class="mlist__thumb-empty">{{ t('contentmeshlist.no_model') }}</div>
+          <div v-else class="mlist__thumb-empty">
+            <LoadingSpinner />
+          </div>
         </div>
         <button
           class="mlist__toggle"
@@ -613,6 +681,23 @@ async function confirmDelete() {
           />
           <span>{{ t('contentmeshlist.make_public') }}</span>
         </label>
+
+        <!-- Public Component shelf: the DSH auto-classification suggestion
+             lands here; the select stays as the manual override. -->
+        <div v-if="m.visibility === 'public'" class="mlist__meta">
+          <div class="mlist__meta-label">{{ t('contentmeshlist.category_label') }}</div>
+          <select
+            class="mlist__cat-select"
+            :value="m.category || ''"
+            :disabled="classifyingId === m.id"
+            @change="onCategoryChange(m, $event)"
+          >
+            <option value="" disabled>{{ classifyingId === m.id ? t('contentmeshlist.classifying') : t('contentmeshlist.category_none') }}</option>
+            <option v-for="c in MESH_CATEGORIES" :key="c" :value="c">
+              {{ t(`publiccomponentview.cat_${c}`) }}
+            </option>
+          </select>
+        </div>
 
         <div class="mlist__actions">
           <button
@@ -846,6 +931,23 @@ async function confirmDelete() {
   margin-top: 12px;
   font-size: 0.95rem;
   color: #1d1d1f;
+}
+
+.mlist__cat-select {
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 0.9rem;
+  font-family: inherit;
+  color: #1d1d1f;
+  background: #ffffff;
+  border: 1px solid #d2d2d7;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mlist__cat-select:disabled {
+  cursor: progress;
+  opacity: 0.7;
 }
 
 .mlist__meta-label {

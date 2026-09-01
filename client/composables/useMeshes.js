@@ -145,7 +145,8 @@ export function useMeshes() {
     });
   }
 
-  /** PUT /api/meshes/{id} — update name / description / animation_script. */
+  /** PUT /api/meshes/{id} — update name / description / animation_script /
+   *  visibility / category. */
   async function saveMesh(id, payload) {
     const res = await fetch(`${API_BASE}/api/meshes/${id}`, {
       method: 'PUT',
@@ -153,6 +154,19 @@ export function useMeshes() {
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error('mesh_save_failed');
+    return res.json();
+  }
+
+  /** POST /api/meshes/{id}/classify — ask the server-side LLM to classify
+   *  the asset into one of the twelve Public Component categories. The
+   *  suggestion is persisted server-side; resolves with the serialized mesh
+   *  (category stays null when the model could not decide). */
+  async function classifyMesh(id) {
+    const res = await fetch(`${API_BASE}/api/meshes/${id}/classify`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    if (!res.ok) throw new Error('mesh_classify_failed');
     return res.json();
   }
 
@@ -262,6 +276,7 @@ export function useMeshes() {
     updateMeshFile,
     replaceMeshFile,
     saveMesh,
+    classifyMesh,
     fetchMeshFile,
     deleteMesh,
     startMeshUpload,
