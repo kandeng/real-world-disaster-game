@@ -157,6 +157,14 @@ const videoJobNoticeText = computed(() =>
       >
         {{ t('aerialview.page_buildscene') }}
       </div>
+      <!-- Public Component: shared component library (Plugin-style page). -->
+      <div
+        class="shell-nav__item shell-nav__item--link"
+        :class="{ 'shell-nav__item--active': isActive('/public-component') }"
+        @click="go('/public-component')"
+      >
+        {{ t('aerialview.subpage_public_component') }}
+      </div>
       <div
         class="shell-nav__item shell-nav__item--link"
         :class="{ 'shell-nav__item--active': isActive('/extensions') }"

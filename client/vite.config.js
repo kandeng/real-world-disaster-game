@@ -3,7 +3,18 @@ import vue from '@vitejs/plugin-vue';
 import { resolve } from 'path';
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue({
+      template: {
+        compilerOptions: {
+          // Recognize the <model-viewer> web component (@google/model-viewer,
+          // used by Content -> 3D Asset) as a native custom element so the
+          // SFC compiler emits it verbatim instead of resolving a component.
+          isCustomElement: (tag) => tag === 'model-viewer',
+        },
+      },
+    }),
+  ],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),

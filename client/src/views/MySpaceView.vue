@@ -5,13 +5,15 @@ import TabBar from '@shared/TabBar.vue';
 import AccountLoginPanel from '@/views/AccountLoginPanel.vue';
 import ContentRouteList from '@shared/ContentRouteList.vue';
 import ContentVideoList from '@shared/ContentVideoList.vue';
+import ContentMeshList from '@shared/ContentMeshList.vue';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useVideos } from '@shared-composables/useVideos.js';
+import { useMeshes } from '@shared-composables/useMeshes.js';
 
 // 'account' | 'content' — provided by the router. The shell's left panel
 // owns the navigation; this page renders the body. Account carries three
-// tabs (Login / Consumption / Income); Content carries two (Route / Video).
-// The active tab is blue + underlined.
+// tabs (Login / Consumption / Income); Component carries four (3D Asset /
+// Scene / Route / Video). The active tab is blue + underlined.
 const props = defineProps({
   sub: { type: String, default: 'account' },
 });
@@ -19,14 +21,16 @@ const props = defineProps({
 const { t } = useI18n();
 const { isAuthenticated } = useAuth();
 const { listVideos } = useVideos();
+const { listMeshes } = useMeshes();
 
-// Content opens on the Route tab, whose list fetches itself; fire the
-// Video list GET at the same time so BOTH tabs' data arrive within one
+// Component opens on the Video tab, whose list fetches itself; fire the
+// mesh list GET at the same time so BOTH tabs' data arrive within one
 // network round-trip instead of waiting for the tab click (the two
 // fetches run in parallel, halving the perceived wait).
 onMounted(() => {
   if (props.sub === 'content' && isAuthenticated.value) {
     listVideos().catch(() => { /* ContentVideoList retries on open */ });
+    listMeshes().catch(() => { /* ContentMeshList retries on open */ });
   }
 });
 
@@ -38,9 +42,11 @@ const tabs = computed(() => [
   { id: 'income', label: t('authflow.acct_tab_income') },
 ]);
 
-/* 'route' | 'video' */
-const contentTab = ref('route');
+/* 'mesh' | 'scene' | 'route' | 'video' */
+const contentTab = ref('video');
 const contentTabs = computed(() => [
+  { id: 'mesh', label: t('authflow.content_tab_mesh') },
+  { id: 'scene', label: t('authflow.content_tab_scene') },
   { id: 'route', label: t('authflow.content_tab_route') },
   { id: 'video', label: t('authflow.content_tab_video') },
 ]);
@@ -57,7 +63,9 @@ const contentTabs = computed(() => [
     <template v-else-if="sub === 'content'">
       <TabBar v-model="contentTab" :tabs="contentTabs" />
 
-      <ContentRouteList v-if="contentTab === 'route'" />
+      <ContentMeshList v-if="contentTab === 'mesh'" />
+      <p v-else-if="contentTab === 'scene'" class="myspace-placeholder">{{ t('authflow.acct_tab_placeholder') }}</p>
+      <ContentRouteList v-else-if="contentTab === 'route'" />
       <ContentVideoList v-else-if="contentTab === 'video'" />
     </template>
   </div>

@@ -1,0 +1,16 @@
+{
+  "cat_vehicle": "Vehicle",
+  "cat_ship": "Ship",
+  "cat_plane": "Plane",
+  "cat_architecture": "Architecture",
+  "cat_sculpture": "Sculpture",
+  "cat_human": "Human",
+  "cat_animal": "Animal",
+  "cat_vegetation": "Vegetation",
+  "cat_equipment": "Equipment",
+  "cat_water": "Water / Flood",
+  "cat_fire": "Fire / Bombard",
+  "cat_cloud": "Cloud / Rain",
+  "search_placeholder": "Search public components",
+  "empty": "No public components in this category yet."
+}

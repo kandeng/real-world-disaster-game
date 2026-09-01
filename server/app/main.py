@@ -22,6 +22,7 @@ from .config import CONFIG
 from .db import Base, engine
 from .drone_commands import router as drone_commands_router
 from .matrix_auth import router as matrix_router
+from .meshes_api import router as meshes_router
 from .schemas import UserCreate, UserRead, UserUpdate
 from .settings import router as settings_router
 from .stream import router as stream_router
@@ -127,6 +128,9 @@ app.include_router(routes_router, prefix="/api")
 
 # --- Per-user published flight videos (GET /api/videos, PUT /api/videos/{id})
 app.include_router(videos_router, prefix="/api")
+
+# --- Per-user 3D mesh assets (GET /api/meshes, POST /api/meshes, ...) ------
+app.include_router(meshes_router, prefix="/api")
 
 # --- Community chat: Matrix token brokering + user directory ----------------
 app.include_router(matrix_router, prefix="/api")

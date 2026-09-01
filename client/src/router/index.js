@@ -33,6 +33,14 @@ const routes = [
     component: () => import('@/views/BuildSceneView.vue'),
   },
   {
+    // Public Component: shared component library, Plugin-style layout with
+    // twelve categories (overflow collapses into TabBar's » menu). Lazy like
+    // the other heavy pages.
+    path: '/public-component',
+    name: 'PublicComponent',
+    component: () => import('@/views/PublicComponentView.vue'),
+  },
+  {
     path: '/chat',
     name: 'Chat',
     component: ChatView,

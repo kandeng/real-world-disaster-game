@@ -4,6 +4,7 @@
   "frontend_base_url": "http://localhost:5173",
   "cors_origins": ["http://localhost:5173"],
   "jwt_lifetime_seconds": 86400,
+  "mesh_max_size": 104857600,
   "smtp": {
     "host": "smtp.example.com",
     "port": 587,

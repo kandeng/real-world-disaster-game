@@ -21,7 +21,7 @@
   "delete": "删除",
   "delete_failed": "删除失败",
   "cancel": "取消",
-  "delete_warning": "删除此视频将从以下三处移除：\n1. 内容 → 视频中的卡片\n2. Plaza 页面中的卡片\n3. YouTube 上的视频\n此操作无法撤销。",
+  "delete_warning": "删除此视频将从以下三处移除：\n1. 组件 → 视频中的卡片\n2. Plaza 页面中的卡片\n3. YouTube 上的视频\n此操作无法撤销。",
   "uploaded": "已上传",
   "upload_failed": "上传失败"
 }

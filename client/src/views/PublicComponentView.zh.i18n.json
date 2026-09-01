@@ -1,0 +1,16 @@
+{
+  "cat_vehicle": "车辆",
+  "cat_ship": "舰船",
+  "cat_plane": "飞机",
+  "cat_architecture": "建筑",
+  "cat_sculpture": "雕塑",
+  "cat_human": "人物",
+  "cat_animal": "动物",
+  "cat_vegetation": "植被",
+  "cat_equipment": "装备",
+  "cat_water": "水 / 洪水",
+  "cat_fire": "火 / 爆炸",
+  "cat_cloud": "云 / 雨",
+  "search_placeholder": "搜索公开组件",
+  "empty": "此分类暂无公开组件。"
+}

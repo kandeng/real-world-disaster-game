@@ -21,7 +21,7 @@
   "delete": "Delete",
   "delete_failed": "Delete failed",
   "cancel": "Cancel",
-  "delete_warning": "Deleting this video removes it from three places:\n1. Your card in Content → Video\n2. Its card in Plaza\n3. Its post on YouTube\nThis cannot be undone.",
+  "delete_warning": "Deleting this video removes it from three places:\n1. Your card in Component → Video\n2. Its card in Plaza\n3. Its post on YouTube\nThis cannot be undone.",
   "uploaded": "Uploaded",
   "upload_failed": "Upload failed"
 }

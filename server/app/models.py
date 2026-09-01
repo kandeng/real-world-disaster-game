@@ -12,7 +12,7 @@ import uuid
 
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, String, Text, func, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -209,6 +209,58 @@ class VideoSource(Base):
     provider: Mapped[str] = mapped_column(String(length=32), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     position: Mapped[int] = mapped_column(nullable=False, default=0)
+
+
+class Mesh(Base):
+    """A 3D mesh asset (Content -> 3D Asset): a GLB file plus its metadata.
+
+    Content-addressed storage: the GLB bytes live once on disk keyed by
+    their SHA-256 (see meshes_api._blob_path), while this table is the
+    per-user catalog row referencing that hash. Re-uploading an identical
+    file (same user or another) never stores the bytes twice — the UNIQUE
+    (user_id, sha256) constraint dedups a user's own re-uploads, and the
+    sha256 index powers the cross-user blob-existence check. Deleting a row
+    unlinks the blob only when no other row references the same hash
+    (refcount GC). visibility is schema-ready for a future public library;
+    v1 keeps everything private.
+    """
+
+    __tablename__ = "mesh"
+    __table_args__ = (
+        UniqueConstraint("user_id", "sha256", name="uq_mesh_user_sha256"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(length=16), primary_key=True, default=new_short_id
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sha256: Mapped[str] = mapped_column(
+        String(length=64), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(length=200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    animation_script: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    visibility: Mapped[str] = mapped_column(
+        String(length=16), nullable=False, default="private"
+    )
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    original_filename: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
 
 class ChatContext(Base):
