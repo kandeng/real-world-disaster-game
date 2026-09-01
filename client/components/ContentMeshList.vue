@@ -51,12 +51,14 @@ const createHint = ref(null); // 'created' | 'failed' (set by the job watcher)
 // Persistent "Upload new 3D Asset" draft card at the top of the list.
 const draft = ref({ name: '', description: '', animation_script: '' });
 const draftPublic = ref(false); // "Make this 3D asset public" on the draft card
+const draftFile = ref(null); // GLB staged by the picker, committed by Save
 // The twelve Public Component shelves (mirrors PublicComponentView.vue).
 const MESH_CATEGORIES = [
   'vehicle', 'ship', 'plane', 'architecture', 'sculpture', 'human',
   'animal', 'vegetation', 'equipment', 'water', 'fire', 'cloud',
 ];
 const classifyingId = ref(null); // mesh whose DSH classification is in flight
+const publicToggling = ref({}); // meshId -> a public-toggle save is in flight
 const draftExpanded = ref(true);
 const automationHint = ref(null); // 'draft' | meshId transient hint
 const pendingDelete = ref(null); // mesh waiting in the Delete warning dialog
@@ -141,6 +143,7 @@ function applyJobResult(job) {
       if (mesh.visibility === 'public') autoClassify(mesh); // DSH suggestion
       draft.value = { name: '', description: '', animation_script: '' };
       draftPublic.value = false;
+      draftFile.value = null;
       flashCreate('created');
     } else if (job.status === 'failed') {
       flashCreate('failed');
@@ -260,9 +263,18 @@ function onFilePicked(e) {
     else flashCreate('failed');
     return;
   }
-  // Hashing, dedup, chunked transfer and commit all run inside the job.
-  if (mode === 'new') enqueueCreate(file);
+  // Replace mode commits immediately; a new asset stages the GLB on the
+  // draft card and the Save button commits it with the drafted metadata.
+  if (mode === 'new') draftFile.value = file;
   else enqueueReplace(targetId, file);
+}
+
+// Save on the draft card: commit the staged GLB as a background upload job.
+function onDraftSave() {
+  if (!draftFile.value || creating.value || replaceActive.value) return;
+  const file = draftFile.value;
+  draftFile.value = null;
+  enqueueCreate(file);
 }
 
 // Creation-on-upload now runs as a background job: the queue hashes, dedups,
@@ -336,9 +348,11 @@ function flashCreate(kind) {
 // the save fails. Publishing triggers the DSH auto-classification into a
 // Public Component category.
 async function onTogglePublic(m) {
+  if (publicToggling.value[m.id]) return; // a fast double-toggle races
   const next = m.visibility === 'public' ? 'private' : 'public';
   const prev = m.visibility;
   m.visibility = next;
+  publicToggling.value = { ...publicToggling.value, [m.id]: true };
   try {
     const updated = await saveMesh(m.id, {
       name: m.name,
@@ -351,6 +365,10 @@ async function onTogglePublic(m) {
     if (updated.visibility === 'public') autoClassify(m);
   } catch {
     m.visibility = prev;
+  } finally {
+    const done = { ...publicToggling.value };
+    delete done[m.id];
+    publicToggling.value = done;
   }
 }
 
@@ -485,17 +503,19 @@ async function confirmDelete() {
     <p v-else-if="loadError" class="mlist__note">{{ t('contentmeshlist.error') }}</p>
     <p v-else-if="!loading && !meshes.length" class="mlist__note">{{ t('contentmeshlist.empty') }}</p>
 
-    <!-- Persistent "Upload new 3D Asset" draft card: the blank 3D frame
-         carries the call-to-action; clicking the frame collapses/expands
-         the editor layout below. Picking a GLB in the 3D Asset row mints
-         the asset with the drafted metadata (creation-on-upload). -->
+    <!-- Persistent "Upload new 3D Asset" draft card: the blank 3D frame is
+         the call-to-action and opens the local file picker (exactly like
+         the "Upload the GLB file from local disk" link and its button);
+         the picked GLB is staged and committed by the Save button with the
+         drafted metadata. The chevron collapses/expands the editor. -->
     <div v-if="isAuthenticated" class="mlist__entry">
       <div class="mlist__head">
         <div
           class="mlist__thumb mlist__thumb--clickable"
-          @click="draftExpanded = !draftExpanded"
+          :title="t('contentmeshlist.upload_glb')"
+          @click="pickNew"
         >
-          <div class="mlist__thumb-empty">{{ t('contentmeshlist.new_asset') }}</div>
+          <div class="mlist__thumb-empty">{{ draftFile ? draftFile.name : t('contentmeshlist.new_asset') }}</div>
         </div>
         <button
           class="mlist__toggle"
@@ -564,13 +584,23 @@ async function confirmDelete() {
 
         <div class="mlist__meta">
           <div class="mlist__meta-label">{{ t('contentmeshlist.time_label') }}</div>
-          <div class="mlist__meta-value">—</div>
         </div>
 
         <label class="mlist__check">
           <input type="checkbox" v-model="draftPublic" />
           <span>{{ t('contentmeshlist.make_public') }}</span>
         </label>
+
+        <div class="mlist__actions">
+          <button
+            class="mlist__action"
+            :title="t('contentmeshlist.save')"
+            :disabled="!draftFile || creating || replaceActive"
+            @click="onDraftSave"
+          >
+            <ConfigurableIcon name="MENU_SAVE" :size="26" />
+          </button>
+        </div>
       </template>
     </div>
 
@@ -677,6 +707,7 @@ async function confirmDelete() {
           <input
             type="checkbox"
             :checked="m.visibility === 'public'"
+            :disabled="publicToggling[m.id]"
             @change="onTogglePublic(m)"
           />
           <span>{{ t('contentmeshlist.make_public') }}</span>

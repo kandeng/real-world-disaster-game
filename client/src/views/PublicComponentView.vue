@@ -1,18 +1,24 @@
 <script setup>
-import { ref, computed, onUnmounted } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import TabBar from '@shared/TabBar.vue';
+import LoadingSpinner from '@shared/LoadingSpinner.vue';
 import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
+import { useMeshes } from '@shared-composables/useMeshes.js';
 
 const { t } = useI18n();
 const { clear } = useDockRegistry();
+const { listPublicMeshes, publicMeshFileUrl } = useMeshes();
 
 /* ─── Public Component ───
    Plugin-style browsing layout (top category bar + breadcrumb + search +
-   results), but for the shared public component library. Twelve categories;
+   results) for the shared public component library. Twelve categories;
    when they no longer fit the top bar, TabBar collapses the remainder into
-   its "»" overflow button automatically. */
+   its "»" overflow button automatically.
+   The feed is the anonymous GET /api/meshes/public endpoint: every mesh an
+   owner published (visibility='public') with a classified shelf; each card
+   renders the actual GLB through the no-auth public file endpoint. */
 
 const CATEGORIES = [
   { id: 'vehicle', labelKey: 'publiccomponentview.cat_vehicle' },
@@ -32,6 +38,29 @@ const CATEGORIES = [
 const selectedId = ref('vehicle');
 const searchQuery = ref('');
 
+const viewerReady = ref(false); // @google/model-viewer loaded + defined
+const items = ref([]); // published rows of the current category
+const loading = ref(false);
+const loadError = ref(false);
+let fetchSeq = 0; // drop stale responses after fast category switching
+
+async function loadCategory(id) {
+  const seq = ++fetchSeq;
+  loading.value = true;
+  loadError.value = false;
+  try {
+    const rows = await listPublicMeshes({ category: id });
+    if (seq !== fetchSeq) return;
+    items.value = rows;
+  } catch {
+    if (seq !== fetchSeq) return;
+    items.value = [];
+    loadError.value = true;
+  } finally {
+    if (seq === fetchSeq) loading.value = false;
+  }
+}
+
 const tabs = computed(() =>
   CATEGORIES.map((c) => ({ id: c.id, label: t(c.labelKey) }))
 );
@@ -39,12 +68,45 @@ const tabs = computed(() =>
 function selectCategory(id) {
   selectedId.value = id;
 }
+watch(selectedId, (id) => loadCategory(id));
+
+/* Search filters the already-fetched category rows client-side (instant
+   while typing; the feed of one shelf is small). */
+const visibleItems = computed(() => {
+  const needle = searchQuery.value.trim().toLowerCase();
+  if (!needle) return items.value;
+  return items.value.filter(
+    (m) =>
+      m.name.toLowerCase().includes(needle) ||
+      (m.description || '').toLowerCase().includes(needle)
+  );
+});
+
+function fmtSize(n) {
+  if (!n) return '';
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} B`;
+}
 
 /* Breadcrumb: Public Component > <category> (Plugin page convention). */
 const breadcrumb = computed(() => {
   const sel = CATEGORIES.find((c) => c.id === selectedId.value);
   const catLabel = sel ? t(sel.labelKey) : '';
   return `${t('aerialview.subpage_public_component')} > ${catLabel}`;
+});
+
+onMounted(() => {
+  // Register the <model-viewer> web component lazily: its weight only loads
+  // when this page is actually visited.
+  import('@google/model-viewer')
+    .then(() => {
+      viewerReady.value = true;
+    })
+    .catch(() => {
+      viewerReady.value = false;
+    });
+  loadCategory(selectedId.value);
 });
 
 onUnmounted(() => {
@@ -92,8 +154,37 @@ onUnmounted(() => {
           <!-- Separator -->
           <div class="pc-separator" />
 
-          <!-- Results: the library is empty until publishing lands -->
-          <p class="pc-empty">{{ t('publiccomponentview.empty') }}</p>
+          <!-- Results: the published library, one card per public asset -->
+          <LoadingSpinner v-if="loading && !items.length" />
+          <p v-else-if="loadError" class="pc-empty">{{ t('publiccomponentview.error') }}</p>
+          <p v-else-if="!visibleItems.length" class="pc-empty">{{ t('publiccomponentview.empty') }}</p>
+
+          <div v-else class="pc-grid">
+            <div v-for="m in visibleItems" :key="m.id" class="pc-card">
+              <div class="pc-card__frame">
+                <model-viewer
+                  v-if="viewerReady"
+                  :src="publicMeshFileUrl(m.id)"
+                  class="pc-card__viewer"
+                  camera-controls
+                  auto-rotate
+                  interaction-prompt="none"
+                  exposure="1"
+                  shadow-intensity="0.6"
+                ></model-viewer>
+                <LoadingSpinner v-else />
+              </div>
+              <div class="pc-card__body">
+                <div class="pc-card__name">{{ m.name }}</div>
+                <div v-if="m.description" class="pc-card__desc">{{ m.description }}</div>
+                <div class="pc-card__meta">
+                  <span v-if="m.owner_name">{{ m.owner_name }}</span>
+                  <span v-if="m.owner_name && m.size_bytes">·</span>
+                  <span v-if="m.size_bytes">{{ fmtSize(m.size_bytes) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </template>
@@ -178,6 +269,62 @@ onUnmounted(() => {
 .pc-empty {
   padding: 24px 0;
   font-size: 0.9rem;
+  color: #6e6e73;
+}
+
+/* ─── Results grid ─── */
+.pc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 20px;
+}
+
+.pc-card {
+  border: 1px solid #e5e5ea;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.pc-card__frame {
+  aspect-ratio: 4 / 3;
+  background: #f5f5f7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pc-card__viewer {
+  width: 100%;
+  height: 100%;
+}
+
+.pc-card__body {
+  padding: 10px 12px 12px;
+}
+
+.pc-card__name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #1d1d1f;
+  overflow-wrap: anywhere;
+}
+
+.pc-card__desc {
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: #1d1d1f;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pc-card__meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  font-size: 0.75rem;
   color: #6e6e73;
 }
 </style>

@@ -48,7 +48,7 @@ export function useMeshes() {
     return h;
   }
 
-  /** GET /api/meshes — the caller's meshes, most recent first. */
+  /** GET /api/meshes — the caller's own meshes, most recent first. */
   async function listMeshes() {
     const res = await fetch(`${API_BASE}/api/meshes`, {
       headers: authHeaders(),
@@ -269,8 +269,29 @@ export function useMeshes() {
     return updateMeshFile(id, file, onProgress);
   }
 
+  /** GET /api/meshes/public — the Public Component feed (anonymous-safe):
+   *  every mesh its owner made public, newest first, with its shelf
+   *  (category) and the owner's display name. Pass { category } to narrow
+   *  to one of the twelve Public Component categories. */
+  async function listPublicMeshes({ category = '' } = {}) {
+    const qs = new URLSearchParams();
+    if (category) qs.set('category', category);
+    const suffix = qs.toString() ? `?${qs}` : '';
+    const res = await fetch(`${API_BASE}/api/meshes/public${suffix}`);
+    if (!res.ok) throw new Error('public_meshes_failed');
+    return res.json();
+  }
+
+  /** Direct (no-auth) URL of a published mesh's GLB — the Public Component
+   *  viewer points <model-viewer src> straight at it. */
+  function publicMeshFileUrl(id) {
+    return `${API_BASE}/api/meshes/public/${id}/file`;
+  }
+
   return {
     listMeshes,
+    listPublicMeshes,
+    publicMeshFileUrl,
     checkMesh,
     uploadMesh,
     updateMeshFile,

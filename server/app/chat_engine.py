@@ -353,13 +353,21 @@ Meanings:
 
 Precedence rule: classify what the asset IS as an object. A lion statue is "sculpture", not "animal".
 
+When "GLB contents" is present it lists the names extracted from inside the file (generator tool, node/mesh/material/animation names). Weight it strongly: it usually describes the real subject better than a generic filename (e.g. nodes named fuselage/main_rotor/tail_rotor mean plane; lion_head/lion_mane/pedestal with a stone material mean sculpture).
+
 Reply with only the single category id in lowercase. No punctuation, no explanation."""
 
 
 async def classify_asset(
-    name: str, description: str, filename: str
+    name: str,
+    description: str,
+    filename: str,
+    glb_meta: str | None = None,
 ) -> str | None:
-    """Classify one 3D asset into a Public Component category id, or None."""
+    """Classify one 3D asset into a Public Component category id, or None.
+    ``glb_meta`` is an optional digest of the glTF JSON chunk inside the
+    GLB (generator + node/mesh/material/animation names), extracted by
+    meshes_api._glb_meta_digest."""
     if not API_KEY:
         log.warning("classify_asset: no chat api key configured")
         return None
@@ -371,6 +379,8 @@ async def classify_asset(
         lines.append(f"Description: {description.strip()[:500]}")
     if (filename or "").strip():
         lines.append(f"Filename: {filename.strip()[:200]}")
+    if (glb_meta or "").strip():
+        lines.append(f"GLB contents: {glb_meta.strip()[:400]}")
     if not lines:
         return None  # nothing to classify from
 

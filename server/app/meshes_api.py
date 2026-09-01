@@ -14,8 +14,10 @@ Content-addressed storage with SHA-256 dedup:
                                      visibility / category.
     POST   /api/meshes/{id}/classify -> LLM auto-classification into one of the
                                      twelve Public Component categories
-                                     (chat_engine.classify_asset); persists the
-                                     result on the row and returns it.
+                                     (chat_engine.classify_asset) over the
+                                     name/description/filename PLUS the names
+                                     extracted from the GLB's glTF JSON chunk;
+                                     persists the result on the row and returns it.
     GET    /api/meshes/{id}/file  -> serve the GLB bytes (owner-scoped). Unlike
                                      the video cache this does NOT consume the
                                      file, because other mesh rows may reference
@@ -35,6 +37,12 @@ from the last offset instead of restarting a big transfer):
                                                   mints the catalog row.
     GET    /api/meshes/jobs/{job_id}           -> poll: pending|running|done|failed (+mesh).
 
+Public Component feed (anonymous-safe; powers the Public Component page):
+
+    GET    /api/meshes/public                  -> every public mesh, newest first
+                                                  (?category= shelf filter, ?q= search).
+    GET    /api/meshes/public/{id}/file        -> the GLB of a published mesh.
+
 The GLB bytes live once per unique hash at
 ``server/workspace/meshes/<sha256[:2]>/<sha256>.glb`` (the workspace/ directory
 is excluded from the deploy rsync, so files survive backend redeploys).
@@ -46,7 +54,10 @@ schema decision).
 
 import asyncio
 import hashlib
+import json
 import logging
+import re
+import struct
 import time
 import uuid
 from pathlib import Path
@@ -54,7 +65,7 @@ from tempfile import SpooledTemporaryFile
 
 import shutil
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -239,6 +250,84 @@ async def list_meshes(
     )
     meshes = (await session.execute(stmt)).scalars().all()
     return [_serialize(m) for m in meshes]
+
+
+# ── Public Component feed (anonymous-safe) ─────────────────────────────
+# Everything an anonymous visitor needs to browse the public library: the
+# feed itself and the GLB bytes of published rows (the Public Component
+# viewer points <model-viewer src> straight at the file endpoint). Private
+# rows never surface here.
+
+
+def _serialize_public(mesh: Mesh, owner_name: str | None) -> dict:
+    """Public-safe projection of a mesh row: no sha256 / animation_script /
+    visibility — only what the Public Component page displays."""
+    return {
+        "id": mesh.id,
+        "name": mesh.name,
+        "description": mesh.description,
+        "category": mesh.category,
+        "size_bytes": mesh.size_bytes,
+        "owner_name": owner_name or "",
+        "created_at": mesh.created_at.isoformat(),
+    }
+
+
+@router.get("/meshes/public")
+async def list_public_meshes(
+    category: str = Query(default=""),
+    q: str = Query(default=""),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    """The Public Component feed (anonymous-safe): every mesh whose owner
+    made it public, most recent first. ?category= narrows to one of the
+    twelve Public Component shelves (rows with a NULL category are not
+    shelved anywhere yet, so a category filter never returns them); ?q=
+    filters name/description case-insensitively."""
+    stmt = (
+        select(Mesh, User.display_name)
+        .outerjoin(User, Mesh.user_id == User.id)
+        .where(Mesh.visibility == "public")
+        .order_by(Mesh.created_at.desc())
+    )
+    cat = (category or "").strip().lower()
+    if cat:
+        if cat not in MESH_CATEGORY_IDS:
+            raise HTTPException(status_code=400, detail="UNKNOWN_CATEGORY")
+        stmt = stmt.where(Mesh.category == cat)
+    rows = (await session.execute(stmt)).all()
+    needle = (q or "").strip().lower()
+    out = []
+    for mesh, owner_name in rows:
+        d = _serialize_public(mesh, owner_name)
+        if needle and needle not in d["name"].lower() and needle not in (
+            d["description"] or ""
+        ).lower():
+            continue
+        out.append(d)
+    return out
+
+
+@router.get("/meshes/public/{mesh_id}/file")
+async def get_public_mesh_file(
+    mesh_id: str,
+    session: AsyncSession = Depends(get_async_session),
+) -> FileResponse:
+    """The GLB bytes of a published mesh, anonymous-safe. Only rows whose
+    owner set visibility='public' are served through here; unpublishing a
+    mesh instantly hides its bytes again."""
+    stmt = select(Mesh).where(Mesh.id == mesh_id, Mesh.visibility == "public")
+    mesh = (await session.execute(stmt)).scalar_one_or_none()
+    if mesh is None:
+        raise HTTPException(status_code=404, detail="MESH_NOT_FOUND")
+    blob = _blob_path(mesh.sha256)
+    if not blob.is_file():
+        raise HTTPException(status_code=404, detail="NO_GLB")
+    stem = "".join(
+        c for c in (mesh.name or mesh.id) if c not in '\\/:*?"<>|'
+    ).strip()
+    filename = f"{stem or mesh.id}.glb"
+    return FileResponse(blob, media_type="model/gltf-binary", filename=filename)
 
 
 @router.post("/meshes/check")
@@ -547,6 +636,107 @@ async def update_mesh(
     return _serialize(mesh)
 
 
+# ── GLB JSON metadata digest (classification hint) ──────────────────────────
+# A GLB is: a 12-byte header (magic 'glTF', version 2, total length) followed
+# by chunks (length, type, data); the first chunk is the glTF JSON document
+# (type 'JSON'). That JSON carries node/mesh/material/animation names and the
+# generator tool — strong evidence of the asset's real subject, which a terse
+# filename rarely is. Only the leading JSON chunk is read and the digest is
+# capped, so even a huge asset costs a bounded read.
+
+_GLB_JSON_MAX = 2 * 1024 * 1024  # largest JSON chunk parsed in full
+_GLB_DIGEST_MAX = 400  # chars of hint text handed to the model
+_GLB_MAGIC = 0x46546C67  # 'glTF' (little-endian)
+_GLB_CHUNK_JSON = 0x4E4F534A  # 'JSON' (little-endian)
+
+
+def _gltf_names(data: dict, key: str, limit: int = 12) -> list[str]:
+    """First `limit` distinct non-empty names of a glTF array section."""
+    seen = []
+    items = data.get(key)
+    if not isinstance(items, list):
+        return seen
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        n = (item.get("name") or "").strip()
+        if n and n not in seen:
+            seen.append(n[:40])
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _glb_meta_digest(blob: Path) -> str | None:
+    """Compact text digest of the glTF JSON chunk of a GLB (generator +
+    node/mesh/material/animation names), or None when the file is malformed
+    or carries nothing useful. Never raises."""
+    try:
+        with blob.open("rb") as f:
+            header = f.read(12)
+            if len(header) < 12:
+                return None
+            magic, version, _total = struct.unpack("<III", header)
+            if magic != _GLB_MAGIC or version != 2:
+                return None
+            chunk_header = f.read(8)
+            if len(chunk_header) < 8:
+                return None
+            chunk_len, chunk_type = struct.unpack("<II", chunk_header)
+            if chunk_type != _GLB_CHUNK_JSON or chunk_len <= 0:
+                return None
+            raw = f.read(min(chunk_len, _GLB_JSON_MAX))
+    except OSError:
+        return None
+
+    parts: list[str] = []
+    if chunk_len > _GLB_JSON_MAX:
+        # JSON too big to parse whole: scan the capped prefix for name fields.
+        names = []
+        for m in re.finditer(rb'"name"\s*:\s*"([^"\\]{1,60})"', raw):
+            n = m.group(1).decode("utf-8", "replace").strip()
+            if n and n not in names:
+                names.append(n[:40])
+            if len(names) >= 12:
+                break
+        if names:
+            parts.append("names: " + ", ".join(names))
+        parts.append("(glTF JSON truncated)")
+    else:
+        try:
+            data = json.loads(raw.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        gen = ((data.get("asset") or {}).get("generator") or "").strip()[:80]
+        if gen:
+            parts.append(f"generator={gen}")
+        for key, label in (
+            ("nodes", "nodes"),
+            ("meshes", "meshes"),
+            ("materials", "materials"),
+            ("animations", "animations"),
+        ):
+            ns = _gltf_names(data, key)
+            if ns:
+                parts.append(f"{label}: {', '.join(ns)}")
+        exts = sorted(
+            k for k in (data.get("extensions") or {}) if isinstance(k, str)
+        )[:6]
+        if exts:
+            parts.append("extensions: " + ", ".join(exts))
+        counts = []
+        for key in ("nodes", "meshes", "materials", "textures", "animations"):
+            v = data.get(key)
+            if isinstance(v, list) and v:
+                counts.append(f"{len(v)} {key}")
+        if counts:
+            parts.append("(" + ", ".join(counts) + ")")
+    digest = "; ".join(parts)[:_GLB_DIGEST_MAX]
+    return digest or None
+
+
 @router.post("/meshes/{mesh_id}/classify")
 async def classify_mesh(
     mesh_id: str,
@@ -554,16 +744,20 @@ async def classify_mesh(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Auto-classify one of the caller's meshes into a Public Component
-    category (DSH/Bailian one-shot call over the asset's metadata). The
-    suggestion is persisted on the row; when the model cannot decide (or
-    the engine is down) the row keeps its current category and the owner
-    picks one manually."""
+    category (Bailian one-shot call over the asset's metadata PLUS the names
+    extracted from the GLB's glTF JSON chunk). The suggestion is persisted on
+    the row; when the model cannot decide (or the engine is down) the row
+    keeps its current category and the owner picks one manually."""
     stmt = select(Mesh).where(Mesh.id == mesh_id, Mesh.user_id == user.id)
     mesh = (await session.execute(stmt)).scalar_one_or_none()
     if mesh is None:
         raise HTTPException(status_code=404, detail="MESH_NOT_FOUND")
+    digest = None
+    blob = _blob_path(mesh.sha256)
+    if blob.is_file():
+        digest = _glb_meta_digest(blob)
     category = await classify_asset(
-        mesh.name, mesh.description or "", mesh.original_filename or ""
+        mesh.name, mesh.description or "", mesh.original_filename or "", digest
     )
     if category:
         mesh.category = category

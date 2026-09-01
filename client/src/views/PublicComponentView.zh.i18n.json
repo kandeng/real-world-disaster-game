@@ -12,5 +12,6 @@
   "cat_fire": "火 / 爆炸",
   "cat_cloud": "云 / 雨",
   "search_placeholder": "搜索公开组件",
-  "empty": "此分类暂无公开组件。"
+  "empty": "此分类暂无公开组件。",
+  "error": "无法加载公共组件库，请重试。"
 }

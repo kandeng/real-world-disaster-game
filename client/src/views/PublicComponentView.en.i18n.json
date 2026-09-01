@@ -12,5 +12,6 @@
   "cat_fire": "Fire / Bombard",
   "cat_cloud": "Cloud / Rain",
   "search_placeholder": "Search public components",
-  "empty": "No public components in this category yet."
+  "empty": "No public components in this category yet.",
+  "error": "Couldn't load the public library. Please try again."
 }
