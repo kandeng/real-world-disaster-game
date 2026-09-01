@@ -19,6 +19,17 @@ Content-addressed storage with SHA-256 dedup:
                                      unlinked only when no remaining row
                                      references its sha256 (refcount GC).
 
+Chunked resumable upload (lets the client close/navigate away and resume
+from the last offset instead of restarting a big transfer):
+
+    POST   /api/meshes/uploads                 -> open a session: {upload_id}.
+    GET    /api/meshes/uploads/{id}            -> {received} bytes so far (resume).
+    PUT    /api/meshes/uploads/{id}/chunk      -> raw-body chunk at ?offset= (contiguous).
+    POST   /api/meshes/uploads/{id}/commit     -> 202 {job_id}; a background task
+                                                  hashes/verifies/stores the bytes and
+                                                  mints the catalog row.
+    GET    /api/meshes/jobs/{job_id}           -> poll: pending|running|done|failed (+mesh).
+
 The GLB bytes live once per unique hash at
 ``server/workspace/meshes/<sha256[:2]>/<sha256>.glb`` (the workspace/ directory
 is excluded from the deploy rsync, so files survive backend redeploys).
@@ -28,22 +39,24 @@ JWT caller's id and foreign ids surface as 404 (API-only hardening, per the CMS
 schema decision).
 """
 
+import asyncio
 import hashlib
 import logging
+import time
 import uuid
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
 
 import shutil
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .config import CONFIG
-from .db import get_async_session
+from .db import async_session_maker, get_async_session
 from .models import Mesh, User
 from .users import current_active_user
 
@@ -58,6 +71,109 @@ MESH_MAX_SIZE = int(CONFIG.get("mesh_max_size", 100 * 1024 * 1024))
 
 # GLB containers begin with the 4-byte magic "glTF" (glTF Binary).
 _GLB_MAGIC = b"glTF"
+
+# ── Chunked resumable upload (background commit) ─────────────────────────
+# Sessions live in memory and spool their bytes to a temp file; commit runs
+# hash/verify/store/row-mint in a background asyncio task so the HTTP
+# request returns immediately (202 + job_id to poll). A vanished server
+# simply loses the in-memory sessions — the client detects the 404 and
+# restarts the transfer from offset 0.
+UPLOAD_DIR = Path(__file__).resolve().parent.parent / "workspace" / "uploads_tmp"
+UPLOAD_TTL = 24 * 3600  # seconds without activity before a session expires
+UPLOAD_CHUNK_MAX = 16 * 1024 * 1024  # per-chunk body cap
+UPLOADS: dict[str, dict] = {}  # upload_id -> session
+JOBS: dict[str, dict] = {}  # job_id -> commit job state
+
+
+def _get_session(upload_id: str, user: User) -> dict:
+    sess = UPLOADS.get(upload_id)
+    if sess is None or sess["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="UPLOAD_NOT_FOUND")
+    return sess
+
+
+def _sweep_uploads() -> None:
+    """Best-effort cleanup of expired sessions (called from the hot path)."""
+    now = time.time()
+    for uid, sess in list(UPLOADS.items()):
+        if now - sess["touched"] > UPLOAD_TTL:
+            UPLOADS.pop(uid, None)
+            try:
+                sess["spool"].close()
+            except Exception:
+                pass
+
+
+async def _commit_upload_task(upload_id: str) -> None:
+    """Background finish of a chunked upload: hash + verify the spooled
+    bytes, dedup, store the blob once per hash, mint the catalog row."""
+    sess = UPLOADS.get(upload_id)
+    if sess is None:
+        return
+    job = sess["job"]
+    spool = sess["spool"]
+    job["status"] = "running"
+    try:
+        hasher = hashlib.sha256()
+        magic = b""
+        size = 0
+        spool.seek(0)
+        while chunk := spool.read(1024 * 1024):
+            if not magic:
+                magic = chunk[:4]
+            size += len(chunk)
+            if size > MESH_MAX_SIZE:
+                raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
+            hasher.update(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="EMPTY_FILE")
+        if magic != _GLB_MAGIC:
+            raise HTTPException(status_code=415, detail="NOT_GLB")
+        sha = hasher.hexdigest()
+        claimed = sess["claimed_sha256"]
+        if claimed and claimed != sha:
+            raise HTTPException(status_code=400, detail="HASH_MISMATCH")
+
+        async with async_session_maker() as session:
+            # Same-user dedup: the caller already owns these exact bytes.
+            stmt = select(Mesh).where(
+                Mesh.user_id == sess["user_id"], Mesh.sha256 == sha
+            )
+            existing = (await session.execute(stmt)).scalar_one_or_none()
+            if existing is not None:
+                job["mesh"] = _serialize(existing)
+            else:
+                # Store the bytes once per unique hash (any user's earlier
+                # upload of identical bytes wins the race).
+                _store_blob(spool, sha)
+                mesh = Mesh(
+                    user_id=sess["user_id"],
+                    sha256=sha,
+                    name=_default_name(sess["name"], sess["filename"]),
+                    description=sess["description"],
+                    animation_script=sess["animation_script"],
+                    visibility=sess["visibility"],
+                    size_bytes=size,
+                    original_filename=sess["filename"],
+                )
+                session.add(mesh)
+                await session.commit()
+                await session.refresh(mesh)
+                job["mesh"] = _serialize(mesh)
+        job["status"] = "done"
+    except HTTPException as err:
+        job["status"] = "failed"
+        job["error"] = str(err.detail)
+    except Exception as err:  # noqa: BLE001 - surface anything as failed
+        log.warning("[meshes] background commit %s failed: %s", upload_id, err)
+        job["status"] = "failed"
+        job["error"] = "COMMIT_FAILED"
+    finally:
+        try:
+            spool.close()
+        except Exception:
+            pass
+        UPLOADS.pop(upload_id, None)
 
 
 def _blob_path(sha256: str) -> Path:
@@ -74,6 +190,7 @@ class MeshUpdate(BaseModel):
     name: str = Field(max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     animation_script: str | None = Field(default=None, max_length=8000)
+    visibility: str | None = Field(default=None, pattern="^(private|public)$")
 
 
 def _serialize(mesh: Mesh) -> dict:
@@ -200,6 +317,7 @@ async def create_mesh(
     description: str = Form(""),
     animation_script: str = Form(""),
     sha256: str = Form(""),
+    visibility: str = Form("private"),
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
@@ -234,7 +352,7 @@ async def create_mesh(
             name=_default_name(name, file.filename or ""),
             description=description or "",
             animation_script=animation_script or "",
-            visibility="private",
+            visibility="public" if (visibility or "").strip().lower() == "public" else "private",
             size_bytes=size,
             original_filename=file.filename or "",
         )
@@ -244,6 +362,121 @@ async def create_mesh(
         return _serialize(mesh)
     finally:
         spool.close()
+
+
+@router.post("/meshes/uploads", status_code=201)
+async def start_mesh_upload(
+    filename: str = Form(""),
+    size: int = Form(0),
+    sha256: str = Form(""),
+    name: str = Form(""),
+    description: str = Form(""),
+    animation_script: str = Form(""),
+    visibility: str = Form("private"),
+    user: User = Depends(current_active_user),
+) -> dict:
+    """Open a resumable upload session. The client then pushes contiguous
+    chunks (PUT .../chunk?offset=) and finalizes with POST .../commit."""
+    _sweep_uploads()
+    if size and size > MESH_MAX_SIZE:
+        raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
+    upload_id = uuid.uuid4().hex
+    spool = SpooledTemporaryFile(max_size=64 * 1024 * 1024)
+    job_id = uuid.uuid4().hex
+    job = {"id": job_id, "user_id": user.id, "status": "pending", "error": None, "mesh": None}
+    JOBS[job_id] = job
+    UPLOADS[upload_id] = {
+        "user_id": user.id,
+        "filename": filename or "",
+        "expected_size": max(int(size or 0), 0),
+        "claimed_sha256": (sha256 or "").strip().lower(),
+        "name": name or "",
+        "description": description or "",
+        "animation_script": animation_script or "",
+        "visibility": "public" if (visibility or "").strip().lower() == "public" else "private",
+        "spool": spool,
+        "received": 0,
+        "touched": time.time(),
+        "job": job,
+    }
+    return {"upload_id": upload_id}
+
+
+@router.get("/meshes/uploads/{upload_id}")
+async def mesh_upload_status(
+    upload_id: str,
+    user: User = Depends(current_active_user),
+) -> dict:
+    """How many bytes the server already has — the client resumes from here."""
+    sess = _get_session(upload_id, user)
+    return {"upload_id": upload_id, "received": sess["received"]}
+
+
+@router.put("/meshes/uploads/{upload_id}/chunk")
+async def put_mesh_upload_chunk(
+    upload_id: str,
+    offset: int,
+    request: Request,
+    user: User = Depends(current_active_user),
+) -> dict:
+    """Append one chunk (raw request body) at the given offset. Offsets must
+    be contiguous; a mismatch means the client should re-read GET status and
+    resume from the server's authoritative count."""
+    sess = _get_session(upload_id, user)
+    if offset < 0 or offset != sess["received"]:
+        raise HTTPException(status_code=409, detail="OFFSET_MISMATCH")
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="EMPTY_CHUNK")
+    if len(body) > UPLOAD_CHUNK_MAX:
+        raise HTTPException(status_code=413, detail="CHUNK_TOO_LARGE")
+    expected = sess["expected_size"]
+    if expected and sess["received"] + len(body) > expected:
+        raise HTTPException(status_code=400, detail="SIZE_EXCEEDED")
+    if sess["received"] + len(body) > MESH_MAX_SIZE:
+        raise HTTPException(status_code=413, detail="FILE_TOO_LARGE")
+    spool = sess["spool"]
+    spool.seek(sess["received"])
+    spool.write(body)
+    sess["received"] += len(body)
+    sess["touched"] = time.time()
+    return {"received": sess["received"]}
+
+
+@router.post("/meshes/uploads/{upload_id}/commit", status_code=202)
+async def commit_mesh_upload(
+    upload_id: str,
+    user: User = Depends(current_active_user),
+) -> dict:
+    """Finalize the transfer: returns 202 immediately; a background task
+    hashes/verifies the bytes, dedups, stores the blob, and mints the row.
+    The client polls GET /api/meshes/jobs/{job_id} for the outcome."""
+    sess = _get_session(upload_id, user)
+    expected = sess["expected_size"]
+    if expected and sess["received"] < expected:
+        raise HTTPException(status_code=400, detail="INCOMPLETE")
+    if sess["received"] == 0:
+        raise HTTPException(status_code=400, detail="EMPTY_FILE")
+    job = sess["job"]
+    asyncio.create_task(_commit_upload_task(upload_id))
+    return {"job_id": job["id"], "status": job["status"]}
+
+
+@router.get("/meshes/jobs/{job_id}")
+async def mesh_job_status(
+    job_id: str,
+    user: User = Depends(current_active_user),
+) -> dict:
+    """Poll the background commit: pending|running|done|failed."""
+    job = JOBS.get(job_id)
+    if job is None or job["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="JOB_NOT_FOUND")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "error": job["error"],
+        "mesh": job["mesh"],
+    }
 
 
 @router.put("/meshes/{mesh_id}/file")
@@ -295,6 +528,8 @@ async def update_mesh(
         mesh.description = body.description
     if body.animation_script is not None:
         mesh.animation_script = body.animation_script
+    if body.visibility is not None:
+        mesh.visibility = body.visibility
     await session.commit()
     await session.refresh(mesh)
     return _serialize(mesh)

@@ -54,7 +54,13 @@ export function useMeshes() {
       headers: authHeaders(),
     });
     if (!res.ok) throw new Error('meshes_unavailable');
-    meshesCache = await res.json();
+    // Defensive newest-first (the backend orders by created_at desc too):
+    // the list shows the more recent uploads above the older ones.
+    meshesCache = (await res.json()).slice().sort((a, b) => {
+      const ta = Date.parse(a.created_at) || 0;
+      const tb = Date.parse(b.created_at) || 0;
+      return tb - ta;
+    });
     return meshesCache;
   }
 
@@ -104,6 +110,7 @@ export function useMeshes() {
       form.append('description', meta.description || '');
       form.append('animation_script', meta.animation_script || '');
       form.append('sha256', meta.sha256 || '');
+      form.append('visibility', meta.visibility === 'public' ? 'public' : 'private');
       xhr.send(form);
     });
   }
@@ -170,5 +177,97 @@ export function useMeshes() {
     if (!res.ok) throw new Error('mesh_delete_failed');
   }
 
-  return { listMeshes, checkMesh, uploadMesh, updateMeshFile, saveMesh, fetchMeshFile, deleteMesh };
+  /* ── Chunked resumable upload (background commit on the server) ── */
+
+  /** POST /api/meshes/uploads — open a resumable upload session. */
+  async function startMeshUpload(meta) {
+    const form = new FormData();
+    form.append('filename', meta.filename || '');
+    form.append('size', String(meta.size || 0));
+    form.append('sha256', meta.sha256 || '');
+    form.append('name', meta.name || '');
+    form.append('description', meta.description || '');
+    form.append('animation_script', meta.animation_script || '');
+    form.append('visibility', meta.visibility === 'public' ? 'public' : 'private');
+    const res = await fetch(`${API_BASE}/api/meshes/uploads`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: form,
+    });
+    if (res.status === 413) throw new Error('FILE_TOO_LARGE');
+    if (!res.ok) throw new Error('mesh_upload_failed');
+    return res.json(); // { upload_id }
+  }
+
+  /** GET /api/meshes/uploads/{id} — server-side received count (resume). */
+  async function meshUploadStatus(uploadId) {
+    const res = await fetch(`${API_BASE}/api/meshes/uploads/${uploadId}`, {
+      headers: authHeaders(),
+    });
+    if (res.status === 404) return null; // session expired / server restart
+    if (!res.ok) throw new Error('mesh_upload_failed');
+    return res.json(); // { upload_id, received }
+  }
+
+  /** PUT /api/meshes/uploads/{id}/chunk?offset= — send one raw-body chunk. */
+  async function putMeshChunk(uploadId, offset, blob) {
+    const res = await fetch(
+      `${API_BASE}/api/meshes/uploads/${uploadId}/chunk?offset=${offset}`,
+      {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/octet-stream' },
+        body: blob,
+      }
+    );
+    if (!res.ok) {
+      const err = new Error(res.status === 409 ? 'OFFSET_MISMATCH' : 'mesh_upload_failed');
+      err.status = res.status;
+      throw err;
+    }
+    return res.json(); // { received }
+  }
+
+  /** POST /api/meshes/uploads/{id}/commit — 202 {job_id}; the server
+   *  hashes/verifies/stores/row-mints in a background task. */
+  async function commitMeshUpload(uploadId) {
+    const res = await fetch(`${API_BASE}/api/meshes/uploads/${uploadId}/commit`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    if (!res.ok) throw new Error('mesh_upload_failed');
+    return res.json(); // { job_id, status }
+  }
+
+  /** GET /api/meshes/jobs/{jobId} — poll the background commit. Returns
+   *  null when the server no longer knows the job (restart / expiry). */
+  async function meshJobStatus(jobId) {
+    const res = await fetch(`${API_BASE}/api/meshes/jobs/${jobId}`, {
+      headers: authHeaders(),
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error('mesh_upload_failed');
+    return res.json(); // { job_id, status, error, mesh }
+  }
+
+  /** PUT /api/meshes/{id}/file but resolving with the serialized mesh, for
+   *  the background replace job (the plain updateMeshFile serves the card). */
+  function replaceMeshFile(id, file, onProgress) {
+    return updateMeshFile(id, file, onProgress);
+  }
+
+  return {
+    listMeshes,
+    checkMesh,
+    uploadMesh,
+    updateMeshFile,
+    replaceMeshFile,
+    saveMesh,
+    fetchMeshFile,
+    deleteMesh,
+    startMeshUpload,
+    meshUploadStatus,
+    putMeshChunk,
+    commitMeshUpload,
+    meshJobStatus,
+  };
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import LoadingSpinner from '@shared/LoadingSpinner.vue';
@@ -8,20 +8,28 @@ import {
   useMeshes,
   cachedMeshes,
   invalidateMeshCaches,
-  sha256OfFile,
 } from '@shared-composables/useMeshes.js';
+import { jobs, startNewMeshJob, startReplaceMeshJob, jobRunningFor } from '@shared-composables/useMeshUploadJob.js';
 
 // Content -> 3D Asset: the user's GLB mesh assets, most recent first,
 // separated by thin horizontal lines — same layout language as the Video
-// list. Collapsed, a card is its draggable 3D preview (a <model-viewer>
-// fed by the auth-scoped GLB); expanded: the GLB update control, Name +
-// Description + Animation Script editors, the upload/update time, and the
-// Save / Download / Delete action row. Storage is content-addressed server
-// side, so every upload runs a SHA-256 dedup check first.
+// list. At the top sits the persistent "Upload new 3D Asset" draft card:
+// a blank 3D frame carrying the call-to-action text; clicking the frame
+// collapses/expands the editor layout below (3D Asset upload row, Name,
+// Description, Animation Script with the AI automation icon, upload/update
+// time). Picking a GLB there enqueues a background upload job (module-scoped
+// queue, chunked + resumable server-side): the user can navigate anywhere
+// while it runs, and the top bar shows the terminal notice; this list only
+// applies the finished job to its cards.
+// Each asset card: collapsed it is its draggable 3D preview (a
+// <model-viewer> fed by the auth-scoped GLB; clicking the preview toggles
+// the card too); expanded: the GLB update control, Name + Description +
+// Animation Script editors, the upload/update time, and the Save /
+// Download / Delete action row. Storage is content-addressed server side,
+// so every upload runs a SHA-256 dedup check first.
 const { t, locale } = useI18n();
 const { isAuthenticated } = useAuth();
-const { listMeshes, checkMesh, uploadMesh, updateMeshFile, saveMesh, fetchMeshFile, deleteMesh } = useMeshes();
-
+const { listMeshes, saveMesh, fetchMeshFile, deleteMesh } = useMeshes();
 const meshes = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
@@ -33,13 +41,16 @@ const savedId = ref(null); // transient "Saved" hint
 const failedId = ref(null); // transient "Save failed" hint
 const downloadingId = ref(null);
 const downloadFailedId = ref(null); // transient "Download failed" hint
-const uploadingId = ref(null); // a card's GLB is being replaced
-const uploadedId = ref(null); // transient "Uploaded" hint
-const uploadFailedId = ref(null); // transient "Upload failed" hint
 const deletingId = ref(null);
 const deleteFailedId = ref(null); // transient "Delete failed" hint
-const creating = ref(false); // the top "new asset" upload is running
-const createHint = ref(null); // 'created' | 'failed'
+const uploadedId = ref(null); // transient "Uploaded" hint (set by the job watcher)
+const uploadFailedId = ref(null); // transient "Upload failed" hint
+const createHint = ref(null); // 'created' | 'failed' (set by the job watcher)
+// Persistent "Upload new 3D Asset" draft card at the top of the list.
+const draft = ref({ name: '', description: '', animation_script: '' });
+const draftPublic = ref(false); // "Make this 3D asset public" on the draft card
+const draftExpanded = ref(true);
+const automationHint = ref(null); // 'draft' | meshId transient hint
 const pendingDelete = ref(null); // mesh waiting in the Delete warning dialog
 const filePicker = ref(null); // hidden <input type="file">
 let pickMode = null; // 'new' | 'replace'
@@ -48,6 +59,18 @@ let hintTimer = null;
 let downloadHintTimer = null;
 let uploadHintTimer = null;
 let createHintTimer = null;
+let automationHintTimer = null;
+
+// Background upload jobs (useMeshUploadJob): the draft card's creation
+// transfer plus any card's GLB replacement run in the module-scoped queue.
+const createJob = computed(() => jobs.find((j) => j.kind === 'create') || null);
+const replaceJobs = computed(() => jobs.filter((j) => j.kind === 'replace'));
+const creating = computed(
+  () => !!createJob.value && ['pending', 'hashing', 'transfer', 'commit'].includes(createJob.value.status)
+);
+const replaceActive = computed(() =>
+  replaceJobs.value.some((j) => ['pending', 'hashing', 'transfer', 'commit'].includes(j.status))
+);
 
 // GLB blobs fetched for the viewer, kept at module scope so tab switches do
 // not re-download them. Object URLs are created per mount and revoked on
@@ -79,6 +102,54 @@ onMounted(async () => {
   }
   meshes.value.forEach((m) => ensureModelUrl(m));
 });
+
+// Applying finished upload jobs: the watcher sees the terminal transition
+// regardless of which page the transfer finished on (module-scoped queue).
+watch(
+  () => jobs.map((j) => `${j.id}:${j.status}`),
+  (now, was) => {
+    const prev = new Set(was || []);
+    for (const j of jobs) {
+      if (j.status !== 'done' && j.status !== 'failed') continue;
+      if (prev.has(`${j.id}:${j.status}`)) continue;
+      applyJobResult(j);
+    }
+  }
+);
+
+function jobStatusActive(status) {
+  return ['pending', 'hashing', 'transfer', 'commit'].includes(status);
+}
+
+function applyJobResult(job) {
+  if (job.kind === 'create') {
+    if (job.status === 'done' && job.mesh) {
+      const mesh = job.mesh;
+      if (!meshes.value.find((x) => x.id === mesh.id)) {
+        meshes.value = [mesh, ...meshes.value];
+      }
+      ensureModelUrl(mesh);
+      expanded.value = { ...expanded.value, [mesh.id]: true };
+      draft.value = { name: '', description: '', animation_script: '' };
+      draftPublic.value = false;
+      flashCreate('created');
+    } else if (job.status === 'failed') {
+      flashCreate('failed');
+    }
+    return;
+  }
+  // A card's GLB replacement.
+  const id = job.meshId;
+  if (job.status === 'done' && job.mesh) {
+    const prev = meshes.value.find((x) => x.id === id);
+    meshes.value = meshes.value.map((x) => (x.id === id ? { ...x, ...job.mesh } : x));
+    if (prev) dropModel(prev);
+    ensureModelUrl(job.mesh);
+    flashUpload(id, 'uploaded');
+  } else if (job.status === 'failed') {
+    flashUpload(id, 'failed');
+  }
+}
 
 onUnmounted(() => {
   Object.values(modelUrls.value).forEach((url) => URL.revokeObjectURL(url));
@@ -130,14 +201,14 @@ function dropModel(m) {
 
 // ── File picking (create new + replace existing) ────────────────────────
 function pickNew() {
-  if (creating.value || uploadingId.value) return;
+  if (creating.value || replaceActive.value) return;
   pickMode = 'new';
   pickTargetId = null;
   openPicker();
 }
 
 function pickReplace(m) {
-  if (creating.value || uploadingId.value) return;
+  if (creating.value || jobRunningFor(m.id)) return;
   pickMode = 'replace';
   pickTargetId = m.id;
   openPicker();
@@ -150,7 +221,7 @@ function openPicker() {
   input.click();
 }
 
-async function onFilePicked(e) {
+function onFilePicked(e) {
   const file = e.target.files && e.target.files[0];
   const mode = pickMode;
   const targetId = pickTargetId;
@@ -162,69 +233,27 @@ async function onFilePicked(e) {
     else flashCreate('failed');
     return;
   }
-  let sha = '';
-  try {
-    sha = await sha256OfFile(file);
-  } catch {
-    if (mode === 'replace' && targetId) flashUpload(targetId, 'failed');
-    else flashCreate('failed');
-    return;
-  }
-  if (mode === 'new') await createFromFile(file, sha);
-  else await replaceFile(targetId, file, sha);
+  // Hashing, dedup, chunked transfer and commit all run inside the job.
+  if (mode === 'new') enqueueCreate(file);
+  else enqueueReplace(targetId, file);
 }
 
-// Creation-on-upload: hash, dedup-probe, then upload (or reuse an existing
-// row when the bytes are already ours) and prepend the new card.
-async function createFromFile(file, sha) {
-  creating.value = true;
-  try {
-    let mesh = null;
-    try {
-      const chk = await checkMesh(sha, file.size);
-      if (chk.status === 'mine' && chk.mesh) mesh = chk.mesh;
-    } catch {
-      /* probe failed — fall through to the upload, which dedups too */
-    }
-    if (!mesh) {
-      mesh = await uploadMesh(file, { name: '', description: '', animation_script: '', sha256: sha });
-    }
-    if (!meshes.value.find((x) => x.id === mesh.id)) {
-      meshes.value = [mesh, ...meshes.value];
-    }
-    invalidateMeshCaches();
-    await ensureModelUrl(mesh);
-    expanded.value = { ...expanded.value, [mesh.id]: true };
-    flashCreate('created');
-  } catch {
-    flashCreate('failed');
-  } finally {
-    creating.value = false;
-  }
+// Creation-on-upload now runs as a background job: the queue hashes, dedups,
+// transfers chunked + resumable, and polls the server-side commit, all while
+// the user may be on another page. This list only watches `jobs`.
+function enqueueCreate(file) {
+  startNewMeshJob(file, {
+    name: draft.value.name,
+    description: draft.value.description,
+    animation_script: draft.value.animation_script,
+    visibility: draftPublic.value ? 'public' : 'private',
+  });
 }
 
-// Replace a card's GLB: no-op when the bytes are identical, otherwise swap
-// to the new content-addressed blob and refresh the preview.
-async function replaceFile(id, file, sha) {
-  const m = meshes.value.find((x) => x.id === id);
-  if (!m) return;
-  if (m.sha256 && m.sha256 === sha) {
-    flashUpload(id, 'uploaded');
-    return;
-  }
-  uploadingId.value = id;
-  try {
-    const updated = await updateMeshFile(id, file);
-    meshes.value = meshes.value.map((x) => (x.id === id ? { ...x, ...updated } : x));
-    invalidateMeshCaches();
-    dropModel(m);
-    await ensureModelUrl(updated);
-    flashUpload(id, 'uploaded');
-  } catch {
-    flashUpload(id, 'failed');
-  } finally {
-    uploadingId.value = null;
-  }
+// Replace a card's GLB as a background job too (the watcher applies the
+// updated row and refreshes the 3D preview when it lands).
+function enqueueReplace(id, file) {
+  startReplaceMeshJob(id, file);
 }
 
 // ── Save / Download / Delete ────────────────────────────────────────────
@@ -273,6 +302,34 @@ function flashCreate(kind) {
   clearTimeout(createHintTimer);
   createHint.value = kind;
   createHintTimer = setTimeout(() => (createHint.value = null), 2400);
+}
+
+// "Make this 3D asset public": flip the row's visibility ('private' <->
+// 'public') and persist it right away; revert the optimistic toggle when
+// the save fails.
+async function onTogglePublic(m) {
+  const next = m.visibility === 'public' ? 'private' : 'public';
+  const prev = m.visibility;
+  m.visibility = next;
+  try {
+    const updated = await saveMesh(m.id, {
+      name: m.name,
+      description: m.description || '',
+      animation_script: m.animation_script || '',
+      visibility: next,
+    });
+    m.visibility = updated.visibility;
+  } catch {
+    m.visibility = prev;
+  }
+}
+
+// The automation (AI script generation) icon is a UI placeholder until the
+// AI backend lands; clicking it flashes a transient "coming soon" hint.
+function flashAutomation(key) {
+  clearTimeout(automationHintTimer);
+  automationHint.value = key;
+  automationHintTimer = setTimeout(() => (automationHint.value = null), 2400);
 }
 
 async function onDownload(m) {
@@ -363,14 +420,93 @@ async function confirmDelete() {
     <p v-else-if="loadError" class="mlist__note">{{ t('contentmeshlist.error') }}</p>
     <p v-else-if="!loading && !meshes.length" class="mlist__note">{{ t('contentmeshlist.empty') }}</p>
 
-    <!-- Creation-on-upload: picking a GLB mints a fresh asset card. -->
-    <div v-if="isAuthenticated" class="mlist__new-row">
-      <button class="mlist__new" :disabled="creating" @click="pickNew">
-        <ConfigurableIcon name="MENU_FILE_UPLOAD" :size="20" />
-        <span>{{ t('contentmeshlist.new_asset') }}</span>
-      </button>
-      <span v-if="createHint === 'created'" class="mlist__saved">{{ t('contentmeshlist.uploaded') }}</span>
-      <span v-else-if="createHint === 'failed'" class="mlist__failed">{{ t('contentmeshlist.upload_failed') }}</span>
+    <!-- Persistent "Upload new 3D Asset" draft card: the blank 3D frame
+         carries the call-to-action; clicking the frame collapses/expands
+         the editor layout below. Picking a GLB in the 3D Asset row mints
+         the asset with the drafted metadata (creation-on-upload). -->
+    <div v-if="isAuthenticated" class="mlist__entry">
+      <div class="mlist__head">
+        <div
+          class="mlist__thumb mlist__thumb--clickable"
+          @click="draftExpanded = !draftExpanded"
+        >
+          <div class="mlist__thumb-empty">{{ t('contentmeshlist.new_asset') }}</div>
+        </div>
+        <button
+          class="mlist__toggle"
+          :title="draftExpanded ? t('contentmeshlist.collapse') : t('contentmeshlist.expand')"
+          :aria-label="draftExpanded ? t('contentmeshlist.collapse') : t('contentmeshlist.expand')"
+          @click="draftExpanded = !draftExpanded"
+        >
+          <ConfigurableIcon
+            :name="draftExpanded ? 'MENU_UPWARD' : 'MENU_DOWNWARD'"
+            :size="28"
+          />
+        </button>
+      </div>
+
+      <template v-if="draftExpanded">
+        <div class="mlist__asset-row">
+          <span class="mlist__inline-label">{{ t('contentmeshlist.asset_label') }}</span>
+          <button
+            class="mlist__upload"
+            :disabled="creating || replaceActive"
+            @click="pickNew"
+          >
+            <span>{{ t('contentmeshlist.upload_glb') }}</span>
+            <ConfigurableIcon name="MENU_FILE_UPLOAD" :size="20" />
+          </button>
+          <span v-if="createJob && createJob.status === 'transfer'" class="mlist__progress">{{ Math.floor(createJob.progress * 100) }}%</span>
+          <span v-else-if="creating" class="mlist__progress">…</span>
+          <span v-if="createHint === 'created'" class="mlist__saved">{{ t('contentmeshlist.uploaded') }}</span>
+          <span v-else-if="createHint === 'failed'" class="mlist__failed">{{ t('contentmeshlist.upload_failed') }}</span>
+        </div>
+
+        <div class="mlist__label-line">{{ t('contentmeshlist.name_label') }}</div>
+        <textarea
+          v-model="draft.name"
+          class="mlist__title-input"
+          rows="2"
+          maxlength="200"
+        ></textarea>
+
+        <div class="mlist__label-line">{{ t('contentmeshlist.description_label') }}</div>
+        <textarea
+          v-model="draft.description"
+          class="mlist__desc"
+          rows="3"
+          maxlength="4000"
+        ></textarea>
+
+        <div class="mlist__label-line mlist__label-line--row">
+          <span>{{ t('contentmeshlist.animation_label') }}</span>
+          <button
+            class="mlist__automation"
+            :title="t('contentmeshlist.automation_placeholder')"
+            @click="flashAutomation('draft')"
+          >
+            <ConfigurableIcon name="MENU_AUTOMATION" :size="18" />
+          </button>
+          <span v-if="automationHint === 'draft'" class="mlist__failed">{{ t('contentmeshlist.automation_hint') }}</span>
+        </div>
+        <textarea
+          v-model="draft.animation_script"
+          class="mlist__desc"
+          rows="3"
+          maxlength="8000"
+          :placeholder="t('contentmeshlist.automation_placeholder')"
+        ></textarea>
+
+        <div class="mlist__meta">
+          <div class="mlist__meta-label">{{ t('contentmeshlist.time_label') }}</div>
+          <div class="mlist__meta-value">—</div>
+        </div>
+
+        <label class="mlist__check">
+          <input type="checkbox" v-model="draftPublic" />
+          <span>{{ t('contentmeshlist.make_public') }}</span>
+        </label>
+      </template>
     </div>
 
     <LoadingSpinner v-if="loading && !meshes.length" />
@@ -382,8 +518,9 @@ async function confirmDelete() {
     >
       <div class="mlist__head">
         <!-- Draggable 3D preview of the GLB (Sketchfab-like). Fed by an
-             object URL built from the auth-scoped GLB fetch. -->
-        <div class="mlist__thumb">
+             object URL built from the auth-scoped GLB fetch. Clicking the
+             frame toggles the editor layout below. -->
+        <div class="mlist__thumb mlist__thumb--clickable" @click="toggle(m)">
           <model-viewer
             v-if="viewerReady && modelUrls[m.id]"
             :src="modelUrls[m.id]"
@@ -416,12 +553,16 @@ async function confirmDelete() {
           <span class="mlist__inline-label">{{ t('contentmeshlist.asset_label') }}</span>
           <button
             class="mlist__upload"
-            :disabled="uploadingId === m.id || creating"
+            :disabled="jobRunningFor(m.id) || creating"
             @click="pickReplace(m)"
           >
             <span>{{ t('contentmeshlist.upload_glb') }}</span>
             <ConfigurableIcon name="MENU_FILE_UPLOAD" :size="20" />
           </button>
+          <template v-for="rj in replaceJobs" :key="rj.id">
+            <span v-if="rj.meshId === m.id && rj.status === 'transfer'" class="mlist__progress">{{ Math.floor(rj.progress * 100) }}%</span>
+            <span v-else-if="rj.meshId === m.id && jobStatusActive(rj.status)" class="mlist__progress">…</span>
+          </template>
         </div>
 
         <div class="mlist__label-line">{{ t('contentmeshlist.name_label') }}</div>
@@ -440,18 +581,38 @@ async function confirmDelete() {
           maxlength="4000"
         ></textarea>
 
-        <div class="mlist__label-line">{{ t('contentmeshlist.animation_label') }}</div>
+        <div class="mlist__label-line mlist__label-line--row">
+          <span>{{ t('contentmeshlist.animation_label') }}</span>
+          <button
+            class="mlist__automation"
+            :title="t('contentmeshlist.automation_placeholder')"
+            @click="flashAutomation(m.id)"
+          >
+            <ConfigurableIcon name="MENU_AUTOMATION" :size="18" />
+          </button>
+          <span v-if="automationHint === m.id" class="mlist__failed">{{ t('contentmeshlist.automation_hint') }}</span>
+        </div>
         <textarea
           v-model="m.animation_script"
           class="mlist__desc"
           rows="3"
           maxlength="8000"
+          :placeholder="t('contentmeshlist.automation_placeholder')"
         ></textarea>
 
         <div class="mlist__meta">
           <div class="mlist__meta-label">{{ t('contentmeshlist.time_label') }}</div>
           <div class="mlist__meta-value">{{ displayTime(m) }}</div>
         </div>
+
+        <label class="mlist__check">
+          <input
+            type="checkbox"
+            :checked="m.visibility === 'public'"
+            @change="onTogglePublic(m)"
+          />
+          <span>{{ t('contentmeshlist.make_public') }}</span>
+        </label>
 
         <div class="mlist__actions">
           <button
@@ -528,35 +689,30 @@ async function confirmDelete() {
   color: #6e6e73;
 }
 
-/* "Upload new 3D Asset" control above the list. */
-.mlist__new-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 0 4px;
+/* Clicking a 3D frame toggles the editor layout below it. */
+.mlist__thumb--clickable {
+  cursor: pointer;
 }
 
-.mlist__new {
+/* Animation Script label row: label + AI automation icon + hint. */
+.mlist__label-line--row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mlist__automation {
   border: none;
   background: none;
   padding: 2px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-family: inherit;
-  font-size: 0.95rem;
-  font-weight: 600;
+  color: #515151;
+}
+
+.mlist__automation:hover {
   color: #007aff;
-}
-
-.mlist__new:hover:not(:disabled) {
-  color: #0066d6;
-}
-
-.mlist__new:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 
 /* Thin horizontal separator between entries. */
@@ -715,6 +871,22 @@ async function confirmDelete() {
   color: #007aff;
 }
 
+/* "Make this 3D asset public" checkbox, just above the icon action row. */
+.mlist__check {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  font-size: 0.9rem;
+  color: #1d1d1f;
+  cursor: pointer;
+}
+
+.mlist__check input {
+  cursor: pointer;
+}
+
 .mlist__actions {
   margin-top: 18px;
   display: flex;
@@ -745,6 +917,12 @@ async function confirmDelete() {
 .mlist__saved {
   font-size: 0.85rem;
   color: #34a853;
+}
+
+/* Live transfer progress of a background upload job. */
+.mlist__progress {
+  font-size: 0.85rem;
+  color: #007aff;
 }
 
 .mlist__failed {

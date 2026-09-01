@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '@shared-composables/useAuth.js';
 import { useVideoJob } from '@shared-composables/useVideoJob.js';
+import { useMeshUploadJob } from '@shared-composables/useMeshUploadJob.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import ChatbotOverlay from '@shared/ChatbotOverlay.vue';
 import bannerUrl from '../assets/media/drone_earth.png';
@@ -112,6 +113,15 @@ function toggleLocale() {
 const { job: videoJob } = useVideoJob();
 const videoJobNoticeText = computed(() =>
   videoJob.notice ? t(`aerialview.videojob_${videoJob.notice.text}`) : ''
+);
+
+/* ─── Background mesh upload job notice ─── */
+// 3D Asset uploads run in a module-scoped queue (Component -> 3D Asset):
+// the user may be anywhere when one lands, so the terminal notice is shown
+// here in the top bar too (auto-clears, mirroring the video job notice).
+const { notice: meshJobNotice } = useMeshUploadJob();
+const meshJobNoticeText = computed(() =>
+  meshJobNotice.text ? t(`contentmeshlist.${meshJobNotice.text}`) : ''
 );
 </script>
 
@@ -252,6 +262,13 @@ const videoJobNoticeText = computed(() =>
             :class="{ 'shell-notice--warning': videoJob.notice.kind === 'warning' }"
           >
             {{ videoJobNoticeText }}
+          </div>
+          <div
+            v-if="meshJobNotice.text"
+            class="shell-notice"
+            :class="{ 'shell-notice--warning': meshJobNotice.kind === 'warning' }"
+          >
+            {{ meshJobNoticeText }}
           </div>
         </div>
 

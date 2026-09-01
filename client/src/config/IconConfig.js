@@ -60,6 +60,7 @@ export const IconMap = {
   MENU_SAVE: '../../icons/save.svg',
   MENU_FILE_DOWNLOAD: '../../icons/file_download.svg',
   MENU_FILE_UPLOAD: '../../icons/file_upload.svg',
+  MENU_AUTOMATION: '../../icons/automation.svg',
   MENU_CANCEL: '../../icons/cancel.svg',
   MENU_PREVIEW: '../../icons/preview.svg',
   MENU_UPWARD: '../../icons/upward.svg',
