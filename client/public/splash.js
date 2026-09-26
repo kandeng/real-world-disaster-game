@@ -17,10 +17,10 @@
 
   // ── Route-aware splash ──
   // The video splash only makes sense on Cesium-backed pages. On every other
-  // route (Account, Chat, auth callbacks, ...) remove the overlay immediately
+  // route (Account, auth callbacks, ...) remove the overlay immediately
   // so e.g. a post-login page load lands on the UI instantly instead of
   // waiting for 3D tiles that the page never uses.
-  const SPLASH_ROUTE_PREFIXES = ['/route-planning'];
+  const SPLASH_ROUTE_PREFIXES = ['/play'];
   const path = window.location.pathname.replace(/\/+$/, '') || '/';
   const needsSplash =
     path === '/' || SPLASH_ROUTE_PREFIXES.some((p) => path.startsWith(p));

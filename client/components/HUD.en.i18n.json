@@ -1,19 +1,11 @@
 {
-  "flight": "Flight",
   "camera": "Camera",
   "position": "Position",
   "speed": "Speed",
-  "direction": "Direction",
-  "gimbal": "Gimbal",
-  "mode": "Mode:",
   "lat": "lat:",
   "lon": "lon:",
   "alt": "alt:",
   "yaw": "Z (yaw):",
   "pitch": "Y (pitch):",
-  "roll": "X (roll):",
-  "link": "Link",
-  "live": "live",
-  "lost": "lost",
-  "battery": "Battery"
+  "roll": "X (roll):"
 }

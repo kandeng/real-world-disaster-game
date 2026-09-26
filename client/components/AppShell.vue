@@ -1,12 +1,10 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '@shared-composables/useAuth.js';
-import { useVideoJob } from '@shared-composables/useVideoJob.js';
-import { useMeshUploadJob } from '@shared-composables/useMeshUploadJob.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
-import ChatbotOverlay from '@shared/ChatbotOverlay.vue';
+import AssistantPanel from '@shared/AssistantPanel.vue';
 import bannerUrl from '../assets/media/drone_earth.png';
 
 const { t, locale } = useI18n();
@@ -15,13 +13,8 @@ const route = useRoute();
 const { user, isAuthenticated, fetchMe } = useAuth();
 
 /* ─── Left-panel navigation ─── */
-// Integrated pages navigate on click; the remaining names stay plain text
-// until their pages are wired into the shell. Clicking the menu item of the
-// page already on screen dispatches 'shell-page-reenter' so the page can
-// re-run its landing behavior (e.g. Build Scene re-opens the Reset popup).
 function go(path) {
   if (router.currentRoute.value.path !== path) router.push(path);
-  else window.dispatchEvent(new CustomEvent('shell-page-reenter', { detail: path }));
 }
 
 // The entry for the page currently on screen turns blue.
@@ -44,22 +37,6 @@ const open = ref(false);
 watch(isAuthenticated, (now, was) => {
   if (now && !was) open.value = true;
 });
-
-/* ─── Chatbot overlay (top-bar question button) ─── */
-// The question button toggles a translucent assistant layer that floats
-// above whatever page is currently on screen.
-const chatOpen = ref(false);
-
-// Navigating to another page always hides the popup: each page starts
-// with the assistant closed, so a dialog opened on e.g. 3D Exploration
-// never leaks into Route Planning. (Per-page conversation persistence
-// is a future backend feature; visibility always resets for now.)
-watch(
-  () => route.path,
-  () => {
-    chatOpen.value = false;
-  },
-);
 
 /* ─── Left-panel width drag (same pattern as Extensions / My Space) ─── */
 const LEFT_MIN = 180;
@@ -90,6 +67,34 @@ function onDividerPointerUp() {
   document.removeEventListener('pointerup', onDividerPointerUp);
 }
 
+/* ─── Right assistant-panel width drag (mirror of the left divider) ─── */
+const RIGHT_MIN = 300;
+const RIGHT_MAX = 720;
+const RIGHT_DEFAULT = 420;
+const rightWidth = ref(RIGHT_DEFAULT);
+const isDraggingRight = ref(false);
+
+function onRightDividerPointerDown(e) {
+  e.preventDefault();
+  isDraggingRight.value = true;
+  document.addEventListener('pointermove', onRightDividerPointerMove);
+  document.addEventListener('pointerup', onRightDividerPointerUp);
+}
+
+function onRightDividerPointerMove(e) {
+  if (!isDraggingRight.value) return;
+  // The panel hangs off the right edge, so its width is the distance
+  // from the pointer to the window's right border.
+  const w = window.innerWidth - e.clientX;
+  rightWidth.value = Math.min(RIGHT_MAX, Math.max(RIGHT_MIN, w));
+}
+
+function onRightDividerPointerUp() {
+  isDraggingRight.value = false;
+  document.removeEventListener('pointermove', onRightDividerPointerMove);
+  document.removeEventListener('pointerup', onRightDividerPointerUp);
+}
+
 /* ─── Top-bar user button ─── */
 // A signed-out visitor clicking the user glyph is taken straight to
 // Account -> Login; a signed-in user lands on the same page's profile card.
@@ -106,23 +111,6 @@ function toggleLocale() {
   localStorage.setItem('user-lang', locale.value);
 }
 
-/* ─── Background video job notice ─── */
-// The video generation job (Produce -> Video -> Generate) keeps running
-// after its dialog is closed; its terminal notice is shown here in the
-// top bar so completion / failure is never missed (auto-clears).
-const { job: videoJob } = useVideoJob();
-const videoJobNoticeText = computed(() =>
-  videoJob.notice ? t(`aerialview.videojob_${videoJob.notice.text}`) : ''
-);
-
-/* ─── Background mesh upload job notice ─── */
-// 3D Asset uploads run in a module-scoped queue (Component -> 3D Asset):
-// the user may be anywhere when one lands, so the terminal notice is shown
-// here in the top bar too (auto-clears, mirroring the video job notice).
-const { notice: meshJobNotice } = useMeshUploadJob();
-const meshJobNoticeText = computed(() =>
-  meshJobNotice.text ? t(`contentmeshlist.${meshJobNotice.text}`) : ''
-);
 </script>
 
 <template>
@@ -146,42 +134,6 @@ const meshJobNoticeText = computed(() =>
       >
         {{ t('aerialview.page_aerial') }}
       </div>
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/gallery') }"
-        @click="go('/gallery')"
-      >
-        {{ t('aerialview.page_gallery') }}
-      </div>
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/route-planning') }"
-        @click="go('/route-planning')"
-      >
-        {{ t('aerialview.page_routeplanning') }}
-      </div>
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/build-scene') }"
-        @click="go('/build-scene')"
-      >
-        {{ t('aerialview.page_buildscene') }}
-      </div>
-      <!-- Public Component: shared component library (Plugin-style page). -->
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/public-component') }"
-        @click="go('/public-component')"
-      >
-        {{ t('aerialview.subpage_public_component') }}
-      </div>
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/extensions') }"
-        @click="go('/extensions')"
-      >
-        {{ t('aerialview.page_extensions') }}
-      </div>
 
       <div class="shell-left__spacer" />
       <div class="shell-left__divider" />
@@ -193,13 +145,6 @@ const meshJobNoticeText = computed(() =>
         @click="go('/account')"
       >
         {{ t('aerialview.subpage_account') }}
-      </div>
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/content') }"
-        @click="go('/content')"
-      >
-        {{ t('aerialview.subpage_content') }}
       </div>
     </aside>
 
@@ -237,39 +182,13 @@ const meshJobNoticeText = computed(() =>
               />
             </svg>
           </button>
-
-          <!-- Customer service: toggles the chatbot overlay -->
-          <button
-            class="shell-round"
-            :title="t('aerialview.topbar_customer_service')"
-            :aria-label="t('aerialview.topbar_customer_service')"
-            @click="chatOpen = !chatOpen"
-          >
-            <ConfigurableIcon name="MENU_QUESTION" :size="20" />
-          </button>
         </div>
 
         <!-- Canonical slot for every page's reminders / warnings: pages
              <Teleport> their .shell-notice divs here (centered; the bar
-             grows when a notice wraps onto multiple lines). The video job
-             notice renders as a sibling so it shows even with the dialog
-             closed. -->
+             grows when a notice wraps onto multiple lines). -->
         <div class="shell-topbar__notices">
           <div id="shell-notices" style="display: contents"></div>
-          <div
-            v-if="videoJob.notice"
-            class="shell-notice"
-            :class="{ 'shell-notice--warning': videoJob.notice.kind === 'warning' }"
-          >
-            {{ videoJobNoticeText }}
-          </div>
-          <div
-            v-if="meshJobNotice.text"
-            class="shell-notice"
-            :class="{ 'shell-notice--warning': meshJobNotice.kind === 'warning' }"
-          >
-            {{ meshJobNoticeText }}
-          </div>
         </div>
 
         <div class="shell-topbar__right">
@@ -301,10 +220,18 @@ const meshJobNoticeText = computed(() =>
       <!-- Main panel: pages fill exactly this area -->
       <main class="shell-main">
         <slot />
-        <!-- Chatbot layer floats above the current page (3D / 2D / Account…) -->
-        <ChatbotOverlay v-if="chatOpen" />
       </main>
     </div>
+
+    <!-- ── Draggable divider + AI assistant panel (rightmost column) ── -->
+    <div
+      class="shell-divider"
+      :class="{ 'shell-divider--dragging': isDraggingRight }"
+      @pointerdown="onRightDividerPointerDown"
+    />
+    <aside class="shell-assistant" :style="{ width: rightWidth + 'px' }">
+      <AssistantPanel />
+    </aside>
   </div>
 </template>
 
@@ -510,6 +437,13 @@ const meshJobNoticeText = computed(() =>
   min-height: 0;
   pointer-events: none;
   z-index: 0; /* contain page-internal z-indices under the shell chrome */
+}
+
+/* ── Right assistant panel ── */
+.shell-assistant {
+  flex-shrink: 0;
+  pointer-events: auto;
+  z-index: 10;
 }
 </style>
 

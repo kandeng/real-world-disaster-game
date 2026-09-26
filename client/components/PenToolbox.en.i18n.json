@@ -1,0 +1,9 @@
+{
+  "tool_arrow": "Arrow — drag from tail to head",
+  "tool_rect": "Rectangle — drag corner to corner",
+  "tool_curve": "Free curve — drag to draw",
+  "tool_text": "Text — click, type, Enter places it",
+  "ink_colour": "Ink colour",
+  "clear": "Clear every mark",
+  "disarm": "Put the pens away"
+}

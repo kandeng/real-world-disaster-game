@@ -15,62 +15,17 @@ const pngModules = import.meta.glob('../../icons/*.png', {
 });
 
 export const IconMap = {
-  // Sidebar menu icons
+  // Aerial page dock + shell top bar
   MENU_CONTROL_STICK: '../../icons/steer.svg',
-  MENU_LOCATION: '../../icons/location.svg',
-  MENU_3D_VIEW: '../../icons/drone.svg',
-  MENU_SETTINGS: '../../icons/settings.svg',
-  MENU_CAMERA: '../../icons/camera.svg',
-  MENU_CHAT: '../../icons/chat.svg',
   MENU_TAKEOFF: '../../icons/takeoff.svg',
   MENU_LANDING: '../../icons/landing.svg',
   MENU_STOP: '../../icons/stop.svg',
-  MENU_RED_STOP: '../../icons/red_stop.svg',
-  MENU_ROUTER: '../../icons/router.svg',
   MENU_RECORDER: '../../icons/recorder.svg',
-  MENU_CONTACTS: '../../icons/contacts.svg',
-  MENU_GALLARY: '../../icons/gallary.svg',
-  MENU_CUSTOMER_SERVICE: '../../icons/customer_service.svg',
-  MENU_QUESTION: '../../icons/question.svg',
-  MENU_FILE_FOLDER: '../../icons/file_folder.svg',
   MENU_PHOTO: '../../icons/photo.svg',
-  MENU_HELICOPTER: '../../icons/helicopter.svg',
-  MENU_MESH: '../../icons/mesh.svg',
-  MENU_MAP: '../../icons/map.svg',
-  MENU_INSTRUMENT: '../../icons/instrument.svg',
-  MENU_SATELLITE: '../../icons/satellite.svg',
-  MENU_CHAR_2D: '../../icons/char_2d.svg',
-  MENU_CHAR_3D: '../../icons/char_3d.svg',
-  MENU_LIST: '../../icons/list.svg',
   MENU_SEARCH: '../../icons/search.svg',
   MENU_RESET: '../../icons/reset.svg',
-  MENU_ARCHIVE: '../../icons/archive.svg',
-  MENU_NOTE: '../../icons/note.svg',
-  MENU_TOOL: '../../icons/tool.svg',
-  MENU_FINGER_TAP: '../../icons/finger-tap.svg',
-  MENU_REMOTE_CONTROLLER: '../../icons/remote_controller.svg',
-  MENU_DRONE_PLUS: '../../icons/drone_plus.svg',
-  MENU_LIVESTREAM_VIEWER: '../../icons/livestream_viewer.svg',
-  MENU_LIVESTREAM_HOST: '../../icons/livestream_host.svg',
-  MENU_WINDOW_SIZE: '../../icons/window_size.svg',
-  MENU_ACCOUNT: '../../icons/account.svg',
+  MENU_FILE_FOLDER: '../../icons/file_folder.svg',
   MENU_USER: '../../icons/user.svg',
-  MENU_WALLET: '../../icons/wallet.svg',
-  MENU_CONTENT: '../../icons/content.svg',
-  MENU_SAVE: '../../icons/save.svg',
-  MENU_FILE_DOWNLOAD: '../../icons/file_download.svg',
-  MENU_FILE_UPLOAD: '../../icons/file_upload.svg',
-  MENU_AUTOMATION: '../../icons/automation.svg',
-  MENU_CANCEL: '../../icons/cancel.svg',
-  MENU_PREVIEW: '../../icons/preview.svg',
-  MENU_UPWARD: '../../icons/upward.svg',
-  MENU_DOWNWARD: '../../icons/downward.svg',
-
-  // Auth form icons (password visibility toggle)
-  PASSWORD_SHOW: '../../icons/view.svg',
-  PASSWORD_HIDE: '../../icons/hide.svg',
-  // Legacy alias, kept for backward compatibility
-  MENU_GAMEPAD: '../../icons/control-stick.svg',
 
   // Joystick / flight control glyphs
   FLIGHT_MOVE: '../../icons/flight-move.svg',
@@ -81,13 +36,13 @@ export const IconMap = {
   CAMERA_ROTATE: '../../icons/camera-rotate.svg',
   CAMERA_PITCH: '../../icons/pitch-indicator.svg',
 
-  // Chat icons
-  CHAT_BACK: '../../icons/back.svg',
-  CHAT_SEND: '../../icons/send.svg',
-  CHAT_ATTACHMENT: '../../icons/attachment.svg',
+  // Auth form icons (password visibility toggle)
+  PASSWORD_SHOW: '../../icons/view.svg',
+  PASSWORD_HIDE: '../../icons/hide.svg',
 
-  // Chat avatars
-  USER_PORTRAIT: '../../icons/portrait_photo.png',
+  // AI assistant panel icons
+  CHAT_SEND: '../../icons/send.svg',
+  CHAT_CAPTURE: '../../icons/screen_shot.svg',
 };
 
 /**

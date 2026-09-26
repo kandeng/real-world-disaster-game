@@ -380,7 +380,7 @@ async function searchNearbyPois(latLng) {
 }
 
 // Map a new-Places-API Place onto the legacy POI shape consumed by
-// WaypointPanel.vue (place_id / name / geometry.location).
+// the parent view (place_id / name / geometry.location).
 function toPoi(place) {
   return {
     place_id: place.id,
@@ -475,8 +475,7 @@ function parseWaypointInput(name) {
 // ── Routes API (google.maps.routes.Route.computeRoutes) ──────────────────
 // The legacy google.maps.DirectionsService is deprecated (Feb 2026). We use
 // the Routes API instead and adapt its response back into the
-// DirectionsResult shape that WaypointPanel.vue consumes, so the panel needs
-// no changes.
+// DirectionsResult shape that consumers expect.
 
 // Routes API durations are protobuf strings such as "300s" (or "3.5s").
 function durationStringToSeconds(d) {

@@ -16,6 +16,9 @@ server/cordis/
 server/sessions/
 server/workspace/
 
+# Local DSH experiments + JS-controller codegen tool (never committed)
+.dsh-lab/
+
 # Temporary bug-reproduction screen recordings (kept locally, not source)
 /*.webm
 
