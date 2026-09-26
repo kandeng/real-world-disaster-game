@@ -1,8 +1,7 @@
 {
-  "title": "AI assistant",
   "placeholder": "Message the assistant…",
-  "capture_viewer": "Capture the 3D viewer as a screenshot",
-  "attach_folder": "Attach folder",
+  "capture_viewer": "Screenshot",
+  "attach_folder": "Upload file",
   "send": "Send",
   "stop": "Stop"
 }

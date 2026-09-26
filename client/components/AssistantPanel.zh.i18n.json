@@ -1,8 +1,7 @@
 {
-  "title": "AI 助手",
   "placeholder": "给助手留言……",
-  "capture_viewer": "将 3D 视图截取为截图",
-  "attach_folder": "附加文件夹",
+  "capture_viewer": "截屏",
+  "attach_folder": "上传文件",
   "send": "发送",
   "stop": "停止"
 }

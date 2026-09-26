@@ -1,4 +1,6 @@
 {
+  "situation": "Situation",
+  "plan": "Plan",
   "steer": "Steer",
   "screenshot": "Screenshot",
   "search": "Search",

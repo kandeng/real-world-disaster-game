@@ -5,7 +5,6 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '@shared-composables/useAuth.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import AssistantPanel from '@shared/AssistantPanel.vue';
-import bannerUrl from '../assets/media/drone_earth.png';
 
 const { t, locale } = useI18n();
 const router = useRouter();
@@ -115,123 +114,115 @@ function toggleLocale() {
 
 <template>
   <div class="shell">
-    <!-- ── Left panel: full height, from the top of the page to the bottom ── -->
-    <aside v-if="open" class="shell-left" :style="{ width: leftWidth + 'px' }">
-      <!-- Brand banner: its width tracks the panel width, so dragging the
-           vertical divider scales it too. -->
-      <img
-        class="shell-left__banner"
-        :src="bannerUrl"
-        alt=""
-        draggable="false"
-      />
-
-      <!-- Top group, aligned to the top -->
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/') }"
-        @click="go('/')"
-      >
-        {{ t('aerialview.page_aerial') }}
-      </div>
-
-      <div class="shell-left__spacer" />
-      <div class="shell-left__divider" />
-
-      <!-- Bottom group (My Space), aligned to the bottom -->
-      <div
-        class="shell-nav__item shell-nav__item--link"
-        :class="{ 'shell-nav__item--active': isActive('/account') }"
-        @click="go('/account')"
-      >
-        {{ t('aerialview.subpage_account') }}
-      </div>
-    </aside>
-
-    <!-- Draggable vertical divider (full height) -->
-    <div
-      v-if="open"
-      class="shell-divider"
-      :class="{ 'shell-divider--dragging': isDragging }"
-      @pointerdown="onDividerPointerDown"
-    />
-
-    <!-- ── Right column: top bar starts right of the divider ── -->
-    <div class="shell-right">
-      <header class="shell-topbar">
-        <div class="shell-topbar__left">
-          <button
-            class="shell-toggle"
-            :aria-label="open ? 'Collapse navigation' : 'Expand navigation'"
-            @click="open = !open"
+    <!-- ── Top bar: spans the full window width, above every panel ── -->
+    <header class="shell-topbar">
+      <div class="shell-topbar__left">
+        <button
+          class="shell-toggle"
+          :aria-label="open ? 'Collapse navigation' : 'Expand navigation'"
+          @click="open = !open"
+        >
+          <svg
+            class="shell-toggle__arrow"
+            :class="{ 'shell-toggle__arrow--flipped': open }"
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
           >
-            <svg
-              class="shell-toggle__arrow"
-              :class="{ 'shell-toggle__arrow--flipped': open }"
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-            >
-              <path
-                d="M6 3l5 5-5 5"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </button>
-        </div>
-
-        <!-- Canonical slot for every page's reminders / warnings: pages
-             <Teleport> their .shell-notice divs here (centered; the bar
-             grows when a notice wraps onto multiple lines). -->
-        <div class="shell-topbar__notices">
-          <div id="shell-notices" style="display: contents"></div>
-        </div>
-
-        <div class="shell-topbar__right">
-          <!-- User: uploaded avatar when signed in, default glyph otherwise -->
-          <button
-            class="shell-round"
-            :title="t('aerialview.topbar_user')"
-            :aria-label="t('aerialview.topbar_user')"
-            @click="onClickUser"
-          >
-            <img
-              v-if="user && user.avatar"
-              class="shell-round__avatar"
-              :src="user.avatar"
-              alt=""
-              draggable="false"
+            <path
+              d="M6 3l5 5-5 5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
             />
-            <ConfigurableIcon v-else name="MENU_USER" :size="20" />
-          </button>
+          </svg>
+        </button>
+      </div>
 
-          <!-- Shows the *current* language; clicking switches locale and
-               persists the choice (ready for more languages later). -->
-          <button class="shell-lang" @click="toggleLocale">
-            {{ locale === 'en' ? 'EN' : '中文' }}
-          </button>
+      <!-- Canonical slot for every page's reminders / warnings: pages
+           <Teleport> their .shell-notice divs here (centered; the bar
+           grows when a notice wraps onto multiple lines). -->
+      <div class="shell-topbar__notices">
+        <div id="shell-notices" style="display: contents"></div>
+      </div>
+
+      <div class="shell-topbar__right">
+        <!-- User: uploaded avatar when signed in, default glyph otherwise -->
+        <button
+          class="shell-round"
+          :title="t('aerialview.topbar_user')"
+          :aria-label="t('aerialview.topbar_user')"
+          @click="onClickUser"
+        >
+          <img
+            v-if="user && user.avatar"
+            class="shell-round__avatar"
+            :src="user.avatar"
+            alt=""
+            draggable="false"
+          />
+          <ConfigurableIcon v-else name="MENU_USER" :size="20" />
+        </button>
+
+        <!-- Shows the *current* language; clicking switches locale and
+             persists the choice (ready for more languages later). -->
+        <button class="shell-lang" @click="toggleLocale">
+          {{ locale === 'en' ? 'EN' : '中文' }}
+        </button>
+      </div>
+    </header>
+
+    <!-- ── Body row under the top bar: left panel | main | assistant ── -->
+    <div class="shell-body">
+      <!-- Left panel: navigation, from the top bar down to the bottom -->
+      <aside v-if="open" class="shell-left" :style="{ width: leftWidth + 'px' }">
+        <!-- Top group, aligned to the top -->
+        <div
+          class="shell-nav__item shell-nav__item--link"
+          :class="{ 'shell-nav__item--active': isActive('/') }"
+          @click="go('/')"
+        >
+          {{ t('aerialview.page_aerial') }}
         </div>
-      </header>
+
+        <div class="shell-left__spacer" />
+        <div class="shell-left__divider" />
+
+        <!-- Bottom group (My Space), aligned to the bottom -->
+        <div
+          class="shell-nav__item shell-nav__item--link"
+          :class="{ 'shell-nav__item--active': isActive('/account') }"
+          @click="go('/account')"
+        >
+          {{ t('aerialview.subpage_account') }}
+        </div>
+      </aside>
+
+      <!-- Draggable vertical divider -->
+      <div
+        v-if="open"
+        class="shell-divider"
+        :class="{ 'shell-divider--dragging': isDragging }"
+        @pointerdown="onDividerPointerDown"
+      />
 
       <!-- Main panel: pages fill exactly this area -->
       <main class="shell-main">
         <slot />
       </main>
-    </div>
 
-    <!-- ── Draggable divider + AI assistant panel (rightmost column) ── -->
-    <div
-      class="shell-divider"
-      :class="{ 'shell-divider--dragging': isDraggingRight }"
-      @pointerdown="onRightDividerPointerDown"
-    />
-    <aside class="shell-assistant" :style="{ width: rightWidth + 'px' }">
-      <AssistantPanel />
-    </aside>
+      <!-- Draggable divider + AI assistant panel (rightmost column) -->
+      <div
+        class="shell-divider"
+        :class="{ 'shell-divider--dragging': isDraggingRight }"
+        @pointerdown="onRightDividerPointerDown"
+      />
+      <aside class="shell-assistant" :style="{ width: rightWidth + 'px' }">
+        <AssistantPanel />
+      </aside>
+    </div>
   </div>
 </template>
 
@@ -240,16 +231,16 @@ function toggleLocale() {
   position: absolute;
   inset: 0;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   pointer-events: none; /* let the Cesium canvas / pages decide input capture */
 }
 
-/* ── Right column: top bar + main, starts right of the divider ── */
-.shell-right {
+/* ── Body row under the full-width top bar: left panel | main | assistant ── */
+.shell-body {
   flex: 1;
-  min-width: 0;
+  min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
 }
 
 /* ── Top bar ──
@@ -316,15 +307,6 @@ function toggleLocale() {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.shell-left__banner {
-  width: 100%;
-  height: auto;
-  display: block;
-  margin-bottom: 16px;
-  flex-shrink: 0;
-  user-select: none;
 }
 
 .shell-toggle {

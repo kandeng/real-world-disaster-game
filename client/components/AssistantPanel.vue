@@ -13,56 +13,59 @@ const draft = ref('');
 
 <template>
   <div class="assistant">
-    <!-- ── Header ── -->
-    <header class="assistant__header">
-      <span class="assistant__title">{{ t('assistantpanel.title') }}</span>
-    </header>
-
     <!-- ── Message list: rendering / streaming lands here later ── -->
     <div class="assistant__messages" />
 
-    <!-- ── Composer: [scan][folder] [multiline input] [send][stop] ── -->
+    <!-- ── Composer: row 1 [stop][input][send], row 2 [screenshot][upload] ── -->
     <div class="assistant__composer">
-      <button
-        class="assistant__btn"
-        type="button"
-        :title="t('assistantpanel.capture_viewer')"
-        :aria-label="t('assistantpanel.capture_viewer')"
-      >
-        <ConfigurableIcon name="CHAT_CAPTURE" :size="18" />
-      </button>
-      <button
-        class="assistant__btn"
-        type="button"
-        :title="t('assistantpanel.attach_folder')"
-        :aria-label="t('assistantpanel.attach_folder')"
-      >
-        <ConfigurableIcon name="MENU_FILE_FOLDER" :size="18" />
-      </button>
+      <div class="assistant__row">
+        <button
+          class="assistant__btn assistant__btn--stop"
+          type="button"
+          :title="t('assistantpanel.stop')"
+          :aria-label="t('assistantpanel.stop')"
+        >
+          <ConfigurableIcon name="MENU_STOP" :size="18" />
+        </button>
 
-      <textarea
-        v-model="draft"
-        class="assistant__input"
-        rows="3"
-        :placeholder="t('assistantpanel.placeholder')"
-      />
+        <textarea
+          v-model="draft"
+          class="assistant__input"
+          rows="3"
+          :placeholder="t('assistantpanel.placeholder')"
+        />
 
-      <button
-        class="assistant__btn assistant__btn--send"
-        type="button"
-        :title="t('assistantpanel.send')"
-        :aria-label="t('assistantpanel.send')"
-      >
-        <ConfigurableIcon name="CHAT_SEND" :size="18" color="#fff" />
-      </button>
-      <button
-        class="assistant__btn assistant__btn--stop"
-        type="button"
-        :title="t('assistantpanel.stop')"
-        :aria-label="t('assistantpanel.stop')"
-      >
-        <ConfigurableIcon name="MENU_STOP" :size="18" />
-      </button>
+        <button
+          class="assistant__btn assistant__btn--send"
+          type="button"
+          :title="t('assistantpanel.send')"
+          :aria-label="t('assistantpanel.send')"
+        >
+          <ConfigurableIcon name="CHAT_SEND" :size="18" color="#fff" />
+        </button>
+      </div>
+
+      <!-- Purely aesthetic hairline between the input row and the tool row. -->
+      <div class="assistant__rowline" />
+
+      <div class="assistant__row assistant__row--tools">
+        <button
+          class="assistant__btn"
+          type="button"
+          :title="t('assistantpanel.capture_viewer')"
+          :aria-label="t('assistantpanel.capture_viewer')"
+        >
+          <ConfigurableIcon name="CHAT_CAPTURE" :size="18" />
+        </button>
+        <button
+          class="assistant__btn"
+          type="button"
+          :title="t('assistantpanel.attach_folder')"
+          :aria-label="t('assistantpanel.attach_folder')"
+        >
+          <ConfigurableIcon name="MENU_FILE_FOLDER" :size="18" />
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -77,18 +80,6 @@ const draft = ref('');
   pointer-events: auto;
 }
 
-.assistant__header {
-  flex-shrink: 0;
-  padding: 14px 16px;
-  border-bottom: 1px solid #e5e5ea;
-}
-
-.assistant__title {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: #111827;
-}
-
 .assistant__messages {
   flex: 1;
   min-height: 0;
@@ -99,10 +90,28 @@ const draft = ref('');
 .assistant__composer {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid #e5e5ea;
+}
+
+.assistant__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* Tool row sits under the textarea, indented past the Stop button. */
+.assistant__row--tools {
+  margin-left: 44px; /* 36px button + 8px gap */
+}
+
+/* Thin horizontal divider between the input row and the tool row. */
+.assistant__rowline {
+  height: 1px;
+  background: #e5e5ea;
+  flex-shrink: 0;
 }
 
 .assistant__btn {

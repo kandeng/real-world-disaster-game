@@ -22,7 +22,6 @@ import { useDockRegistry } from '@shared-composables/useDockRegistry.js';
 import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
 import { useScreenCapture } from '@shared-composables/useScreenCapture.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
-import { useAuth } from '@shared-composables/useAuth.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import ConnectionError from '@shared/ConnectionError.vue';
 
@@ -69,30 +68,9 @@ const {
 const { computeDesiredEnuMove, applyEnuMove, updateTelemetry: updateFlightTelemetry } = useFlightPhysics();
 const { step: stepCameraPhysics } = useCameraPhysics();
 const { rightItems, registerRight, clear } = useDockRegistry();
-const { recorderState, replayProgress, replayPov, captureScreenshot, sampleFrame, toggleRecorder, resetRecorder } = useScreenCapture();
-const { isAuthenticated } = useAuth();
+const { recorderState, replayProgress, replayPov, sampleFrame, resetRecorder } = useScreenCapture();
 const { settings } = useAppSettings();
 
-// Login gate for Screenshot / Screen Recording (the 3D Aerial and 3D Mesh
-// subpages share this right dock): anonymous users get a green top-center
-// reminder instead of the capture action.
-const captureAuthNotice = ref(''); // '' | 'screenshot' | 'recording'
-let captureAuthTimer = null;
-function flashCaptureAuth(action) {
-  captureAuthNotice.value = action;
-  clearTimeout(captureAuthTimer);
-  captureAuthTimer = setTimeout(() => { captureAuthNotice.value = ''; }, 6000);
-}
-function guardedScreenshot() {
-  if (isAuthenticated.value) return captureScreenshot();
-  flashCaptureAuth('screenshot');
-}
-function guardedToggleRecorder() {
-  // Never trap an ACTIVE recording: toggling off is always allowed.
-  if (isAuthenticated.value || recorderState.value !== 'idle') return toggleRecorder();
-  flashCaptureAuth('recording');
-}
-const isRecorderActive = computed(() => recorderState.value !== 'idle');
 let savedDiskVisibility = null;
 
 const isCollisionFrozen = ref(false);
@@ -284,41 +262,6 @@ const routeActive = computed(() => isStreet.value);
 // the Search view after the map was recreated (e.g. after a 3D excursion or
 // a page switch).
 const selectedLatLng = toRef(viewCtx, 'selectionLatLng');
-
-function onClickSearch(altOverride = null) {
-  // Address search always shows the 2D street map. Without an override it
-  // matches the location / zoom the user currently has (leaving 3D first);
-  // an override (Reset with a carried route) frames the map instead.
-  if (altOverride != null) mapAlt.value = altOverride;
-  else if (!isStreet.value) enterStreetFrom3d();
-  viewCtx.subView = 'search';
-  snapshotMap();
-  // The Search view marks the picked address with the red balloon.
-  if (selectedLatLng.value) {
-    mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
-  }
-}
-
-// Reset: open the address search popup. The popup hosts the route-aware
-// actions (Replay / Restart) above the address lookup; the current route
-// is left untouched until the user explicitly clicks Restart inside.
-// With a carried route, the 2D street map opens framed at TWICE the
-// average waypoint altitude so the read-only blue dots + spline fit.
-function onClickReset() {
-  // Toggle: a second click closes the popup and lifts back to the 3D view
-  // (the flight keeps running underneath, so the orange dot rides on).
-  if (showSearchPanel.value) {
-    viewCtx.subView = 'steer';
-    return;
-  }
-  const wps = session.route.waypoints;
-  let altOverride = null;
-  if (wps.length) {
-    const avgAlt = wps.reduce((s, w) => s + (Number(w.alt) || 0), 0) / wps.length;
-    altOverride = Math.max(0, Math.min(100000, 2 * avgAlt));
-  }
-  onClickSearch(altOverride);
-}
 
 // Route-aware popup actions:
 // - Replay re-runs the virtual drone flight from the first waypoint to the
@@ -916,6 +859,11 @@ function loop() {
   rafId = requestAnimationFrame(loop);
 }
 
+// Situation / Plan dock buttons: layout-only for now — the panels they
+// will open arrive in a later phase.
+function onClickSituation() {}
+function onClickPlan() {}
+
 onMounted(() => {
   cesiumContainer.value = document.getElementById('cesiumContainer');
   startFlightKeyboard();
@@ -937,11 +885,16 @@ onMounted(() => {
   }, 10000);
 
   registerRight({
-    id: 'reset',
-    icon: 'MENU_RESET',
-    titleKey: 'aerialview.reset',
-    active: showSearchPanel,
-    onClick: onClickReset,
+    id: 'situation',
+    icon: 'MENU_SITUATION',
+    titleKey: 'aerialview.situation',
+    onClick: onClickSituation,
+  });
+  registerRight({
+    id: 'plan',
+    icon: 'MENU_PLAN',
+    titleKey: 'aerialview.plan',
+    onClick: onClickPlan,
   });
   registerRight({
     id: 'steer',
@@ -950,48 +903,15 @@ onMounted(() => {
     active: showFlight.value,
     onClick: toggleSteer,
   });
-  registerRight({
-    id: 'screenshot',
-    icon: 'MENU_PHOTO',
-    titleKey: 'aerialview.screenshot',
-    onClick: guardedScreenshot,
-  });
-  registerRight({
-    id: 'recorder',
-    icon: 'MENU_RECORDER',
-    titleKey: 'aerialview.recorder',
-    active: isRecorderActive,
-    danger: true,
-    onClick: guardedToggleRecorder,
-  });
 
   // Sync dock button active states with toggle state
   watch(showFlight, (val) => {
     const item = rightItems.find((i) => i.id === 'steer');
     if (item) item.active = val;
   });
-  // React to recorder state transitions: update the dock button title, and
-  // close the Flight/Gimbal disks during replay (restored when it ends).
+  // Close the Flight/Gimbal disks during replay (restored when it ends): the
+  // replay engine owns the Cesium camera, so the manual disks must not fight it.
   watch(recorderState, (state, prev) => {
-    const item = rightItems.find((i) => i.id === 'recorder');
-    if (item) {
-      item.titleKey =
-        state === 'recording' ? 'aerialview.recorder_stop'
-        : state === 'replaying' ? 'aerialview.recorder_cancel'
-        : 'aerialview.recorder';
-    }
-    // Lock the 3D Aerial / 3D Mesh source switch and the Screenshot button
-    // while the recorder is active: swapping the 3D data source mid-recording
-    // would corrupt the aerial/street-view asset tracking of the clip, and a
-    // screenshot during capture is redundant.
-    const assetLocked = state !== 'idle';
-    for (const list of [rightItems]) {
-      for (const dockItem of list) {
-        if (dockItem.id === 'screenshot') {
-          dockItem.disabled = assetLocked;
-        }
-      }
-    }
     if (state === 'replaying' && prev === 'recording') {
       savedDiskVisibility = { flight: showFlight.value, camera: showCamera.value };
       showFlight.value = false;
@@ -1010,7 +930,7 @@ onMounted(() => {
   // reposition. Pages (router) and Chat buttons remain enabled so the user
   // can navigate away.
   watch([isTakeoffLanding, isPausedByCollision], ([transitioning, paused]) => {
-    const lockableIds = ['steer', 'recorder'];
+    const lockableIds = ['steer'];
     for (const list of [rightItems]) {
       for (const item of list) {
         if (lockableIds.includes(item.id)) {
@@ -1162,9 +1082,6 @@ onUnmounted(() => {
         </div>
         <div v-if="recorderState === 'replaying'" class="shell-notice">
           {{ t('aerialview.replaying', { pct: Math.round(replayProgress * 100) }) }}
-        </div>
-        <div v-if="captureAuthNotice" class="shell-notice">
-          {{ t(`aerialview.auth_notice_${captureAuthNotice}`) }}
         </div>
         <!-- Deep link armed + tiles ready: remind the user to start the
              journey with the Steer button (blue reminder, top bar). -->

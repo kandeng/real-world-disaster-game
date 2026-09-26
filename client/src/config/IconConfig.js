@@ -17,6 +17,8 @@ const pngModules = import.meta.glob('../../icons/*.png', {
 export const IconMap = {
   // Aerial page dock + shell top bar
   MENU_CONTROL_STICK: '../../icons/steer.svg',
+  MENU_SITUATION: '../../icons/situation.svg',
+  MENU_PLAN: '../../icons/plan.svg',
   MENU_TAKEOFF: '../../icons/takeoff.svg',
   MENU_LANDING: '../../icons/landing.svg',
   MENU_STOP: '../../icons/stop.svg',
