@@ -4,9 +4,6 @@ import { useI18n } from 'vue-i18n';
 import { acquireMap, releaseMap } from './mapSingleton.js';
 import { splinePath } from './spline.js';
 import droneIconUrl from '../../icons/drone.svg';
-import zoomFocusUrl from '../../icons/zoom_focus.svg';
-import zoomPlusUrl from '../../icons/zoom_plus.svg';
-import zoomMinusUrl from '../../icons/zoom_minus.svg';
 
 const { t, locale } = useI18n();
 
@@ -29,9 +26,17 @@ const props = defineProps({
   // read-only route illustrations (3D Exploration -> Route) pass false so the
   // dots are plain markers: not clickable, not draggable.
   waypointsEditable: { type: Boolean, default: true },
+  // Data-driven zone overlays (e.g. the Plan view's fire perimeter):
+  // [{ id, path: [[lat, lng], ...], strokeColor, strokeWeight, fillColor, fillOpacity }]
+  polygons: { type: Array, default: () => [] },
+  // Armed pencil of the PenToolbox (arrow / rect / curve / text) or null.
+  // While a pen is armed the map pan / double-click zoom is locked so the
+  // drag gestures draw instead of moving the map.
+  penTool: { type: String, default: null },
+  penColor: { type: String, default: '#ff3b30' },
 });
 
-const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease', 'assetPress', 'assetMove', 'assetRelease']);
+const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease', 'assetPress', 'assetMove', 'assetRelease', 'marksChange']);
 
 const containerRef = ref(null);
 const map = ref(null);
@@ -81,6 +86,18 @@ let assetDrag = null;        // active asset drag: { id, marker, moveL, endDrag,
 let lastAssetDragEnd = 0;    // swallow the map click right after an asset drag
 let assetFlashTimer = null;  // pulses the dots whose mesh is still unspecified
 let assetFlashDim = false;   // current phase of the pulse
+// Zone overlays (props.polygons) keyed by polygon id.
+let zoneOverlays = new Map();
+// Pen engine state: the in-progress stroke, the committed marks and the
+// floating text input of the 'text' pen.
+let penAttached = false;
+let openStroke = null;       // { tool, color, points, overlays }
+let penMarks = [];           // committed marks: [{ overlays }]
+let textInputEl = null;
+// The map fills the page area, whose width changes when the right assistant
+// panel divider is dragged (no window resize fires) — re-tell Google the new
+// size so tiles stay correctly scaled.
+let resizeObserver = null;
 
 function altToZoom(alt) {
   const clamped = Math.max(MIN_ALT, Math.min(MAX_ALT, alt));
@@ -131,8 +148,8 @@ function anchoredZoom(zoomDelta, anchorX, anchorY, silent = false) {
   const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, curZoom + zoomDelta));
   if (newZoom === curZoom) return;
 
-  const scale0 = Math.pow(2, curZoom) * 256;
-  const scale1 = Math.pow(2, newZoom) * 256;
+  const scale0 = Math.pow(2, curZoom);
+  const scale1 = Math.pow(2, newZoom);
   const center = map.value.getCenter();
   const centerWorld = projection.fromLatLngToPoint(center);
   const rect = map.value.getDiv().getBoundingClientRect();
@@ -218,34 +235,12 @@ function onWheel(e) {
   anchoredZoom(e.deltaY < 0 ? 1 : -1, e.clientX - rect.left, e.clientY - rect.top, false);
 }
 
-// ── Bottom-right Google-Maps-style controls (focus / zoom-in / zoom-out) ──
-// Un-guarded setZoom / setCenter / fitBounds so the resulting zoom_changed /
-// center_changed events reach the parent view and keep the simulated drone's
-// altitude + position in sync with the map.
-function zoomIn() {
-  if (!map.value) return;
-  map.value.setZoom(Math.min(MAX_ZOOM, map.value.getZoom() + 1));
-}
-
-function zoomOut() {
-  if (!map.value) return;
-  map.value.setZoom(Math.max(MIN_ZOOM, map.value.getZoom() - 1));
-}
-
-// Recenter on the current point of interest: the selected address pin if one
-// is down, otherwise fit all waypoint dots in view, otherwise keep the view.
-function focusMap() {
-  if (!map.value || !mapsApi) return;
-  if (selectionMarker) {
-    map.value.setCenter(selectionMarker.getPosition());
-    return;
-  }
-  if (waypointMarkers.length) {
-    const bounds = new mapsApi.LatLngBounds();
-    waypointMarkers.forEach((m) => bounds.extend(m.getPosition()));
-    map.value.fitBounds(bounds, 80);
-  }
-}
+// The bottom-right Google-Maps-style control cluster (focus / + / -) is gone:
+// the wheel already zooms cursor-anchored, and that corner is permanently
+// overlaid by the right dock — a full-height 72px strip with
+// pointer-events: auto at z-index 10, while this map renders inside the
+// composer's z-index: 0 background slot (a stacking context no child can
+// escape), so nothing placed there could ever receive a click.
 
 onMounted(async () => {
   try {
@@ -275,6 +270,26 @@ onMounted(async () => {
     wheelHandler = onWheel;
     containerRef.value.addEventListener('wheel', wheelHandler, { capture: true, passive: false });
 
+    // Data-driven zone overlays + pen state (Plan view) on acquire.
+    syncZoneOverlays();
+    applyPenLock();
+    if (props.penTool) attachPenListeners();
+
+    // Keep the persistent map in sync with container size changes (panel
+    // drag / layout shifts that do not fire a window resize).
+    if (typeof ResizeObserver !== 'undefined' && containerRef.value) {
+      resizeObserver = new ResizeObserver(() => {
+        if (map.value && mapsApi?.event) {
+          try {
+            mapsApi.event.trigger(map.value, 'resize');
+          } catch {
+            /* resize is best-effort */
+          }
+        }
+      });
+      resizeObserver.observe(containerRef.value);
+    }
+
     // Let the parent redraw maintained overlays (waypoint markers) whenever
     // the map is (re)acquired — e.g. returning from 3D or another page.
     emit('mapReady');
@@ -287,6 +302,19 @@ onMounted(async () => {
 onUnmounted(() => {
   listeners.forEach((listener) => listener?.remove());
   listeners = [];
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+    resizeObserver = null;
+  }
+  // The map is session-persistent: pen marks / zone overlays / the text
+  // input must never orphan onto the next mount.
+  closeTextInput();
+  removePenListeners();
+  discardOpenStroke();
+  penMarks.forEach((m) => m.overlays.forEach((o) => o.setMap(null)));
+  penMarks = [];
+  zoneOverlays.forEach((p) => p.setMap(null));
+  zoneOverlays = new Map();
   if (clickListener) {
     clickListener.remove();
     clickListener = null;
@@ -910,6 +938,358 @@ function setAssetMarkers(entries) {
   syncAssetFlashPulse();
 }
 
+// ── Zone overlays (props.polygons — e.g. the Plan view's fire perimeter) ──
+function syncZoneOverlays() {
+  if (!mapsApi || !map.value) return;
+  const wanted = new Map();
+  for (const z of props.polygons || []) {
+    if (!z || !z.id || !Array.isArray(z.path) || z.path.length < 3) continue;
+    wanted.set(String(z.id), z);
+  }
+  // Drop the zones no longer requested.
+  for (const [id, polygon] of zoneOverlays) {
+    if (!wanted.has(id)) {
+      polygon.setMap(null);
+      zoneOverlays.delete(id);
+    }
+  }
+  // Create or update the rest.
+  for (const [id, z] of wanted) {
+    const opts = {
+      paths: z.path.map(([lat, lng]) => new mapsApi.LatLng(lat, lng)),
+      strokeColor: z.strokeColor || '#ff3b30',
+      strokeOpacity: z.strokeOpacity ?? 0.9,
+      strokeWeight: z.strokeWeight ?? 2,
+      fillColor: z.fillColor || z.strokeColor || '#ff3b30',
+      fillOpacity: z.fillOpacity ?? 0.2,
+      clickable: false,
+    };
+    const existing = zoneOverlays.get(id);
+    if (existing) {
+      existing.setOptions(opts);
+    } else {
+      zoneOverlays.set(id, new mapsApi.Polygon({ ...opts, map: map.value }));
+    }
+  }
+}
+
+watch(() => props.polygons, syncZoneOverlays, { deep: true });
+
+// ── Pen engine (Plan view pencil toolbox) ──────────────────────────────
+// While a pen is armed the map is locked (draggable / double-click zoom /
+// keyboard shortcuts off) so the left-button drag gestures draw instead of
+// panning. Committed marks live in penMarks and ride the session-persistent
+// map; the parent clears them via clearPenMarks().
+
+function strokePolyline(points, color) {
+  return new mapsApi.Polyline({
+    path: points.map((p) => new mapsApi.LatLng(p.lat, p.lng)),
+    map: map.value,
+    strokeColor: color,
+    strokeOpacity: 0.95,
+    strokeWeight: 2.5,
+    clickable: false,
+    zIndex: 500,
+  });
+}
+
+function segmentLength(a, b) {
+  const dx = (b.lng - a.lng) * Math.cos(((a.lat + b.lat) / 2) * (Math.PI / 180));
+  const dy = b.lat - a.lat;
+  return Math.hypot(dx, dy);
+}
+
+// Two barbs at the line head, each ~0.8π away from the stroke direction.
+function arrowHeadOverlays(points, color) {
+  const head = points[points.length - 1];
+  let prev = null;
+  for (let i = points.length - 2; i >= 0; i--) {
+    if (segmentLength(points[i], head) > 1e-6) {
+      prev = points[i];
+      break;
+    }
+  }
+  if (!prev) return [];
+  const cosLat = Math.cos((head.lat * Math.PI) / 180);
+  const ang = Math.atan2(head.lat - prev.lat, (head.lng - prev.lng) * cosLat);
+  const barb = Math.min(segmentLength(prev, head) * 0.25, 0.004);
+  const overlays = [];
+  for (const da of [Math.PI - 0.8, 0.8 - Math.PI]) {
+    const a = ang + da;
+    overlays.push(
+      strokePolyline(
+        [
+          head,
+          {
+            lat: head.lat + barb * Math.sin(a),
+            lng: head.lng + (barb * Math.cos(a)) / cosLat,
+          },
+        ],
+        color
+      )
+    );
+  }
+  return overlays;
+}
+
+// Axis-aligned rectangle corners from the drag's start → opposite corner,
+// closed back to the start so the polyline renders a true box.
+function rectCorners(a, b) {
+  return [a, { lat: a.lat, lng: b.lng }, b, { lat: b.lat, lng: a.lng }, a];
+}
+
+function discardOpenStroke() {
+  if (!openStroke) return;
+  openStroke.overlays.forEach((o) => o.setMap(null));
+  openStroke = null;
+}
+
+function commitOpenStroke() {
+  if (!openStroke) return;
+  const { tool, color, points, overlays } = openStroke;
+  openStroke = null;
+  if (tool === 'curve') {
+    if (points.length < 2) {
+      overlays.forEach((o) => o.setMap(null));
+      return;
+    }
+  } else if (points.length < 2 || segmentLength(points[0], points[points.length - 1]) < 1e-6) {
+    // arrow / rect: a click without a drag draws nothing.
+    overlays.forEach((o) => o.setMap(null));
+    return;
+  }
+  if (tool === 'arrow') overlays.push(...arrowHeadOverlays(points, color));
+  if (tool === 'rect') {
+    // Close the drag into a proper four-corner rectangle (a naive
+    // [start, cursor, start] path would render as a straight line).
+    overlays[0].setPath(
+      rectCorners(points[0], points[points.length - 1]).map(
+        (p) => new mapsApi.LatLng(p.lat, p.lng)
+      )
+    );
+  }
+  penMarks.push({ overlays });
+  emit('marksChange', penMarks.length);
+}
+
+// Convert a viewport client coordinate to the LatLng under the cursor using
+// the map's own projection (mirrors the anchoredZoom world-point math). The
+// Google Map object does NOT emit 'mousedown' / 'mouseup', and its 'click'
+// MouseEvent carries no pixel offset, so the pen engine listens on the DOM
+// and derives geography here instead.
+function clientToLatLng(clientX, clientY) {
+  if (!map.value) return null;
+  const projection = map.value.getProjection();
+  const div = map.value.getDiv();
+  if (!projection || !div) return null;
+  const center = map.value.getCenter();
+  if (!center) return null;
+  const rect = div.getBoundingClientRect();
+  // fromLatLngToPoint returns WORLD units where the world is 256 wide at
+  // zoom 0, so one world unit spans 2^zoom screen pixels at the current
+  // zoom. (An earlier ×256 here shrank every stroke 256-fold, pinning it
+  // to a tiny dash near the center regardless of zoom.)
+  const scale = Math.pow(2, map.value.getZoom());
+  const centerWorld = projection.fromLatLngToPoint(center);
+  const wx = centerWorld.x + ((clientX - rect.left) - rect.width / 2) / scale;
+  const wy = centerWorld.y + ((clientY - rect.top) - rect.height / 2) / scale;
+  return projection.fromPointToLatLng(new mapsApi.Point(wx, wy));
+}
+
+// DOM press on the map container starts a stroke (arrow / rect / curve).
+function onDomPenDown(e) {
+  if (!props.penTool || e.button !== 0) return;
+  if (props.penTool === 'text') return; // the click handler opens the input
+  // Never hijack a press inside the floating text input.
+  if (textInputEl && (e.target === textInputEl || textInputEl.contains(e.target))) return;
+  const ll = clientToLatLng(e.clientX, e.clientY);
+  if (!ll) return;
+  e.preventDefault(); // no native text selection / image drag while drawing
+  commitOpenStroke();
+  const p = { lat: ll.lat(), lng: ll.lng() };
+  openStroke = {
+    tool: props.penTool,
+    color: props.penColor,
+    points: [p],
+    overlays: [strokePolyline([p, p], props.penColor)],
+  };
+}
+
+// Window-level move: tracks the drag even if the cursor leaves the map div.
+function onDomPenMove(e) {
+  if (!openStroke) return;
+  const ll = clientToLatLng(e.clientX, e.clientY);
+  if (!ll) return;
+  const p = { lat: ll.lat(), lng: ll.lng() };
+  if (openStroke.tool === 'curve') {
+    openStroke.points.push(p);
+  } else {
+    // arrow / rect: the live preview spans start → cursor.
+    openStroke.points = [openStroke.points[0], p];
+  }
+  // rect previews its closed outline live; arrow / curve show the raw path.
+  const path =
+    openStroke.tool === 'rect' ? rectCorners(openStroke.points[0], p) : openStroke.points;
+  openStroke.overlays[0].setPath(path.map((q) => new mapsApi.LatLng(q.lat, q.lng)));
+}
+
+// Window-level release: commits the stroke wherever the pointer lifts.
+function onDomPenUp() {
+  if (!openStroke) return;
+  commitOpenStroke();
+}
+
+// 'text' pen: a DOM click drops a floating input at the cursor; Enter or
+// blur (clicking / tabbing away) places a label marker, Escape discards it.
+function onDomClick(e) {
+  if (props.penTool !== 'text') return;
+  // Ignore clicks inside the active input (caret placement / refocus). The
+  // hit-test is by rect as well as by target: Google's transparent event pane
+  // can sit above the input, making e.target that pane instead of the input.
+  if (textInputEl) {
+    if (e.target === textInputEl || textInputEl.contains(e.target)) return;
+    const r = textInputEl.getBoundingClientRect();
+    if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+      return;
+    }
+  }
+  const ll = clientToLatLng(e.clientX, e.clientY);
+  if (!ll) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openTextInput(e.clientX, e.clientY, ll);
+}
+
+function openTextInput(clientX, clientY, latLng) {
+  closeTextInput();
+  const rect = containerRef.value.getBoundingClientRect();
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'map-text-pen-input';
+  input.style.left = `${clientX - rect.left}px`;
+  input.style.top = `${clientY - rect.top}px`;
+  input.style.color = props.penColor;
+  containerRef.value.appendChild(input);
+  textInputEl = input;
+  input.focus();
+  // Enter commits; Escape discards; clicking / tabbing away (blur) ALSO
+  // commits — "returning to complete" must keep the typed label, not drop it.
+  input.addEventListener('keydown', (ev) => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') {
+      const text = input.value.trim();
+      closeTextInput();
+      if (text) placeTextMark(latLng, text);
+    } else if (ev.key === 'Escape') {
+      input._penDiscard = true;
+      closeTextInput();
+    }
+  });
+  input._penBlur = () => {
+    if (input._penDiscard) return;
+    const text = input.value.trim();
+    closeTextInput();
+    if (text) placeTextMark(latLng, text);
+  };
+  input.addEventListener('blur', input._penBlur);
+}
+
+function closeTextInput() {
+  if (!textInputEl) return;
+  const el = textInputEl;
+  textInputEl = null;
+  // Detach blur first: programmatic removal must not re-enter the
+  // commit-on-blur path (Enter / Escape already decided the outcome).
+  if (el._penBlur) el.removeEventListener('blur', el._penBlur);
+  el.remove();
+}
+
+function placeTextMark(latLng, text) {
+  const marker = new mapsApi.Marker({
+    position: latLng,
+    map: map.value,
+    // Fully transparent 1×1 gif: only the label renders.
+    icon: {
+      url: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAa7',
+      scaledSize: new mapsApi.Size(1, 1),
+    },
+    label: { text, color: props.penColor, fontWeight: '700', fontSize: '14px' },
+    clickable: false,
+    zIndex: 500,
+  });
+  penMarks.push({ overlays: [marker] });
+  emit('marksChange', penMarks.length);
+}
+
+// The pen engine listens on the DOM, not on Google Map events: the Map object
+// never emits 'mousedown' / 'mouseup', and its 'click' has no pixel offset.
+// Press / click are captured on the map container (capture phase, so an inner
+// Google overlay cannot swallow them); move / release ride the window so the
+// drag survives the cursor leaving the map.
+function attachPenListeners() {
+  if (!map.value || penAttached) return;
+  const el = containerRef.value;
+  if (!el) return;
+  el.addEventListener('mousedown', onDomPenDown, true);
+  el.addEventListener('click', onDomClick, true);
+  window.addEventListener('mousemove', onDomPenMove);
+  window.addEventListener('mouseup', onDomPenUp);
+  penAttached = true;
+}
+
+function removePenListeners() {
+  if (!penAttached) return;
+  const el = containerRef.value;
+  if (el) {
+    el.removeEventListener('mousedown', onDomPenDown, true);
+    el.removeEventListener('click', onDomClick, true);
+  }
+  window.removeEventListener('mousemove', onDomPenMove);
+  window.removeEventListener('mouseup', onDomPenUp);
+  penAttached = false;
+}
+
+// Arming a pen locks the map (pan / double-click zoom / keys off); putting
+// the pens away ("No pen armed") commits the open stroke and releases it.
+function applyPenLock() {
+  if (!map.value) return;
+  const armed = !!props.penTool;
+  map.value.setOptions({
+    draggable: !armed,
+    disableDoubleClickZoom: armed,
+    keyboardShortcuts: !armed,
+  });
+  if (!armed) {
+    closeTextInput();
+    commitOpenStroke();
+  }
+}
+
+watch(
+  () => props.penTool,
+  () => {
+    applyPenLock();
+    if (props.penTool) attachPenListeners();
+    else removePenListeners();
+  }
+);
+
+// Remove every pen mark (toolbox clear button, via the parent).
+function clearPenMarks() {
+  discardOpenStroke();
+  penMarks.forEach((m) => m.overlays.forEach((o) => o.setMap(null)));
+  penMarks = [];
+  emit('marksChange', 0);
+}
+
+watch(map, (m) => {
+  if (!m) return;
+  // The map was (re)acquired: restore the data overlays and the pen state.
+  syncZoneOverlays();
+  applyPenLock();
+  if (props.penTool) attachPenListeners();
+});
+
 defineExpose({
   searchNearbyPoisAt,
   searchPoisByText,
@@ -924,6 +1304,7 @@ defineExpose({
   redrawWaypointMarkers,
   redrawWaypointPath,
   setAssetMarkers,
+  clearPenMarks,
 });
 
 watch(() => [props.isPicking, props.isPanelOpen], () => {
@@ -948,19 +1329,6 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
         transform: `translate(-50%, -50%) rotate(${props.heading}deg)`,
       }"
     />
-    <div class="map-controls">
-      <button type="button" class="map-ctrl-btn" :title="t('mapview.focus')" @click="focusMap">
-        <img :src="zoomFocusUrl" alt="" draggable="false" />
-      </button>
-      <div class="map-ctrl-zoom">
-        <button type="button" class="map-ctrl-btn" :title="t('mapview.zoom_in')" @click="zoomIn">
-          <img :src="zoomPlusUrl" alt="" draggable="false" />
-        </button>
-        <button type="button" class="map-ctrl-btn" :title="t('mapview.zoom_out')" @click="zoomOut">
-          <img :src="zoomMinusUrl" alt="" draggable="false" />
-        </button>
-      </div>
-    </div>
     <div v-if="error" class="map-error">
       <strong>{{ t('mapview.load_failed') }}</strong>
       <p>{{ error }}</p>
@@ -997,66 +1365,6 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
 }
 
-/* Google-Maps-style control stack at the bottom-right. Offset from the right
-   edge so it clears the 72px (56px mobile) right dock column. */
-.map-controls {
-  position: absolute;
-  right: 88px;
-  bottom: 24px;
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.map-ctrl-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: none;
-  background: #ffffff;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
-}
-
-.map-ctrl-btn:hover {
-  background: #f1f3f4;
-}
-
-.map-ctrl-btn img {
-  width: 20px;
-  height: 20px;
-  display: block;
-}
-
-.map-ctrl-zoom {
-  display: flex;
-  flex-direction: column;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-  overflow: hidden;
-}
-
-.map-ctrl-zoom .map-ctrl-btn {
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.map-ctrl-zoom .map-ctrl-btn + .map-ctrl-btn {
-  border-top: 1px solid #e0e0e0;
-}
-
-@media (max-width: 768px) {
-  .map-controls {
-    right: 72px;
-  }
-}
-
 /* Hide Google Maps UI widgets and bottom-right attribution links. */
 .map-container :deep(.gmnoprint),
 .map-container :deep(.gm-style-cc),
@@ -1086,5 +1394,26 @@ watch(() => [props.isPicking, props.isPanelOpen], () => {
   color: #aaaaaa;
   font-size: 0.85rem;
   max-width: 480px;
+}
+</style>
+
+<style>
+/* Floating input of the 'text' pen — appended to the map container at the
+   click pixel. Unscoped: the element is created imperatively (no Vue scope
+   attribute), so a scoped rule would never match it. */
+.map-text-pen-input {
+  position: absolute;
+  /* Same reasoning as .map-controls: must clear Google's internal panes so
+     caret clicks land on the input instead of the map's event layer. */
+  z-index: 1000;
+  min-width: 140px;
+  padding: 4px 8px;
+  font: 600 14px system-ui, sans-serif;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 6px;
+  outline: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transform: translate(10px, -50%);
 }
 </style>

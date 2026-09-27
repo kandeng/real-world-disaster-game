@@ -2,8 +2,8 @@
   "tool_arrow": "箭头——从尾拖到头",
   "tool_rect": "矩形——角对角拖拽",
   "tool_curve": "自由曲线——拖拽绘制",
-  "tool_text": "文字——点击输入，回车放置",
+  "tool_text": "文字——点击输入，回车或点击他处放置",
   "ink_colour": "墨水颜色",
   "clear": "清除所有标记",
-  "disarm": "收起画笔"
+  "freeze_map": "禁止移动地图"
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, toRef } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch, toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter, useRoute } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
@@ -9,6 +9,7 @@ import { MapView } from '@/2d_map/index.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
 import { useRouteAutopilot } from '@shared-composables/useRouteAutopilot.js';
+import { useCesiumPen } from '@shared-composables/useCesiumPen.js';
 import { useRoutes } from '@shared-composables/useRoutes.js';
 import { useVideos } from '@shared-composables/useVideos.js';
 import { useDrone } from '@shared-composables/useDrone.js';
@@ -24,18 +25,48 @@ import { useScreenCapture } from '@shared-composables/useScreenCapture.js';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } from '@shared-composables/useConnectionStatus.js';
 import ConnectionError from '@shared/ConnectionError.vue';
+import SplashOverlay from '@shared/SplashOverlay.vue';
+import { PALISADES_FIRE, PLAN_VIEW_ALT } from '@/config/palisadesFire.js';
+import { getGameIntro } from '@/config/gameIntro.js';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 const router = useRouter();
 const route = useRoute();
+
+// Per-game intro briefing overlay: plays over the main panel on entry, then
+// dismisses itself (see SplashOverlay). Confined to .shell-main, so the top
+// bar, left nav, and right assistant stay visible around it.
+const intro = computed(() => getGameIntro(locale.value));
+const showIntro = ref(true);
+function onIntroDismissed() {
+  showIntro.value = false;
+}
 
 const { drone, gimbal } = useDrone();
 const { session } = useSessionState();
 // Altitude split: the 2D street-map zoom height (mapAlt) is a SEPARATE value
 // from the true drone/camera altitude (drone.alt). They are reconciled only
-// at the 3D<->2D boundary (see enterStreetFrom3d / toggleSteer).
+// at the 3D<->2D boundary (see toggleSteer). mapAlt belongs to the Search /
+// Route street map, which deliberately mirrors the drone so that round trip is
+// lossless — it is NOT the Plan view's camera (see planCam below).
 const mapAlt = toRef(session.view, 'mapAlt');
+
+// ── The Plan view owns its OWN map camera ───────────────────────────────────
+// Plan is the EOC's static briefing map of the disaster zone: a picture of the
+// incident, not a machine in the front zone, so its (lat, lon, alt) must be
+// COMPLETELY separate from the drone's. It used to share drone.lat/lon +
+// mapAlt, which meant every Plan click teleported the drone to the Palisades
+// centre and the next Steer click "reconciled" drone.alt from PLAN_VIEW_ALT
+// (5200 m of Google model height) into a ~25 km true nadir altitude with the
+// gimbal pinned at -90°. From up there globe.show is false and the Google
+// tileset can only offer its coarsest LOD, so Steer rendered as a flat
+// satellite map — or as nothing at all (black) while those tiles streamed.
+const planCam = reactive({
+  lat: PALISADES_FIRE.center.lat,
+  lon: PALISADES_FIRE.center.lng,
+  alt: PLAN_VIEW_ALT,
+});
 
 // 3D data source of the shared Cesium viewer (Google tiles vs OSM Buildings).
 const { activeSource, getActiveTileset } = useTilesetSource();
@@ -75,8 +106,15 @@ let savedDiskVisibility = null;
 
 const isCollisionFrozen = ref(false);
 const collisionSurfaceNormal = ref(null);
+// Closest the drone may come to a hit surface, in metres. The collision
+// look-ahead is a FIXED clearance (MIN_SAFETY_BUFFER + settings.safetyBuffer),
+// NOT speed x time: the old `speed * LOOK_AHEAD_TIME` term reached 122 m in H
+// and 136-191 m in M at full stick while the drone only travels ~1 m per frame,
+// so the ground sat permanently inside the buffer (settings.takeoffAltitude is
+// 100 m) and every M/H move was cancelled outright. Speed scaling also buys
+// nothing now that resolveCollisionMove() clamps to the MEASURED clearance,
+// which makes tunnelling impossible at any speed.
 const MIN_SAFETY_BUFFER = 2.0; // meters
-const LOOK_AHEAD_TIME = 2.0; // seconds
 
 const { googleReady, cesiumReady, googleError, cesiumError } = useConnectionStatus();
 const connectionMessage = computed(() => {
@@ -110,7 +148,38 @@ const routeScene = useRouteScene3D();
 // ('steer' is the only 3D state).
 const viewCtx = session.view.aerial;
 const isStreet = computed(() => viewCtx.subView !== 'steer');
-const mapTypeId = computed(() => 'roadmap');
+const isPlanView = computed(() => viewCtx.subView === 'plan');
+const isSteerView = computed(() => viewCtx.subView === 'steer');
+// Which camera drives the 2D map: Plan drives it from its own planCam; every
+// other street sub-view (Search / Route) mirrors the drone, so picking an
+// address there and lifting to 3D still lands on the same spot at the same
+// ground scale.
+const mapCamLat = computed(() => (isPlanView.value ? planCam.lat : drone.lat));
+const mapCamLon = computed(() => (isPlanView.value ? planCam.lon : drone.lon));
+const mapCamAlt = computed(() => (isPlanView.value ? planCam.alt : mapAlt.value));
+// The pencil toolbox lives on both drawing surfaces: the 2D Plan map and the
+// 3D Steer globe (each with its own pen engine and its own mark set).
+const penViews = computed(() => isPlanView.value || isSteerView.value);
+// Plan view base layer: 'terrain' (Google street + terrain, the default)
+// cycles to 'satellite' on the second Plan click.
+const planLayer = ref('terrain');
+const mapTypeId = computed(() => (isPlanView.value ? planLayer.value : 'roadmap'));
+// The LA early-2025 wildfire disaster zone, drawn as data-driven polygons
+// on the Plan view's 2D map.
+const planPolygons = computed(() =>
+  isPlanView.value
+    ? [
+        {
+          id: 'palisades-fire',
+          path: PALISADES_FIRE.perimeter,
+          strokeColor: '#ff3b30',
+          strokeWeight: 2,
+          fillColor: '#ff3b30',
+          fillOpacity: 0.22,
+        },
+      ]
+    : []
+);
 
 // ── /play?r=<16-char route id> shareable play link ───────────────────────
 // The Gallery's "Explore the Scene in 3D" (or any shared copy of the URL)
@@ -289,14 +358,7 @@ function onClickRestart() {
   session.route.selectedWpId = null;
 }
 
-function enterStreetFrom3d() {
-  // Convert the true 3D camera altitude into the separate 2D map height so
-  // the street map opens at the same location and ground scale (zoom level)
-  // the user was seeing in 3D. drone.alt itself stays the true altitude.
-  mapAlt.value = routeScene.modelAltForMapScale(drone.alt, drone.lat);
-}
-
-// ── Lossless 2D<->3D round trips ──────────────────────────────────────────
+// ── Lossless 2D<->3D round trips (Search / Route street map only) ───────────
 // Snapshot of the map state (center + zoom height) taken when the street
 // map is entered. Pans / zooms / search picks mutate drone.lat/lon or
 // mapAlt (the map emits those events only for real interactions), so
@@ -334,19 +396,34 @@ function onResultClick(poi) {
   }
 }
 
+// Panning / zooming the 2D map moves whichever camera OWNS it: the Plan
+// briefing map moves planCam and leaves the drone exactly where it is.
 function onMapCenterChange({ lat, lng }) {
+  if (isPlanView.value) {
+    planCam.lat = lat;
+    planCam.lon = lng;
+    return;
+  }
   drone.lat = lat;
   drone.lon = lng;
 }
 
 function onMapZoomChange(alt) {
-  mapAlt.value = Math.max(0, Math.min(100000, alt));
+  const clamped = Math.max(0, Math.min(100000, alt));
+  if (isPlanView.value) planCam.alt = clamped;
+  else mapAlt.value = clamped;
 }
 
 // The Google Map is recreated whenever we return from the 3D view; re-apply
 // the picked-address balloon if we are back on the Search view, and the
 // read-only route illustration if we are back on the Route view.
 function onMapReady() {
+  // A Plan entry while the map was still mounting parks its camera target
+  // here (the acquire used the old drone position).
+  if (planPendingCenter) {
+    planPendingCenter = false;
+    mapViewRef.value?.panTo(PALISADES_FIRE.center.lat, PALISADES_FIRE.center.lng, PLAN_VIEW_ALT);
+  }
   if (isStreet.value && showSearchPanel.value && selectedLatLng.value) {
     mapViewRef.value?.setSelectionMarker(selectedLatLng.value.lat, selectedLatLng.value.lng);
   }
@@ -565,14 +642,24 @@ function flashTakeoffLimitNotice() {
   takeoffLimitTimer = setTimeout(() => { takeoffLimitNotice.value = ''; }, 5000);
 }
 
-// Steer has two jobs:
-// - on the 2D street map it lifts the view to the Google Earth 3D tiles
-//   NADIR overview of the SAME spot and ground scale (the red selection
+// Steer has three jobs, one per view it can be pressed from:
+// - on the Plan briefing map it just switches back to 3D: that map has its
+//   own camera, so the drone is left completely alone;
+// - on the Search / Route street map it lifts the view to the Google Earth 3D
+//   tiles NADIR overview of the SAME spot and ground scale (the red selection
 //   balloon is a 2D-map-only overlay, so the 3D view has none);
 // - in the 3D view it shows (or hides) the Flight and the Camera (gimbal)
 //   disks together — the old separate Camera button is gone.
 function toggleSteer() {
   if (isStreet.value) {
+    // Leaving the Plan view must NOT touch the drone. Plan is the EOC's own
+    // briefing map with its own camera, so Steer simply resumes the flight
+    // where it was left — position, altitude, heading and gimbal all intact,
+    // no scale reconciliation and no nadir re-framing.
+    if (isPlanView.value) {
+      viewCtx.subView = 'steer';
+      return;
+    }
     if (mapMoved()) {
       // The map was panned / zoomed / re-picked while in street mode: the
       // lift re-matches the map. The 2D map height is Google's nominal model
@@ -610,70 +697,79 @@ function toggleSteer() {
   showCamera.value = next;
 }
 
+// Cesium canvas visibility + globe state. Extracted into a named function
+// because it has to run from TWO places: this watcher, and onMounted right
+// after the container is looked up. The watcher is registered during setup
+// with { immediate: true }, so its first pass runs while cesiumContainer.value
+// is still null (it is assigned in onMounted) and therefore toggles nothing.
+// onUnmounted adds .cesium-hidden, and on a client-side re-entry to /play none
+// of the watched sources has to change — so without the onMounted call the
+// canvas keeps opacity: 0 from the previous visit and the Play view is BLACK.
+function applyCesiumVisibility() {
+  const viewer = window.cesiumViewer;
+  const show = svPaneState.value.visible;
+  const transitioning = svPaneState.value.transitioning;
+  const street = isStreet.value;
+  if (viewer) {
+    // In mesh (OSM) mode the globe must stay visible as ground context; in
+    // aerial (Google) mode it is only shown during the street-view
+    // transition crossfade. The 2D street map always covers the globe.
+    viewer.scene.globe.show = (activeSource.value === 'osm' || (show && transitioning)) && !street;
+  }
+  if (cesiumContainer.value) {
+    // Only hide Cesium when Street View is fully loaded to prevent black flash
+    cesiumContainer.value.classList.toggle(
+      'cesium-hidden',
+      street || (show && !transitioning && streetViewReady.value)
+    );
+  }
+}
+
 watch(
   [() => svPaneState.value.visible, () => svPaneState.value.transitioning, streetViewReady, isStreet],
-  ([show, transitioning, svReady, street]) => {
-    const viewer = window.cesiumViewer;
-    if (viewer) {
-      // In mesh (OSM) mode the globe must stay visible as ground context; in
-      // aerial (Google) mode it is only shown during the street-view
-      // transition crossfade. The 2D street map always covers the globe.
-      viewer.scene.globe.show = (activeSource.value === 'osm' || (show && transitioning)) && !street;
-    }
-    if (cesiumContainer.value) {
-      // Only hide Cesium when Street View is fully loaded to prevent black flash
-      cesiumContainer.value.classList.toggle('cesium-hidden', street || (show && !transitioning && svReady));
-    }
-  },
+  applyCesiumVisibility,
   { immediate: true }
 );
 
-function getFlightCommandSpeed() {
-  if (activeFlightMode.value === 'M') {
-    const cmdMag = Math.hypot(flightCmd.vx, flightCmd.vy);
-    return cmdMag * 0.0002 * 111320;
-  }
-  if (activeFlightMode.value === 'H') {
-    return Math.abs(flightCmd.vz) * 20.0;
-  }
-  return 0;
-}
-
+/**
+ * Unit direction (ECEF) the flight disk is asking the drone to travel in.
+ * Returns null when the stick is centred or the mode does not translate.
+ */
 function getFlightCommandDirection() {
   const viewer = window.cesiumViewer;
   if (!viewer) return null;
+  if (!Number.isFinite(drone.lat) || !Number.isFinite(drone.lon) || !Number.isFinite(drone.alt)) return null;
 
   const position = Cesium.Cartesian3.fromDegrees(drone.lon, drone.lat, drone.alt);
   const enuTransform = Cesium.Transforms.eastNorthUpToFixedFrame(position);
 
+  let enuDir = null;
   if (activeFlightMode.value === 'M') {
-    const mag = Math.hypot(flightCmd.vx, flightCmd.vy) || 1;
-    const headingRad = Cesium.Math.toRadians(drone.heading);
-    const enuDir = new Cesium.Cartesian3(
-      (flightCmd.vy * Math.sin(headingRad) + flightCmd.vx * Math.cos(headingRad)) / mag,
-      (flightCmd.vy * Math.cos(headingRad) - flightCmd.vx * Math.sin(headingRad)) / mag,
-      0
-    );
-    const worldDir = Cesium.Matrix4.multiplyByPointAsVector(enuTransform, enuDir, new Cesium.Cartesian3());
-    return Cesium.Cartesian3.normalize(worldDir, worldDir);
+    const mag = Math.hypot(flightCmd.vx, flightCmd.vy);
+    if (!(mag > 0)) return null;
+    // M is WORLD-ALIGNED (useFlightPhysics: W=north, S=south, A=west, D=east),
+    // so the probe must be too. It used to be rotated by drone.heading, which
+    // made the ray test a direction unrelated to the actual movement: after any
+    // R rotation the guard blocked clear directions and cleared blocked ones.
+    enuDir = new Cesium.Cartesian3(flightCmd.vx / mag, flightCmd.vy / mag, 0);
+  } else if (activeFlightMode.value === 'H') {
+    if (!flightCmd.vz) return null;
+    enuDir = new Cesium.Cartesian3(0, 0, flightCmd.vz > 0 ? 1 : -1);
   }
+  if (!enuDir) return null;
 
-  if (activeFlightMode.value === 'H') {
-    const enuUp = new Cesium.Cartesian3(0, 0, flightCmd.vz >= 0 ? 1 : -1);
-    const worldDir = Cesium.Matrix4.multiplyByPointAsVector(enuTransform, enuUp, new Cesium.Cartesian3());
-    return Cesium.Cartesian3.normalize(worldDir, worldDir);
-  }
-
-  return null;
+  const worldDir = Cesium.Matrix4.multiplyByPointAsVector(enuTransform, enuDir, new Cesium.Cartesian3());
+  const worldMag = Cesium.Cartesian3.magnitude(worldDir);
+  // divideByScalar rather than normalize: Cartesian3.normalize throws a
+  // RuntimeError on a degenerate vector, and loop() would swallow it silently.
+  if (!Number.isFinite(worldMag) || worldMag < 1e-6) return null;
+  return Cesium.Cartesian3.divideByScalar(worldDir, worldMag, worldDir);
 }
 
 function checkCollisionAhead() {
   const viewer = window.cesiumViewer;
   const tileset = getActiveTileset();
   if (!viewer || !tileset || !showFlight.value) return null;
-
-  const speed = getFlightCommandSpeed();
-  if (speed <= 0) return null;
 
   const direction = getFlightCommandDirection();
   if (!direction) return null;
@@ -696,40 +792,167 @@ function checkCollisionAhead() {
     (hitObject && hitObject.primitive === tileset);
   if (!isTilesetHit) return null;
 
-  const distance = Cesium.Cartesian3.distance(position, result.position);
-  const buffer = MIN_SAFETY_BUFFER + speed * LOOK_AHEAD_TIME;
+  const offset = Cesium.Cartesian3.subtract(result.position, position, new Cesium.Cartesian3());
+  const distance = Cesium.Cartesian3.magnitude(offset);
+  // While grounded the camera is parked exactly ON the mesh, so the hit can
+  // coincide with the drone. A degenerate offset would normalize to NaN and
+  // poison drone.lat/lon/alt through applyEnuMove, so drop the frame instead.
+  if (!Number.isFinite(distance) || distance < 1e-3) return null;
+
+  // The ground is a floor, not an obstacle — the same rule
+  // useAltitudeGate.checkVerticalCollision() applies to the auto sequences.
+  // M-mode flight is purely horizontal and snapToGround() already owns the
+  // vertical, so a hit at (or below) the sampled surface height must never
+  // block the stick; without this a grounded drone cannot move at all. H-mode
+  // keeps the ground as a real obstacle so a descent stops above the surface
+  // instead of tunnelling through it.
+  if (activeFlightMode.value === 'M') {
+    const hitCartographic = Cesium.Cartographic.fromCartesian(result.position);
+    const hitAlt = hitCartographic ? hitCartographic.height : NaN;
+    if (Number.isFinite(hitAlt) && hitAlt <= altitudeGate.surfaceAlt.value + 1.0) return null;
+  }
+
+  const buffer = MIN_SAFETY_BUFFER + settings.safetyBuffer;
   if (distance > buffer) return null;
 
-  const normal = Cesium.Cartesian3.normalize(
-    Cesium.Cartesian3.subtract(position, result.position, new Cesium.Cartesian3()),
-    new Cesium.Cartesian3()
-  );
+  // Surface normal: away from the hit, back toward the drone.
+  const normal = Cesium.Cartesian3.divideByScalar(offset, distance, offset);
 
   return { distance, position: result.position, normal };
 }
 
-function projectEnuMove(enuMove, collision) {
+/**
+ * Clamp a desired ENU move against a surface hit instead of cancelling it:
+ * the into-surface component is capped at the clearance actually left, and the
+ * tangential component survives, so the drone slides along a facade or settles
+ * onto a roof rather than freezing in mid-air.
+ * Returns the clamped move, or null when no change is needed.
+ */
+function resolveCollisionMove(enuMove, collision) {
   const position = Cesium.Cartesian3.fromDegrees(drone.lon, drone.lat, drone.alt);
-  const enuTransform = Cesium.Transforms.eastNorthUpToFixedFrame(position);
-  const invTransform = Cesium.Matrix4.inverse(enuTransform, new Cesium.Matrix4());
+  const invTransform = Cesium.Matrix4.inverse(
+    Cesium.Transforms.eastNorthUpToFixedFrame(position),
+    new Cesium.Matrix4()
+  );
   const enuNormal = Cesium.Matrix4.multiplyByPointAsVector(invTransform, collision.normal, new Cesium.Cartesian3());
-  Cesium.Cartesian3.normalize(enuNormal, enuNormal);
+  const normalMag = Cesium.Cartesian3.magnitude(enuNormal);
+  if (!Number.isFinite(normalMag) || normalMag < 1e-6) return null;
+  Cesium.Cartesian3.divideByScalar(enuNormal, normalMag, enuNormal);
 
-  const dot = Cesium.Cartesian3.dot(enuMove, enuNormal);
-  if (dot >= 0) return enuMove;
+  const move = Cesium.Cartesian3.fromElements(Number(enuMove.x) || 0, Number(enuMove.y) || 0, Number(enuMove.z) || 0);
+  const intoSurface = Cesium.Cartesian3.dot(move, enuNormal); // negative = toward the surface
+  if (!Number.isFinite(intoSurface) || intoSurface >= 0) return null; // travelling away — unrestricted
 
-  const normalComponent = Cesium.Cartesian3.multiplyByScalar(enuNormal, dot, new Cesium.Cartesian3());
-  return Cesium.Cartesian3.subtract(enuMove, normalComponent, new Cesium.Cartesian3());
+  // Clearance left before the minimum stand-off is reached. Large look-ahead
+  // buffers are harmless here: room dwarfs a ~1 m frame step, so nothing is
+  // restricted until the drone is genuinely about to touch the surface.
+  const room = Math.max(0, collision.distance - MIN_SAFETY_BUFFER);
+  const allowed = Math.max(intoSurface, -room);
+  if (allowed === intoSurface) return null; // this frame's step already fits
+
+  const excess = Cesium.Cartesian3.multiplyByScalar(enuNormal, intoSurface - allowed, new Cesium.Cartesian3());
+  const clamped = Cesium.Cartesian3.subtract(move, excess, new Cesium.Cartesian3());
+  if (!Number.isFinite(clamped.x) || !Number.isFinite(clamped.y) || !Number.isFinite(clamped.z)) return null;
+  return clamped;
+}
+
+// ── Camera ownership: mouse vs. drone ──────────────────────────────────────
+// window.updateCesiumCamera() hard-assigns the camera via camera.setView().
+// Calling it unconditionally at 60 fps overwrites whatever the mouse did ~16 ms
+// earlier, so Cesium's ScreenSpaceCameraController can never win: a left-drag
+// rubber-bands straight back and a wheel zoom snaps back to drone.alt. The
+// globe then reads as permanently locked even though the controller is fully
+// enabled and nothing covers the canvas (every Vue layer over the map area is
+// pointer-events: none). Pushing ONLY when the drone / gimbal pose actually
+// moved hands the camera to the mouse while both disks are idle, and the first
+// flight-disk, gimbal-disk, autopilot or takeoff/landing change re-pins it.
+let lastPushedPose = null;
+
+// Altitude needs the loosest tolerance: while grounded, altitudeGate
+// .snapToGround() re-assigns drone.alt from a per-frame surface raycast that
+// jitters by millimetres as tiles refine — an exact compare would re-pin the
+// camera every frame and re-lock the mouse. 1 cm is far below anything the eye
+// or the collision gate can resolve.
+const POSE_EPS_LATLON = 1e-9; // degrees (~0.1 mm)
+const POSE_EPS_ALT = 0.01; // metres
+const POSE_EPS_DEG = 1e-6; // degrees
+
+function samePose(a, b) {
+  return (
+    Math.abs(a.lat - b.lat) <= POSE_EPS_LATLON &&
+    Math.abs(a.lon - b.lon) <= POSE_EPS_LATLON &&
+    Math.abs(a.alt - b.alt) <= POSE_EPS_ALT &&
+    Math.abs(a.heading - b.heading) <= POSE_EPS_DEG &&
+    Math.abs(a.gimbalYaw - b.gimbalYaw) <= POSE_EPS_DEG &&
+    Math.abs(a.gimbalPitch - b.gimbalPitch) <= POSE_EPS_DEG &&
+    Math.abs(a.gimbalRoll - b.gimbalRoll) <= POSE_EPS_DEG
+  );
+}
+
+// ── Mouse-look safety net ──────────────────────────────────────────────────
+// Handing the camera to the mouse means nothing pulls it back on its own, and
+// in Google mode globe.show is false — so one wheel-zoom out or one orbit past
+// the horizon leaves the user staring at empty space (a black screen) or at the
+// tileset's lowest LOD, which reads as a flat satellite map, with no way home
+// except touching a disk. The mouse therefore keeps the camera only while it is
+// actually being used: CAMERA_IDLE_REPIN_MS after the last canvas input the
+// drone takes it back. Drag / wheel look-around stays fully usable meanwhile
+// (every event pushes the deadline out, and a held button never re-pins).
+const CAMERA_IDLE_REPIN_MS = 2500;
+let mouseOwnsCamera = false;
+let canvasPointerDown = false;
+let lastCanvasInputTs = 0;
+
+function noteCanvasInput() {
+  lastCanvasInputTs = performance.now();
+  if (!mouseOwnsCamera) {
+    mouseOwnsCamera = true;
+    // Invalidate the cached pose so handing the camera back ALWAYS re-pins,
+    // even when the drone has not moved since the mouse took over.
+    lastPushedPose = null;
+  }
+}
+function onCanvasPointerDown() {
+  canvasPointerDown = true;
+  noteCanvasInput();
+}
+function onCanvasPointerUp() {
+  // Bound on window (a drag can end outside the canvas); ignore stray ups.
+  if (!canvasPointerDown) return;
+  canvasPointerDown = false;
+  noteCanvasInput();
+}
+function onCanvasWheel() {
+  noteCanvasInput();
+}
+
+function pushCameraPose(pose) {
+  if (mouseOwnsCamera) {
+    if (canvasPointerDown || performance.now() - lastCanvasInputTs < CAMERA_IDLE_REPIN_MS) return;
+    mouseOwnsCamera = false; // idle window elapsed — hand the camera back below
+  }
+  // During an auto takeoff / landing the app owns the camera outright: the
+  // sequence must stay framed on the drone, and altitudeGate.prewarmTiles()
+  // deliberately teleports the (Street-View-covered) camera during
+  // PRE_TAKEOFF, when the pose is otherwise static. Never idle-skip there, or
+  // a pre-warm pose could be left parked on screen.
+  if (!isTakeoffLanding.value && lastPushedPose && samePose(pose, lastPushedPose)) return;
+  lastPushedPose = pose;
+  window.updateCesiumCamera(pose);
 }
 
 function syncCesiumCamera() {
   if (typeof window.updateCesiumCamera !== 'function') return;
-  if (isStreet.value) {
+  // The Plan map has its own camera, so the hidden globe keeps mirroring the
+  // DRONE there rather than the map: that is what makes the return to Steer
+  // land on the flight that has been running all along, and what keeps its
+  // tiles warm. Only Search / Route mirror the map into a nadir pre-stream.
+  if (isStreet.value && !isPlanView.value) {
     // While the 2D street map covers the globe, the hidden (still
     // rendering, opacity 0) Cesium canvas mirrors the map as a nadir view
     // at the same ground scale: the Google 3D tiles of the visible area
     // stream in the background, so the Steer lift to 3D is instant.
-    window.updateCesiumCamera({
+    pushCameraPose({
       lat: drone.lat,
       lon: drone.lon,
       alt: routeScene.trueAltForMapScale(mapAlt.value, drone.lat),
@@ -740,7 +963,7 @@ function syncCesiumCamera() {
     });
     return;
   }
-  window.updateCesiumCamera({
+  pushCameraPose({
     lat: drone.lat,
     lon: drone.lon,
     alt: drone.alt,
@@ -792,8 +1015,10 @@ function updateDroneState() {
   }
 
   const collision = checkCollisionAhead();
-  if (collision && enuMove) {
-    enuMove = projectEnuMove(enuMove, collision);
+  // null = the collision did not restrict this frame's move at all.
+  const clampedMove = collision && enuMove ? resolveCollisionMove(enuMove, collision) : null;
+  if (clampedMove) {
+    enuMove = clampedMove;
     isCollisionFrozen.value = true;
     collisionSurfaceNormal.value = collision.normal;
   } else {
@@ -848,6 +1073,10 @@ function loop() {
     if (recorderState.value !== 'replaying') {
       updateDroneState();
       syncCesiumCamera();
+    } else {
+      // The replay engine owns the Cesium camera; drop the cached pose so the
+      // first frame after the replay always re-pins to the drone.
+      lastPushedPose = null;
     }
   } catch (err) {
     const now = performance.now();
@@ -859,19 +1088,113 @@ function loop() {
   rafId = requestAnimationFrame(loop);
 }
 
-// Situation / Plan dock buttons: layout-only for now — the panels they
-// will open arrive in a later phase.
-function onClickSituation() {}
-function onClickPlan() {}
+// ── Plan view: LA wildfire disaster zone (2D map, terrain ↔ satellite) ────
+// First Plan click: enter the Plan sub-view on the Google street + terrain
+// map, centered on the Palisades fire zone with its perimeter overlay.
+// Every further click cycles the base layer terrain ↔ satellite and
+// re-centers on the zone.
+let planPendingCenter = false;
+
+// Re-seat the Plan camera on the disaster zone. Touches planCam ONLY: the
+// drone keeps flying wherever it was, and clicking Steer afterwards returns to
+// that flight instead of to a 25 km nadir shot of the fire perimeter.
+function centerPlanView() {
+  planCam.lat = PALISADES_FIRE.center.lat;
+  planCam.lon = PALISADES_FIRE.center.lng;
+  planCam.alt = PLAN_VIEW_ALT;
+  if (mapViewRef.value) {
+    mapViewRef.value.panTo(PALISADES_FIRE.center.lat, PALISADES_FIRE.center.lng, PLAN_VIEW_ALT);
+  } else {
+    // MapView not mounted yet (coming from the 3D Steer view): the pending
+    // flag is consumed by onMapReady right after the map is acquired.
+    planPendingCenter = true;
+  }
+}
+
+function onClickPlan() {
+  if (isPlanView.value) {
+    planLayer.value = planLayer.value === 'terrain' ? 'satellite' : 'terrain';
+    centerPlanView();
+    return;
+  }
+  planLayer.value = 'terrain';
+  viewCtx.subView = 'plan';
+  // Always seat the Plan camera — it is plain state, no DOM required. The
+  // panTo inside only runs when the map is already mounted (Search / Route);
+  // from Steer the onMapReady hook does it instead, and the :lat/:lon/:alt
+  // props already open the freshly created map on the zone.
+  centerPlanView();
+}
+
+// Leaving the Plan view only flips the dock button state; the pens themselves
+// are dismissed by the penViews watch below (both Plan and Steer draw).
+watch(isPlanView, (plan) => {
+  const item = rightItems.find((i) => i.id === 'plan');
+  if (item) item.active = plan;
+});
+
+// ── Pencil toolbox state (Plan 2D map + Steer 3D globe) ────────────────
+// The toolbox is controlled from here; two pen engines draw and report their
+// mark counts: MapView (Google polylines) and useCesiumPen (Cesium entities).
+// The toolbox shows the ACTIVE view's count; Clear wipes both engines.
+const penTool = ref(null);
+const penInk = ref('#ff3b30');
+const penMarkCount2D = ref(0);
+const penMarkCount3D = ref(0);
+const penMarkCount = computed(() =>
+  isSteerView.value ? penMarkCount3D.value : penMarkCount2D.value
+);
+
+const { clearMarks: clearCesiumPenMarks } = useCesiumPen({
+  active: isSteerView,
+  tool: penTool,
+  color: penInk,
+  onMarksChange: (n) => {
+    penMarkCount3D.value = n;
+  },
+});
+
+// Leaving both drawing surfaces puts the pens away (each engine drops its
+// own work: MapView on unmount, useCesiumPen once it goes inactive).
+watch(penViews, (on) => {
+  if (!on) penTool.value = null;
+});
+
+function onPenToolChange(tool) {
+  penTool.value = tool;
+}
+function onPenInkChange(color) {
+  penInk.value = color;
+}
+function onPenClear() {
+  mapViewRef.value?.clearPenMarks();
+  clearCesiumPenMarks();
+}
 
 onMounted(() => {
   cesiumContainer.value = document.getElementById('cesiumContainer');
+  // Resume the shared Cesium viewer if it was paused when we last left /play
+  // (see onUnmounted). It is a page-lifetime singleton, so on a warm
+  // client-side re-entry it already holds the streamed tiles.
+  if (window.cesiumViewer) window.cesiumViewer.useDefaultRenderLoop = true;
+  // The street-view watcher's { immediate: true } pass already ran during setup,
+  // when cesiumContainer.value was still null, so it could not clear the
+  // .cesium-hidden that the previous onUnmounted added. Re-apply it now that the
+  // container is known — otherwise a client-side re-entry to /play stays BLACK.
+  applyCesiumVisibility();
+  // Mouse-look safety net: see pushCameraPose / CAMERA_IDLE_REPIN_MS.
+  if (cesiumContainer.value) {
+    cesiumContainer.value.addEventListener('pointerdown', onCanvasPointerDown);
+    cesiumContainer.value.addEventListener('wheel', onCanvasWheel, { passive: true });
+  }
+  window.addEventListener('pointerup', onCanvasPointerUp);
   startFlightKeyboard();
   startCameraKeyboard();
   syncCesiumCamera();
   // Mounted already in street mode (restored sub-view): remember the map
-  // state so an untouched lift back to Steer restores the 3D pose.
-  if (isStreet.value) snapshotMap();
+  // state so an untouched lift back to Steer restores the 3D pose. The Plan
+  // view has no lift to reconcile (its camera is its own), so skip it.
+  if (isStreet.value && !isPlanView.value) snapshotMap();
 
   // /play?r=… deep link: arm the route autopilot (no-op without the query).
   applyPlayQuery();
@@ -885,29 +1208,26 @@ onMounted(() => {
   }, 10000);
 
   registerRight({
-    id: 'situation',
-    icon: 'MENU_SITUATION',
-    titleKey: 'aerialview.situation',
-    onClick: onClickSituation,
-  });
-  registerRight({
     id: 'plan',
     icon: 'MENU_PLAN',
     titleKey: 'aerialview.plan',
+    active: isPlanView.value,
     onClick: onClickPlan,
   });
   registerRight({
     id: 'steer',
     icon: 'MENU_CONTROL_STICK',
     titleKey: 'aerialview.steer',
-    active: showFlight.value,
+    active: isSteerView.value,
     onClick: toggleSteer,
   });
 
-  // Sync dock button active states with toggle state
-  watch(showFlight, (val) => {
+  // The highlight follows the ACTIVE VIEW, not the flight-disk toggle: Plan
+  // is lit in the Plan sub-view, Steer in the 3D Steer sub-view, and neither
+  // in Search / Route.
+  watch(isSteerView, (steer) => {
     const item = rightItems.find((i) => i.id === 'steer');
-    if (item) item.active = val;
+    if (item) item.active = steer;
   });
   // Close the Flight/Gimbal disks during replay (restored when it ends): the
   // replay engine owns the Cesium camera, so the manual disks must not fight it.
@@ -951,6 +1271,19 @@ onUnmounted(() => {
   stopCameraKeyboard();
   if (rafId) cancelAnimationFrame(rafId);
   if (connectionCheckInterval) clearInterval(connectionCheckInterval);
+  if (cesiumContainer.value) {
+    cesiumContainer.value.removeEventListener('pointerdown', onCanvasPointerDown);
+    cesiumContainer.value.removeEventListener('wheel', onCanvasWheel);
+  }
+  window.removeEventListener('pointerup', onCanvasPointerUp);
+  canvasPointerDown = false;
+  mouseOwnsCamera = false;
+  // Pause the shared Cesium viewer while /play is off screen. It is a
+  // page-lifetime singleton on the global #cesiumContainer, so keep it alive
+  // (tiles stay cached for an instant re-entry) but stop the render loop and
+  // hide the canvas so it cannot burn GPU/network behind another page.
+  if (window.cesiumViewer) window.cesiumViewer.useDefaultRenderLoop = false;
+  if (cesiumContainer.value) cesiumContainer.value.classList.add('cesium-hidden');
   clear();
 });
 </script>
@@ -960,9 +1293,13 @@ onUnmounted(() => {
     :right-items="rightItems"
     :show-flight="showFlight && !isStreet"
     :show-camera="showCamera && !isStreet"
-    :show-hud="recorderState !== 'replaying'"
+    :show-hud="false"
     :flight="flight"
     :camera="camera"
+    :show-pens="penViews"
+    :pen-tool="penTool"
+    :ink-color="penInk"
+    :mark-count="penMarkCount"
         :disabled="isAutoActive"
     @flightMove="onFlightMove"
     @flightStop="onFlightStop"
@@ -970,29 +1307,38 @@ onUnmounted(() => {
     @cameraMove="onCameraMove"
     @cameraStop="onCameraStop"
     @cameraModeChange="onCameraModeChange"
+    @penToolChange="onPenToolChange"
+    @inkColorChange="onPenInkChange"
+    @penClear="onPenClear"
   >
     <template #background>
-      <!-- Google 2D street map background: shown while the page is in
-           'street' mode, entered via Search / Route. Stays mounted across
-           Search <-> Route switches so center / zoom / the red selection
-           balloon are preserved. -->
+      <!-- Google 2D map background: shown while the page is in 'street'
+           mode, entered via Search / Route / Plan. Stays mounted across
+           those switches so center / zoom / the red selection balloon are
+           preserved. Search + Route mirror the drone's camera; Plan drives
+           it from its own planCam (see mapCamLat / mapCamLon / mapCamAlt),
+           so the EOC briefing map never moves the drone. -->
       <MapView
         v-if="isStreet"
         ref="mapViewRef"
         class="view-composer__background aerial-street-map"
         :map-type-id="mapTypeId"
-        :lat="drone.lat"
-        :lon="drone.lon"
-        :alt="mapAlt"
+        :lat="mapCamLat"
+        :lon="mapCamLon"
+        :alt="mapCamAlt"
         :heading="drone.heading"
         :is-picking="false"
         :show-drone-marker="false"
         :waypoints-editable="false"
+        :polygons="planPolygons"
+        :pen-tool="penTool"
+        :pen-color="penInk"
         @mapReady="onMapReady"
         @centerChange="onMapCenterChange"
         @zoomChange="onMapZoomChange"
         @poisFound="onPoisFound"
         @poisError="onPoisError"
+        @marksChange="penMarkCount2D = $event"
       />
       <StreetViewPane
         class="view-composer__background"
@@ -1091,6 +1437,17 @@ onUnmounted(() => {
       </Teleport>
     </template>
   </ViewComposer>
+
+  <!-- Game intro briefing, confined to the main panel (.shell-main). Shown
+       on entry; dismisses itself when the clips finish (or on Skip), once the
+       3D scene is ready. Sibling root node so it overlays the whole panel. -->
+  <SplashOverlay
+    v-if="showIntro"
+    :clips="intro.clips"
+    :slogan="intro.slogan"
+    :music="intro.music"
+    @dismissed="onIntroDismissed"
+  />
 </template>
 
 <style scoped>
@@ -1149,8 +1506,13 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-/* The 2D street map must receive its pan / zoom gestures. */
+/* The 2D street map must receive its pan / zoom gestures. It fills the page
+   area (the composer / shell-main) instead of the whole viewport: the right
+   assistant panel (z-index above the page) would otherwise cover the map's
+   bottom-right zoom controls and shift the visible map centre. The 3D globe
+   and Street View backgrounds stay full-bleed (position: fixed). */
 :deep(.view-composer__background.aerial-street-map) {
+  position: absolute;
   pointer-events: auto;
 }
 

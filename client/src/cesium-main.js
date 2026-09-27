@@ -270,7 +270,11 @@ async function loadArena() {
     // safety cap) so the user never lands on an empty sky.
     await waitForTilesRendered(googleTileset);
 
-    // Signal splash screen that Cesium 3D scene is ready with tiles rendered
+    // Signal the intro splash / AerialView that the 3D scene is ready with
+    // tiles rendered. The persistent flag lets a client-side re-entry (viewer
+    // already warm, so this event will not fire again) detect readiness
+    // synchronously instead of waiting on an event that never comes.
+    window.__cesiumReady = true;
     window.dispatchEvent(new CustomEvent('cesiumReady'));
 }
 
@@ -297,4 +301,10 @@ window.updateCesiumCamera = function(state) {
     });
 };
 
-window.addEventListener('load', loadArena);
+// The module is now dynamically imported by the route gate in index.html,
+// so it may evaluate after 'load' has already fired — handle both orders.
+if (document.readyState === 'complete') {
+    loadArena();
+} else {
+    window.addEventListener('load', loadArena);
+}

@@ -17,6 +17,12 @@ defineProps({
   flight: { type: Object, default: () => ({ mode: '-', vx: 0, vy: 0, yaw: 0, vz: 0 }) },
   camera: { type: Object, default: () => ({ mode: '-', yaw: 0, pitch: 0, roll: 0 }) },
   disabled: { type: Boolean, default: false },
+  // Pencil toolbox (controlled): the parent view owns the pen state and
+  // receives the intents; showPens gates whether the toolbox renders at all.
+  showPens: { type: Boolean, default: false },
+  penTool: { type: String, default: null },
+  inkColor: { type: String, default: '#ff3b30' },
+  markCount: { type: Number, default: 0 },
 });
 
 defineEmits([
@@ -27,6 +33,9 @@ defineEmits([
   'cameraStop',
   'cameraModeChange',
   'dockItemClick',
+  'penToolChange',
+  'inkColorChange',
+  'penClear',
 ]);
 </script>
 
@@ -91,8 +100,16 @@ defineEmits([
 
     <HUD v-if="showHud" :flight="flight" :camera="camera" />
 
-    <!-- Pencil toolbox sits right under the HUD dashboard -->
-    <PenToolbox v-if="showHud" />
+    <!-- Pencil toolbox, bottom-centred (Plan 2D map + Steer 3D globe) -->
+    <PenToolbox
+      v-if="showPens"
+      :tool="penTool"
+      :ink-color="inkColor"
+      :mark-count="markCount"
+      @update:tool="$emit('penToolChange', $event)"
+      @update:inkColor="$emit('inkColorChange', $event)"
+      @clear="$emit('penClear')"
+    />
   </div>
 </template>
 

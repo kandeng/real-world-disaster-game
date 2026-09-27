@@ -1,5 +1,4 @@
 {
-  "situation": "Situation",
   "plan": "Plan",
   "steer": "Steer",
   "screenshot": "Screenshot",
@@ -21,7 +20,7 @@
   "takeoff_above_limit": "Takeoff altitude is {alt} m — you are already beyond that height.",
   "taking_off": "Taking Off...",
   "landing_in_progress": "Landing...",
-  "page_aerial": "Play!",
+  "page_plaza": "Plaza",
   "subpage_account": "Account",
   "auth_notice_screenshot": "Please log in before taking a screenshot.",
   "auth_notice_recording": "Please log in before recording the screen.",

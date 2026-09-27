@@ -1,5 +1,4 @@
 <script setup>
-import { ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 const { t } = useI18n();
@@ -13,23 +12,31 @@ const TOOLS = [
   { id: 'text', path: 'M5 5 H15 M10 5 V16', titleKey: 'tool_text' },
 ];
 
-// Layout-only state for now: which pen is armed and the ink colour.
-// The mark canvas / stroke model arrives in a later phase, so markCount
-// stays 0 (clear stays disabled) until then.
-const tool = ref(null);
-const inkColor = ref('#ff3b30');
-const markCount = ref(0);
+// Controlled component: the parent view owns which pen is armed, the ink
+// colour and the mark count (the MapView pen engine reports it via
+// marksChange); this toolbox only renders the state and emits intents.
+const props = defineProps({
+  tool: { type: String, default: null },
+  inkColor: { type: String, default: '#ff3b30' },
+  markCount: { type: Number, default: 0 },
+});
+
+const emit = defineEmits(['update:tool', 'update:inkColor', 'clear']);
 
 function toggleTool(id) {
-  tool.value = tool.value === id ? null : id;
+  emit('update:tool', props.tool === id ? null : id);
+}
+
+function onInkInput(e) {
+  emit('update:inkColor', e.target.value);
 }
 
 function clearMarks() {
-  markCount.value = 0;
+  emit('clear');
 }
 
 function disarm() {
-  tool.value = null;
+  emit('update:tool', null);
 }
 </script>
 
@@ -58,11 +65,12 @@ function disarm() {
     </button>
 
     <input
-      v-model="inkColor"
       type="color"
       class="pens__color"
+      :value="inkColor"
       :title="t('pentoolbox.ink_colour')"
       :aria-label="t('pentoolbox.ink_colour')"
+      @input="onInkInput"
     />
 
     <span class="pens__sep" aria-hidden="true" />
@@ -88,14 +96,17 @@ function disarm() {
       ><circle cx="10" cy="10" r="7.3" /><path d="M7.6 7.6 L12.4 12.4 M12.4 7.6 L7.6 12.4" /></svg>
     </button>
 
-    <!-- Put the pens away (disabled while no pen is armed) -->
+    <!-- "Freeze the map": arming any pen locks the map pan / double-click zoom
+         so drags draw instead of moving the map — the lit button therefore
+         reads as that freeze indicator, and clicking it puts the pen away and
+         releases the lock. Disabled while nothing is armed (nothing to free). -->
     <button
       type="button"
       class="pens__btn"
       :class="{ 'pens__btn--on': !!tool }"
       :disabled="!tool"
-      :title="t('pentoolbox.disarm')"
-      :aria-label="t('pentoolbox.disarm')"
+      :title="t('pentoolbox.freeze_map')"
+      :aria-label="t('pentoolbox.freeze_map')"
       @click="disarm"
     >
       <svg

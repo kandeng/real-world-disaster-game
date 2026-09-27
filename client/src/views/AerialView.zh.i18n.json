@@ -1,5 +1,4 @@
 {
-  "situation": "态势",
   "plan": "规划",
   "steer": "操控",
   "screenshot": "截屏",
@@ -21,7 +20,7 @@
   "takeoff_above_limit": "起飞高度为 {alt} 米，您已超出该高度。",
   "taking_off": "起飞中...",
   "landing_in_progress": "降落中...",
-  "page_aerial": "玩！",
+  "page_plaza": "广场",
   "subpage_account": "账号",
   "auth_notice_screenshot": "请先登录，然后再截屏。",
   "auth_notice_recording": "请先登录，然后再录屏。",

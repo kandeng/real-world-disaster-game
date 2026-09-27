@@ -2,8 +2,8 @@
   "tool_arrow": "Arrow — drag from tail to head",
   "tool_rect": "Rectangle — drag corner to corner",
   "tool_curve": "Free curve — drag to draw",
-  "tool_text": "Text — click, type, Enter places it",
+  "tool_text": "Text — click, type, then Enter or click away to place",
   "ink_colour": "Ink colour",
   "clear": "Clear every mark",
-  "disarm": "Put the pens away"
+  "freeze_map": "Freeze the map"
 }
