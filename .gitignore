@@ -32,13 +32,119 @@ dist/
 build/
 
 # Splash media files (large files, served from CDN in production)
-# Track only the two essential splash clips; the rest are streamed.
+# Track only the two files a fresh clone cannot regenerate on its own:
+#   video_00.mp4            -> the intro's first clip (config/gameIntro.js)
+#   background_music_00.mp3 -> the intro soundtrack  (config/gameIntro.js)
+# The other three intro clips (kevtoe_worldview / palantir_maven /
+# vantor_world3d) ARE used, but scripts/prepare-splash-media.js re-copies them
+# from the tracked client/assets/media/ masters on every predev/prebuild, so
+# they do not need to be committed twice.
+# from_the_new_world.mp3 / theme_de_fin.mp3 sitting in public/splash/ are stale
+# leftovers (not in COPY_MAP, not in gameIntro.js) — the *.mp3 rule drops them.
 client/public/splash/*.mp4
 !client/public/splash/video_00.mp4
 client/public/splash/*.mp3
 !client/public/splash/background_music_00.mp3
 
-# Note: client/assets/media/ holds the master source copies and is fully tracked.
+# FPV intro clips — inherited from the drone-navigation-v2 shell, where
+# components/FpvSplash.vue hardcoded '/fpv/fpv_*.mp4'. That component does not
+# exist in this repo and nothing references /fpv (SplashOverlay.vue plays the
+# /splash clips instead), so the whole folder is dead weight: 6.6 MB that Vite
+# still copies verbatim into dist/ on every build.
+client/public/fpv/
+
+# client/assets/media/ holds the master copies that the build actually needs.
+# The unused ones are listed in the section below instead of being tracked.
+
+# ── Unused assets: kept on disk as a local library, never uploaded ────────────
+# Every path below was verified to have NO reference anywhere in client/src,
+# client/components, client/composables, client/scripts, client/index.html,
+# vite.config.js, server/ or deployment/. What IS used stays tracked:
+#   assets/media/wild_fire.mp4, mud_slide.mp4  -> imported by PlazaView.vue
+#   assets/media/teammates/*.svg               -> imported by useTeamRoster.js
+#   assets/media/drone_earth_milkway.mp4, kevtoe_worldview.mp4,
+#   assets/media/palantir_maven.mp4, vantor_world3d.mp4
+#                                              -> scripts/prepare-splash-media.js
+#                                                 mirrors them into public/splash/
+
+# Placeholder HTML stubs — never loaded by any route or component.
+client/assets/docs/
+
+# Unreferenced stills / music (background_music_00.mp3 in public/splash/ is a
+# separate, tracked file; these two masters are not its source).
+client/assets/media/drone_earth.png
+client/assets/media/emergency_operations_center.jpeg
+client/assets/media/from_the_new_world.mp3
+client/assets/media/theme_de_fin.mp3
+
+# Vehicle / machine meshes — a ~200 MB local reference library. Nothing in the
+# client imports these yet (useTeamRoster.js only mentions them in a comment
+# about swapping the SVG placeholders for real renders of assets/mesh/*.glb),
+# and the server's .glb code reads server/workspace/meshes/, a different
+# directory. The four already committed here (drone_dji_air3, drone_dji_inspire3,
+# drone_with_camera, lion_lowe) stay tracked: .gitignore never untracks a file
+# that is already in the index, so this only stops the NEW ones being added.
+client/assets/mesh/
+
+# Unreferenced glyphs. src/config/IconConfig.js eagerly globs icons/*.svg and
+# icons/*.png, so EVERY file left in this folder is pulled into the bundle
+# whether or not anything renders it (portrait_photo.png alone ships 2.6 MB).
+# The icons that stay tracked are the ones behind an IconMap key some component
+# actually resolves, plus drone.svg / commander.svg / customer_service.svg,
+# which are imported directly by MapView.vue and useTeamRoster.js.
+client/icons/account.svg
+client/icons/add.svg
+client/icons/archive.svg
+client/icons/archive_closet.svg
+client/icons/attachment.svg
+client/icons/audio.svg
+client/icons/automation.svg
+client/icons/back.svg
+client/icons/camera.svg
+client/icons/cancel.svg
+client/icons/char_2d.svg
+client/icons/char_3d.svg
+client/icons/chat.svg
+client/icons/content.svg
+client/icons/downward.svg
+client/icons/drone_plus.svg
+client/icons/edit.svg
+client/icons/file_download.svg
+client/icons/file_upload.svg
+client/icons/finger-tap.svg
+client/icons/first_person_view.svg
+client/icons/gallary.svg
+client/icons/guide.svg
+client/icons/helicopter.svg
+client/icons/instrument.svg
+client/icons/list.svg
+client/icons/livestream_host.svg
+client/icons/livestream_viewer.svg
+client/icons/location.svg
+client/icons/map.svg
+client/icons/mesh.svg
+client/icons/note.svg
+client/icons/photo.svg
+client/icons/ping.svg
+client/icons/portrait_photo.png
+client/icons/preview.svg
+client/icons/question.svg
+client/icons/recorder.svg
+client/icons/red_stop.svg
+client/icons/remote_controller.svg
+client/icons/reset.svg
+client/icons/router.svg
+client/icons/satellite.svg
+client/icons/save.svg
+client/icons/settings.svg
+client/icons/situation.svg
+client/icons/tool.svg
+client/icons/upward.svg
+client/icons/wallet.svg
+client/icons/window_size.svg
+client/icons/zoom_focus.svg
+client/icons/zoom_minus.svg
+client/icons/zoom_plus.svg
 
 # Environment files
 .env

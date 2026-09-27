@@ -2,6 +2,13 @@
 // All SVG source files live in client/icons/ and are imported as raw strings
 // via Vite's import.meta.glob. Add or update keys here to change the icons
 // used across the application without touching components.
+//
+// NOTE: the glob below is EAGER, so every file sitting in client/icons/ is
+// pulled into the bundle whether or not a key here references it. Only list
+// icons that a component actually resolves, and delete (or gitignore) the rest
+// — see the "Unused assets" section of the root .gitignore.
+// MENU_RECORDER / MENU_PHOTO / MENU_RESET were dropped because no component
+// referenced them and their SVGs are no longer tracked.
 
 const svgModules = import.meta.glob('../../icons/*.svg', {
   query: '?raw',
@@ -17,15 +24,11 @@ const pngModules = import.meta.glob('../../icons/*.png', {
 export const IconMap = {
   // Aerial page dock + shell top bar
   MENU_CONTROL_STICK: '../../icons/steer.svg',
-  MENU_SITUATION: '../../icons/situation.svg',
   MENU_PLAN: '../../icons/plan.svg',
   MENU_TAKEOFF: '../../icons/takeoff.svg',
   MENU_LANDING: '../../icons/landing.svg',
   MENU_STOP: '../../icons/stop.svg',
-  MENU_RECORDER: '../../icons/recorder.svg',
-  MENU_PHOTO: '../../icons/photo.svg',
   MENU_SEARCH: '../../icons/search.svg',
-  MENU_RESET: '../../icons/reset.svg',
   MENU_FILE_FOLDER: '../../icons/file_folder.svg',
   MENU_USER: '../../icons/user.svg',
 
@@ -45,6 +48,7 @@ export const IconMap = {
   // AI assistant panel icons
   CHAT_SEND: '../../icons/send.svg',
   CHAT_CAPTURE: '../../icons/screen_shot.svg',
+  MENU_TEAM: '../../icons/contacts.svg',
 };
 
 /**
