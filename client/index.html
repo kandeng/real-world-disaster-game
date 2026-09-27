@@ -9,8 +9,8 @@
     <link rel="stylesheet" href="style.css">
     <!-- No <link rel="preload" as="video"> here: Chrome does not support the
          'video' fetch destination, so the hint is ignored (console warning)
-         and would only double-download. The first splash clip is small and
-         stream-encoded; splash.js starts it on the 'canplay' event. -->
+         and would only double-download. The intro clips are started by
+         SplashOverlay.vue on the 'canplay' event. -->
 </head>
 <body>
     <div id="cesiumContainer"></div>
@@ -18,27 +18,21 @@
     <!-- Vue 3 application overlay -->
     <div id="app"></div>
 
-    <!-- Splash screen: full-screen overlay with sequential video clips -->
-    <div id="splash-overlay">
-        <video id="splash-video" muted playsinline autoplay preload="auto"></video>
-        <div id="splash-progress"></div>
-        <div id="splash-bottom">
-            <p id="splash-slogan"></p>
-        </div>
-        <div id="splash-volume" title="Music volume">
-            <img id="splash-volume-icon" src="/icons/audio.svg" alt="Audio" width="22" height="22">
-            <input type="range" id="splash-volume-slider" min="0" max="100" value="90" aria-label="Music volume">
-        </div>
-    </div>
-
+    <!-- Cesium bootstrap loads ONLY on 3D routes (/play...). cesium-main.js
+         creates the globe canvas at module scope and streams Google tiles on
+         window load; on any other page (Plaza home, Account, auth callbacks)
+         that canvas flashes in front of the Vue app and downloads tiles the
+         page never shows. A client-side navigation to /play (SPA) imports it
+         on demand via the route's beforeEnter guard in src/router/index.js;
+         ESM caching keeps the single viewer a singleton across both paths. -->
     <script type="module">
-      // Expose the Google Maps loader to the plain splash script so it can
-      // verify the Google connection before allowing splash dismissal.
-      import { loadGoogleMaps } from '/src/2d_map/googleMaps.js';
-      window.__loadGoogleMapsForSplash = loadGoogleMaps;
+      const path = window.location.pathname.replace(/\/+$/, '') || '/';
+      if (path.startsWith('/play')) {
+        import('/src/cesium-main.js');
+      } else {
+        console.log('[cesium] skipped on non-3D route: ' + path);
+      }
     </script>
-    <script src="/splash.js"></script>
-    <script type="module" src="src/cesium-main.js"></script>
     <script type="module" src="/src/main.js"></script>
 </body>
 </html>

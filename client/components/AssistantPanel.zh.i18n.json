@@ -3,5 +3,12 @@
   "capture_viewer": "截屏",
   "attach_folder": "上传文件",
   "send": "发送",
-  "stop": "停止"
+  "stop": "停止",
+  "team": "团队",
+  "team_title": "队友",
+  "resize_input": "拖动以调整输入框高度",
+  "mate_commander": "总指挥",
+  "mate_staff": "参谋",
+  "mate_drone01": "drone01",
+  "mate_tank01": "tank01"
 }

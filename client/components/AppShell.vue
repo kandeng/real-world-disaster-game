@@ -13,7 +13,12 @@ const { user, isAuthenticated, fetchMe } = useAuth();
 
 /* ─── Left-panel navigation ─── */
 function go(path) {
-  if (router.currentRoute.value.path !== path) router.push(path);
+  if (router.currentRoute.value.path === path) return;
+  // Client-side navigation for every page, including Play!: only the main
+  // panel (.shell-main) swaps, so the top bar, left nav, and right assistant
+  // stay mounted and static. The /play route guard bootstraps the Cesium
+  // viewer on demand, and the intro splash plays over the main panel.
+  router.push(path);
 }
 
 // The entry for the page currently on screen turns blue.
@@ -178,13 +183,17 @@ function toggleLocale() {
     <div class="shell-body">
       <!-- Left panel: navigation, from the top bar down to the bottom -->
       <aside v-if="open" class="shell-left" :style="{ width: leftWidth + 'px' }">
-        <!-- Top group, aligned to the top -->
+        <!-- Top group, aligned to the top. There is deliberately NO Play!
+             entry: the only door into the /play view is the Plaza page's
+             "Play the game" button (plus the Gallery's "Explore the Scene in
+             3D" deep link), so the route and the view stay exactly as they
+             were while this nav item is gone. -->
         <div
           class="shell-nav__item shell-nav__item--link"
           :class="{ 'shell-nav__item--active': isActive('/') }"
           @click="go('/')"
         >
-          {{ t('aerialview.page_aerial') }}
+          {{ t('aerialview.page_plaza') }}
         </div>
 
         <div class="shell-left__spacer" />

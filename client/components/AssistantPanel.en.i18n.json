@@ -3,5 +3,12 @@
   "capture_viewer": "Screenshot",
   "attach_folder": "Upload file",
   "send": "Send",
-  "stop": "Stop"
+  "stop": "Stop",
+  "team": "Team",
+  "team_title": "Teammates",
+  "resize_input": "Drag to resize the input box",
+  "mate_commander": "Commander",
+  "mate_staff": "Staff",
+  "mate_drone01": "drone01",
+  "mate_tank01": "tank01"
 }
