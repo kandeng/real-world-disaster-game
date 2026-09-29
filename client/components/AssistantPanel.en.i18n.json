@@ -11,5 +11,5 @@
   "mate_staff": "Staff",
   "mate_drone": "drone",
   "mate_tank": "tank",
-  "empty_hint": "Message the team. Mention a teammate with {'@'}drone or {'@'}tank and they will answer."
+  "empty_hint": "Message the team. Mention a teammate with {'@'}drone or {'@'}tank and they will answer; mention nobody and Staff answers."
 }

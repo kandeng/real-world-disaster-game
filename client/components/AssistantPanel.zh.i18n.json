@@ -11,5 +11,5 @@
   "mate_staff": "参谋",
   "mate_drone": "drone",
   "mate_tank": "tank",
-  "empty_hint": "给团队留言。用 {'@'}drone 或 {'@'}tank 提及队友，对方会应答。"
+  "empty_hint": "给团队留言。用 {'@'}drone 或 {'@'}tank 提及队友，对方会应答；不提及任何人时，由参谋应答。"
 }

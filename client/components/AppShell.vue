@@ -184,10 +184,14 @@ function toggleLocale() {
       <!-- Left panel: navigation, from the top bar down to the bottom -->
       <aside v-if="open" class="shell-left" :style="{ width: leftWidth + 'px' }">
         <!-- Top group, aligned to the top. There is deliberately NO Play!
-             entry: the only door into the /play view is the Plaza page's
-             "Play the game" button (plus the Gallery's "Explore the Scene in
-             3D" deep link), so the route and the view stay exactly as they
-             were while this nav item is gone. -->
+             entry: the only in-app door into the /play view is the Plaza
+             page's "Play the game" button, so the route and the view stay
+             exactly as they were while this nav item is gone. The
+             /play?r=<id> and ?v=<id> deep links are still HANDLED by
+             AerialView — a URL already out in the wild must keep working —
+             but nothing in the UI mints one any more: the Plaza's video
+             cards, whose "Explore the Scene in 3D" button used to, are
+             gone. -->
         <div
           class="shell-nav__item shell-nav__item--link"
           :class="{ 'shell-nav__item--active': isActive('/') }"

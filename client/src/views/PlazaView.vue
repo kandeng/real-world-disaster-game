@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import LoadingSpinner from "@shared/LoadingSpinner.vue";
-import { useVideos, cachedPublicVideos } from "@shared-composables/useVideos.js";
 import {
   cachedGameCards,
   listGameCards,
@@ -11,32 +10,33 @@ import {
   cardDescription,
 } from "@shared-composables/useGames.js";
 
-// Plaza: a masonry feed of equal-width rounded cards. Game packages lead —
-// each one is a directory in the repo-root games/ workspace, listed by
+// Plaza: a masonry feed of equal-width rounded cards, one per game package.
+// Each package is a directory in the repo-root games/ workspace, listed by
 // /games/catalog.json and described by its own card.json, so adding or
-// hot-fixing a game never touches this file or the engine bundle. The
-// published flight videos append below them: embedded player on top
-// (YouTube / Bilibili), then title, creation time, author and description,
-// and an "explore in 3D" button that jumps to the 3D Exploration page.
-// Both feeds are public: anonymous visitors see the same cards as logged-in
-// users.
+// hot-fixing a game never touches this file or the engine bundle. The feed is
+// public: anonymous visitors see the same cards as logged-in users.
+//
+// The published-flight-video cards that used to append below the games are
+// gone, together with their YouTube / Bilibili iframe and their "Explore the
+// Scene in 3D" button. That button deep-linked into /play with a saved route
+// (?r= / ?v=), which is not a capability a game package may request: a card
+// names an action KIND and the engine owns the kind -> destination mapping,
+// so `play` is the only button this view can render. Bringing those cards back
+// means adding such a kind to the engine, not re-adding a branch here.
 const { t, locale } = useI18n();
 const router = useRouter();
-const { listPublicVideos } = useVideos();
 
 const games = ref([]);
-const videos = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 
-// Render-ready cards. The two feeds carry different field shapes, so they
-// are normalized here and the template only ever sees one. title and
-// description are resolved for the CURRENT locale — a package ships every
-// locale it is translated into, so switching language re-resolves from data
-// already in memory instead of refetching, and depending on locale.value
-// here is what makes that reactive. `kind` picks the button.
-const cards = computed(() => [
-  ...games.value.map((g) => ({
+// Render-ready cards. title and description are resolved for the CURRENT
+// locale — a package ships every locale it is translated into, so switching
+// language re-resolves from data already in memory instead of refetching, and
+// depending on locale.value here is what makes that reactive. `kind` picks the
+// button.
+const cards = computed(() =>
+  games.value.map((g) => ({
     kind: "game",
     id: g.id,
     video: g.video,
@@ -45,74 +45,25 @@ const cards = computed(() => [
     title: cardTitle(g, locale.value),
     description: cardDescription(g, locale.value),
   })),
-  ...videos.value.map((v) => ({ kind: "video", ...v })),
-]);
+);
 
 onMounted(async () => {
   // Instant paint from the last successful fetch — in memory when only the
-  // page changed, from localStorage when the browser was reloaded — while
-  // the two GETs below silently revalidate.
+  // page changed, from localStorage when the browser was reloaded — while the
+  // GET below silently revalidates.
   games.value = cachedGameCards() || [];
-  videos.value = cachedPublicVideos() || [];
   loading.value = !cards.value.length;
 
-  // Independent sources: a games outage must not blank the video feed and
-  // vice versa, so they settle together instead of awaiting in sequence.
-  // listGameCards() already keeps the previous cache when every package
-  // fails, so a rejected settle leaves the stale-but-valid cards showing.
-  const [g, v] = await Promise.allSettled([listGameCards(), listPublicVideos()]);
-  if (g.status === "fulfilled") games.value = g.value;
-  if (v.status === "fulfilled") videos.value = v.value;
-  loadError.value = g.status === "rejected" && v.status === "rejected";
+  // listGameCards() already keeps the previous cache when every package fails,
+  // so a rejection leaves the stale-but-valid cards showing and the error note
+  // is only ever reached when there is nothing cached to show at all.
+  try {
+    games.value = await listGameCards();
+  } catch {
+    loadError.value = true;
+  }
   loading.value = false;
 });
-
-// "Aug 22, 2026, 15:25" (en) / "2026年8月22日 15:25" (zh)
-function fmtDate(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return "";
-  return d.toLocaleString(locale.value === "zh" ? "zh-CN" : "en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
-
-// The card's displaying window plays YouTube / Bilibili sources only.
-function embedUrl(v) {
-  const src = [...(v.sources || [])]
-    .sort((a, b) => a.position - b.position)
-    .find(
-      (s) =>
-        s.url && s.url.trim() && (s.provider === "youtube" || s.provider === "bilibili")
-    );
-  if (!src) return null;
-  const url = src.url.trim();
-  if (src.provider === "youtube") {
-    const m =
-      url.match(/(?:youtu\.be\/|[?/]v=|\/embed\/|\/shorts\/)([A-Za-z0-9_-]{6,})/) ||
-      url.match(/^([A-Za-z0-9_-]{6,})$/);
-    // Plain youtube.com (NOT youtube-nocookie.com): the nocookie domain
-    // cannot share cookies with a signed-in Google session, so YouTube's
-    // bot detection walls anonymous embeds with "Sign in to confirm
-    // you're not a bot". hl pins the player UI to the app language.
-    if (m)
-      return `https://www.youtube.com/embed/${m[1]}?hl=${
-        locale.value === "zh" ? "zh_CN" : "en_US"
-      }`;
-  } else {
-    const bv = url.match(/(BV[0-9A-Za-z]+)/);
-    const av = url.match(/av(\d+)/i);
-    if (bv)
-      return `https://player.bilibili.com/player.html?bvid=${bv[1]}&autoplay=0&high_quality=1`;
-    if (av)
-      return `https://player.bilibili.com/player.html?aid=${av[1]}&autoplay=0&high_quality=1`;
-  }
-  return null;
-}
 
 // "Play the game": client-side navigate to the Play! page so only the main
 // panel swaps — the top bar, left nav, and right assistant stay mounted and
@@ -127,18 +78,6 @@ function embedUrl(v) {
 // rather than a free annotation.
 function onPlayGame() {
   router.push("/play");
-}
-
-// "Explore the Scene in 3D": client-side navigate to the /play deep link,
-// which lands in 3D Exploration with the video's route loaded and the
-// waypoint autopilot armed. Prefer the route id (?r=); fall back to the
-// video id (?v=) for videos whose route was deleted (they keep a frozen
-// waypoint snapshot).
-function onExplore(v) {
-  router.push({
-    path: "/play",
-    query: v.route_id ? { r: v.route_id } : { v: v.id },
-  });
 }
 </script>
 
@@ -168,20 +107,10 @@ function onExplore(v) {
             preload="metadata"
             playsinline
           ></video>
-          <iframe
-            v-else-if="embedUrl(v)"
-            :src="embedUrl(v)"
-            class="pcard__iframe"
-            frameborder="0"
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-            allowfullscreen
-          ></iframe>
           <div v-else class="pcard__screen-empty">{{ t("plazaview.no_source") }}</div>
         </div>
 
         <div class="pcard__title">{{ v.title }}</div>
-        <div v-if="v.created_at" class="pcard__meta">{{ fmtDate(v.created_at) }}</div>
-        <div v-if="v.author_name" class="pcard__meta">{{ v.author_name }}</div>
         <div v-if="v.description" class="pcard__desc">{{ v.description }}</div>
 
         <!-- A game card requests a capability by KIND; the engine owns the
@@ -190,17 +119,10 @@ function onExplore(v) {
              than falling back to a guess. -->
         <button
           v-if="v.kind === 'game' && v.action === 'play'"
-          class="pcard__explore"
+          class="pcard__cta"
           @click="onPlayGame"
         >
           {{ t("plazaview.play_game") }}
-        </button>
-        <button
-          v-else-if="v.kind === 'video'"
-          class="pcard__explore"
-          @click="onExplore(v)"
-        >
-          {{ t("plazaview.explore") }}
         </button>
       </article>
     </div>
@@ -260,17 +182,10 @@ function onExplore(v) {
   justify-content: center;
 }
 
-.pcard__iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
-}
-
-/* Local mp4 cards: the frame follows the video's intrinsic aspect ratio —
-   width fills the masonry column, height scales proportionally (no 16:9
-   crop). Embeds keep the fixed 16:9 box because their source ratio is
-   unknown until the iframe loads. */
+/* A card with a local mp4 trailer: the frame follows the video's intrinsic
+   aspect ratio — width fills the masonry column, height scales proportionally
+   (no 16:9 crop). A card without one keeps the fixed 16:9 box, so the "no
+   playable source" note still has somewhere to sit. */
 .pcard__screen--video {
   aspect-ratio: auto;
 }
@@ -297,12 +212,6 @@ function onExplore(v) {
   color: #111827;
 }
 
-.pcard__meta {
-  margin-top: 8px;
-  font-size: 0.9rem;
-  color: #6e6e73;
-}
-
 .pcard__desc {
   margin-top: 8px;
   font-size: 0.9rem;
@@ -312,7 +221,10 @@ function onExplore(v) {
   white-space: pre-wrap;
 }
 
-.pcard__explore {
+/* The card's one call to action. Renamed from `pcard__explore` when the
+   video cards left: "explore" described THAT button, and this one plays a
+   game. Scoped CSS, so the rename cannot reach any other component. */
+.pcard__cta {
   margin-top: 16px;
   width: 100%;
   padding: 9px 0;
@@ -325,7 +237,7 @@ function onExplore(v) {
   cursor: pointer;
 }
 
-.pcard__explore:hover {
+.pcard__cta:hover {
   background: #0066d6;
 }
 </style>

@@ -7,6 +7,12 @@ server/config.json
 deployment/tls/
 
 # Runtime/generated files
+# deployment/acert is the cookie jar curl writes when invoked as `curl -c acert`
+# from inside deployment/ (used while probing the ECS01 endpoints). It is a
+# Netscape-format cookie file and can hold live session credentials, so it must
+# never be committed. The file itself was deleted during the deployment/ +
+# extension/ audit, but the rule STAYS: the next curl run recreates it.
+# (Contrast the public/fpv/ note below, where the rule was removed on purpose.)
 deployment/acert
 server/local_dev.db
 
@@ -38,20 +44,33 @@ build/
 # The other three intro clips (kevtoe_worldview / palantir_maven /
 # vantor_world3d) ARE used, but scripts/prepare-splash-media.js re-copies them
 # from the tracked client/assets/media/ masters on every predev/prebuild, so
-# they do not need to be committed twice.
-# from_the_new_world.mp3 / theme_de_fin.mp3 sitting in public/splash/ are stale
-# leftovers (not in COPY_MAP, not in gameIntro.js) — the *.mp3 rule drops them.
+# they do not need to be committed twice. The two rules below are therefore
+# LOAD-BEARING: they are what lets those three clips live on disk and in dist/
+# without ever being committed. Do not delete them when tidying this file.
+#
+# src/config/gameIntro.js is the ONLY reader of public/splash/. Anything it
+# does not list ships to every visitor for nothing — Vite copies public/
+# verbatim into dist/. from_the_new_world.mp3 and theme_de_fin.mp3 were
+# DELETED on exactly that basis (19.9 MB, in neither gameIntro.js nor the
+# script's COPY_MAP); byte-identical masters remain in client/assets/media/.
 client/public/splash/*.mp4
 !client/public/splash/video_00.mp4
 client/public/splash/*.mp3
 !client/public/splash/background_music_00.mp3
 
-# FPV intro clips — inherited from the drone-navigation-v2 shell, where
+# NOTE: public/fpv/ was DELETED, not merely ignored. It held four intro clips
+# (6.6 MB) inherited from the drone-navigation-v2 shell, where
 # components/FpvSplash.vue hardcoded '/fpv/fpv_*.mp4'. That component does not
-# exist in this repo and nothing references /fpv (SplashOverlay.vue plays the
-# /splash clips instead), so the whole folder is dead weight: 6.6 MB that Vite
-# still copies verbatim into dist/ on every build.
-client/public/fpv/
+# exist in this repo and nothing referenced /fpv — SplashOverlay.vue plays the
+# /splash clips named in config/gameIntro.js instead — so every build was
+# copying 6.6 MB into dist/ for nothing. The ignore rule left with the folder
+# on purpose: silently ignoring public/fpv/ would trap a future FPV feature,
+# whose clips would then bundle on this machine yet never reach a fresh clone.
+#
+# UPDATE (same audit): the four masters at extension/assets/fpv_*.mp4 — 6.6 MB,
+# the only other copy — were deleted too, after confirming that nothing in the
+# repo references them either. They are still recoverable from git history:
+# commit 5d9fa4f, "real-drone: ... FPV splash overlay under docks/Flight disk".
 
 # client/assets/media/ holds the master copies that the build actually needs.
 # The unused ones are listed in the section below instead of being tracked.
@@ -67,9 +86,6 @@ client/public/fpv/
 # (wild_fire.mp4 and mud_slide.mp4 left this folder for games/demo-*/trailer.mp4
 #  when the Plaza game cards moved into the games workspace.)
 
-# Placeholder HTML stubs — never loaded by any route or component.
-client/assets/docs/
-
 # Unreferenced stills / music (background_music_00.mp3 in public/splash/ is a
 # separate, tracked file; these two masters are not its source).
 client/assets/media/drone_earth.png
@@ -77,11 +93,17 @@ client/assets/media/emergency_operations_center.jpeg
 client/assets/media/from_the_new_world.mp3
 client/assets/media/theme_de_fin.mp3
 
-# Teammate avatar placeholders, superseded by the monochrome glyphs in
-# client/icons/ — useTeamRoster.js now imports commander.svg,
-# customer_service.svg, drone_front.svg and tank.svg directly, so the roster and
-# the rest of the UI share one icon language.
-client/assets/media/teammates/
+# NOTE: assets/docs/ and assets/media/teammates/ were DELETED, not ignored.
+# The first held one placeholder HTML stub no route ever loaded; the second
+# held two hand-drawn avatar placeholders (drone01.svg, tank01.svg) superseded
+# by the monochrome glyphs in client/icons/, which useTeamRoster.js imports
+# directly so the roster and the rest of the UI share one icon language.
+# Their ignore rules left with them on purpose: a silent ignore on
+# "teammates/" is a trap, because that is the obvious folder to reach for when
+# adding an avatar, and a file dropped there would bundle on this machine yet
+# never reach a fresh clone. TEAMMATE AVATARS LIVE IN client/icons/ AND MUST
+# BE GIT-TRACKED — see the avatar note at the top of
+# client/composables/useTeamRoster.js before adding or replacing one.
 
 # Vehicle / machine meshes — a ~200 MB local reference library. Nothing in the
 # client imports these yet, and the server's .glb code reads
@@ -177,5 +199,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 logs/
+
+# cflib parameter cache — DO NOT DELETE WHEN TIDYING; just keep it untracked.
+# Crazyflie(rw_cache='./cache') appears at 7 call sites across extension/
+# (simple_crazyflie/01_connect, 02_telemetry, 03_propellers, 04_flying, and
+# crazyflie_bridge/provision_drone.py + motion_control_ws.py). The JSON files
+# are keyed by real drone radio IDs (67270310, C931D955) and hold each drone's
+# parameter TOC, so a connect does not have to re-sync ~60-95 KB over the radio.
+# Regenerable in principle, but only by talking to the physical drone — unlike
+# __pycache__ these are live hardware state, not a build artifact.
 extension/crazyflie_bridge/cache/
 extension/simple_crazyflie/cache/

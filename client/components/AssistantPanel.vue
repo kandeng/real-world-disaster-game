@@ -12,7 +12,8 @@ const { t } = useI18n();
 const draft = ref('');
 
 /* ── Transcript + mention routing ──────────────────────────────────────────
-   Phase A: a teammate the commander @mentions echoes the message back. See
+   Phase A: whoever a message is addressed to echoes it back — the teammates
+   the commander @mentions, or Staff when the message mentions nobody. See
    useTeamChat.js for which half of that is a smoke test and which half is the
    permanent routing the real agent will inherit. */
 const { messages, send, displayName, avatarOf } = useTeamChat();

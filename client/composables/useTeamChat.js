@@ -1,12 +1,13 @@
 // ── Team chat: transcript + mention routing (Phase A, local echo) ────────────
 // Owns the AssistantPanel conversation. The commander posts into the transcript;
-// every teammate they @mention answers.
+// every teammate they @mention answers, and Staff answers when the message
+// @mentions nobody at all.
 //
-// PHASE A IS AN ECHO, NOT AN AGENT. Each mentioned teammate replies with the
+// PHASE A IS AN ECHO, NOT AN AGENT. Each addressed teammate replies with the
 // commander's text verbatim. That is a deliberate smoke test: it proves the
 // composer, the mention parser, the per-sender transcript rendering and the
 // roster all line up BEFORE any agent exists to hide behind. What survives into
-// the real implementation is the routing — `mentionedMates()` below, i.e. which
+// the real implementation is the routing — `respondersFor()` below, i.e. which
 // teammate a message is addressed to. What gets replaced is `replyFrom()`, which
 // stops echoing and instead hands the message to that teammate's DSH agent
 // worker and appends whatever comes back. Keeping the echo this small is the
@@ -18,7 +19,7 @@
 // are a property of the network rather than something to simulate.
 import { ref } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { TEAM, COMMANDER_ID, mateById } from './useTeamRoster.js';
+import { TEAM, COMMANDER_ID, STAFF_ID, mateById } from './useTeamRoster.js';
 import { matchMentions } from './mentions.js';
 
 // Module-level, not per-call: the conversation belongs to the session, not to
@@ -64,6 +65,32 @@ export function useTeamChat() {
     return matchMentions(text, mentionCandidates()).map((hit) => mateById(hit.id)).filter(Boolean);
   }
 
+  /**
+   * Who answers `text`: the teammates it @mentions, or Staff when it mentions
+   * nobody.
+   *
+   * A message with no handle in it is still addressed to somebody — the staff
+   * officer is the commander's default counterpart, so "What is the status of
+   * us?" is routed exactly as "@staff What is the status of us?" would be. Both
+   * cases return the same shape of list and go through the same single
+   * `replyFrom()` loop in `send()`, so there is no separate default-responder
+   * code path to drift out of sync with the mention path.
+   *
+   * This is also what absorbs the near-misses: a self-mention (`@commander`,
+   * already filtered out above) and a handle that matches no teammate (`@bob`)
+   * both leave the mention set empty, and Staff takes them rather than the
+   * message going silently unanswered.
+   *
+   * The `mateById()` guard means a roster that ever loses its staff entry
+   * degrades to "no reply" instead of throwing inside `send()`.
+   */
+  function respondersFor(text) {
+    const mates = mentionedMates(text);
+    if (mates.length) return mates;
+    const staff = mateById(STAFF_ID);
+    return staff ? [staff] : [];
+  }
+
   function append(from, text, extra = {}) {
     const message = { id: nextId(), from, own: from === COMMANDER_ID, text, at: Date.now(), ...extra };
     messages.value = [...messages.value, message];
@@ -76,7 +103,8 @@ export function useTeamChat() {
   }
 
   /**
-   * Post the commander's message, then let everyone they mentioned answer.
+   * Post the commander's message, then let everyone it is addressed to answer:
+   * the teammates it @mentions, or Staff when it mentions nobody.
    * @param {string} text raw composer draft
    * @returns {{text: string, replies: string[]}|null} null if nothing was sent
    */
@@ -84,14 +112,14 @@ export function useTeamChat() {
     const body = typeof text === 'string' ? text.trim() : '';
     if (!body) return null;
     append(COMMANDER_ID, body);
-    const mates = mentionedMates(body);
-    for (const mate of mates) replyFrom(mate, body);
-    return { text: body, replies: mates.map((mate) => mate.id) };
+    const responders = respondersFor(body);
+    for (const mate of responders) replyFrom(mate, body);
+    return { text: body, replies: responders.map((mate) => mate.id) };
   }
 
   function clear() {
     messages.value = [];
   }
 
-  return { messages, send, clear, mentionedMates, displayName, avatarOf };
+  return { messages, send, clear, mentionedMates, respondersFor, displayName, avatarOf };
 }

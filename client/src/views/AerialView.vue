@@ -182,13 +182,17 @@ const planPolygons = computed(() =>
 );
 
 // ── /play?r=<16-char route id> shareable play link ───────────────────────
-// The Gallery's "Explore the Scene in 3D" (or any shared copy of the URL)
-// lands here: fetch the route publicly, seed the session route domain (the
-// 2D Route view then shows its read-only dots) and hand the drone to the
-// waypoint autopilot. The 3D waypoint overlay (blue dots + spline) is NOT
-// drawn here — the play view keeps a clean cinematic scene. ?v=<16-char
-// video id> is the fallback for gallery videos whose source route was
-// deleted (the frozen waypoint snapshot rides on the video row).
+// A shared copy of the URL lands here: fetch the route publicly, seed the
+// session route domain (the 2D Route view then shows its read-only dots) and
+// hand the drone to the waypoint autopilot. The 3D waypoint overlay (blue
+// dots + spline) is NOT drawn here — the play view keeps a clean cinematic
+// scene. ?v=<16-char video id> is the fallback for a published video whose
+// source route was deleted (the frozen waypoint snapshot rides on the video
+// row).
+//
+// Nothing in the app mints these links any more — the Plaza's video cards and
+// their "Explore the Scene in 3D" button are gone. The handling stays because
+// a link already out in the wild must keep working.
 const autopilot = useRouteAutopilot();
 const { getPublicRoute } = useRoutes();
 const { listPublicVideos } = useVideos();

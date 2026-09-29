@@ -1,4 +1,4 @@
-tu.#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Provision a Crazyflie's radio identity (channel / datarate / address).
 
 The drone stores this triple in its on-board EEPROM config block and loads it

@@ -3,7 +3,7 @@ import MySpaceView from '@/views/MySpaceView.vue';
 
 const routes = [
   {
-    // Home page: Plaza (public masonry feed of published flight videos).
+    // Home page: Plaza (public masonry feed of game-package cards).
     path: '/',
     name: 'Plaza',
     component: () => import('@/views/PlazaView.vue'),

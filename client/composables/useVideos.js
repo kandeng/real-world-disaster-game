@@ -28,8 +28,9 @@ export function cachedPublicVideos() {
 }
 
 // Called by the background video job after it publishes (or replaces) a
-// video: Content -> Video and the Plaza then refetch fresh lists instead
-// of painting the stale cached copy first.
+// video, so Content -> Video refetches a fresh list instead of painting the
+// stale cached copy first. The Plaza is no longer a consumer: it renders game
+// packages now (see useGames.js) and never reads these caches.
 export function invalidateVideoCaches() {
   videosCache = null;
   publicVideosCache = null;
