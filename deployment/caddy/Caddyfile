@@ -70,6 +70,59 @@ drone-navigation.com {
 		}
 	}
 
+	# Game packages workspace (repo-root games/ -> /var/www/drone-navigation/
+	# games/). Deliberately OUTSIDE the client/dist static root below: the
+	# packages are the mutable, fragile half of the site and the engine bundle
+	# is the stable half, so a broken package cannot break an app deploy and
+	# editing a package needs no rebuild.
+	#
+	# Two tiers, expressed as two `handle` blocks with LITERAL path matchers so
+	# the outcome depends only on Caddy's documented specificity sort (longest
+	# single path matcher first, matcher-less fallback last) and not on source
+	# order. Without the /games/catalog.json block a request for it would fall
+	# through to `try_files {path} /index.html` and return the SPA instead of
+	# JSON.
+	handle /games/catalog.json {
+		root * /var/www/drone-navigation
+
+		# The client pins /games/* to the apex (the CDN edge must not cache the
+		# catalog), so an edge visitor's fetch is cross-origin. These files are
+		# public, unauthenticated and credential-free, so `*` is correct and
+		# avoids echoing arbitrary Origins.
+		header Access-Control-Allow-Origin "*"
+
+		# The index is the ONE file that must never be served from cache: it is
+		# what makes a game appear, disappear or move. `no-cache` still stores
+		# it, so an unchanged catalog costs a 304 with an empty body — Caddy's
+		# file_server sends the ETag.
+		header Cache-Control "no-cache"
+
+		encode gzip zstd
+		file_server
+	}
+
+	handle /games/* {
+		root * /var/www/drone-navigation
+		header Access-Control-Allow-Origin "*"
+
+		# Package contents: card.json plus the trailer / poster / meshes that
+		# will follow. Cacheable but deliberately NOT `immutable` — packages are
+		# addressed by id rather than by version, so `immutable` would pin a
+		# replaced trailer in returning browsers for a year. card.json is
+		# additionally fetched as `card.json?v=<packageVersion>`, so bumping the
+		# version in catalog.json busts a card hot-fix immediately; this
+		# max-age is the bound on the damage if someone forgets to bump it.
+		# Once packages move to version-addressed CDN URLs (the catalog's
+		# baseUrl field already supports them) this can become
+		# "public, max-age=31536000, immutable".
+		header Cache-Control "public, max-age=86400"
+
+		# Compresses card.json; video/glb are not in Caddy's default encodable
+		# content-type list, so they pass through untouched.
+		encode gzip zstd
+		file_server
+	}
+
 	# Serve Static Web App
 	handle {
 		root * /var/www/drone-navigation/client/dist
@@ -101,6 +154,26 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 			header_up Host {host}
 			header_up X-Real-IP {remote_host}
 		}
+	}
+
+	# Game packages workspace — identical to the two apex blocks, kept so that
+	# a direct hit on an edge domain serves the file instead of falling through
+	# to the SPA catch-all. The client normally pins these requests to the
+	# apex, so this path is for stale cached builds and direct navigation.
+	handle /games/catalog.json {
+		root * /var/www/drone-navigation
+		header Access-Control-Allow-Origin "*"
+		header Cache-Control "no-cache"
+		encode gzip zstd
+		file_server
+	}
+
+	handle /games/* {
+		root * /var/www/drone-navigation
+		header Access-Control-Allow-Origin "*"
+		header Cache-Control "public, max-age=86400"
+		encode gzip zstd
+		file_server
 	}
 
 	# Static Web App — MUST stay inside a catch-all handle{} block: a

@@ -23,24 +23,36 @@ export function sameOriginWsUrl(path) {
 }
 
 /**
- * apiBaseUrl() — base URL prefix for every REST fetch() to /api/*.
+ * apexBaseUrl() — the origin every non-CDN-cacheable request must target.
  *
  * Same rationale as sameOriginWsUrl(), applied to plain HTTP: the CDN edge
  * never caches /api/* (X-Swift-CacheTime: 0), so a request made against the
  * edge domain travels browser -> edge -> Virginia origin -> edge -> browser.
- * Stripping the edge prefix pins API calls to the apex (one ocean round trip
+ * Stripping the edge prefix pins the call to the apex (one ocean round trip
  * instead of two). The server's CORS allowlist (cors_origins in the prod
  * config) accepts the resulting cross-origin requests from the www./cdn.
  * pages, and apex visitors stay same-origin (no preflight at all).
  *
- * DEV builds keep hitting the local uvicorn server directly.
+ * Unlike apiBaseUrl() this has NO dev override: it is for content served by
+ * the same web server as the page itself (Vite's dev middleware locally,
+ * Caddy in production), so the page's own origin is always the right answer.
+ */
+export function apexBaseUrl() {
+  const { protocol, origin, host } = window.location;
+  const bareHost = host.replace(/^(www\.|cdn\.)/, '');
+  return bareHost === host ? origin : `${protocol}//${bareHost}`;
+}
+
+/**
+ * apiBaseUrl() — base URL prefix for every REST fetch() to /api/*.
  *
- * Every fetch() in the app MUST be prefixed with this base — a same-origin
+ * apexBaseUrl() plus the dev override: locally the API runs in a separate
+ * uvicorn process on :8000, not behind the Vite dev server.
+ *
+ * Every fetch() to /api/* MUST be prefixed with this base — a same-origin
  * relative fetch silently regains the CDN double hop for edge visitors.
  */
 export function apiBaseUrl() {
   if (import.meta.env.DEV) return 'http://localhost:8000';
-  const { protocol, origin, host } = window.location;
-  const bareHost = host.replace(/^(www\.|cdn\.)/, '');
-  return bareHost === host ? origin : `${protocol}//${bareHost}`;
+  return apexBaseUrl();
 }

@@ -1,10 +1,119 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import { resolve } from 'path';
+import { resolve, extname, sep } from 'path';
+import { createReadStream, statSync } from 'fs';
+
+/**
+ * Dev-only stand-in for Caddy's `handle /games/*`.
+ *
+ * Game packages live in the repo-root `games/` workspace, deliberately
+ * OUTSIDE client/: they are the mutable half of the site and must not become
+ * part of the engine build or be bundled into dist. Production serves them
+ * from /var/www/drone-navigation/games/; this mirrors the identical URLs on
+ * the Vite dev server so `npm run dev` renders the Plaza with no extra
+ * process and no path rewrite in the client.
+ *
+ * `apply: 'serve'` keeps the whole thing out of `npm run build`.
+ *
+ * Registered directly from configureServer (not via a returned post hook),
+ * so it runs BEFORE Vite's internal middlewares — otherwise the SPA fallback
+ * would answer /games/catalog.json with index.html, exactly the trap the
+ * production Caddyfile avoids by matching /games/* ahead of the catch-all.
+ */
+function gamesWorkspaceDev() {
+  const root = resolve(__dirname, '..', 'games');
+  const MIME = {
+    '.json': 'application/json; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mp3': 'audio/mpeg',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+    '.glb': 'model/gltf-binary',
+    '.gltf': 'model/gltf+json',
+    '.woff2': 'font/woff2',
+  };
+
+  return {
+    name: 'games-workspace-dev',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (!req.url || !req.url.startsWith('/games/')) return next();
+
+        let rel;
+        try {
+          rel = decodeURIComponent(req.url.slice('/games/'.length).split('?')[0]);
+        } catch {
+          res.statusCode = 400;
+          return res.end('bad request');
+        }
+
+        const file = resolve(root, rel);
+        // Containment: a ../ sequence must not reach the rest of the repo.
+        if (file !== root && !file.startsWith(root + sep)) {
+          res.statusCode = 403;
+          return res.end('forbidden');
+        }
+
+        let st;
+        try {
+          st = statSync(file);
+        } catch {
+          res.statusCode = 404;
+          return res.end('not found');
+        }
+        if (!st.isFile()) {
+          res.statusCode = 404;
+          return res.end('not found');
+        }
+
+        const ext = extname(file).toLowerCase();
+        res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
+        res.setHeader('Accept-Ranges', 'bytes');
+        // Same split as production: the catalog and each package's card.json
+        // are mutable and must revalidate; package media is cacheable.
+        res.setHeader(
+          'Cache-Control',
+          ext === '.json' ? 'no-cache' : 'public, max-age=86400'
+        );
+
+        // Single-range support: <video controls preload="metadata"> reads the
+        // moov box first and then seeks with Range requests, so without this
+        // a trailer would only play from the top after buffering whole.
+        const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+        if (m && (m[1] || m[2])) {
+          const suffix = !m[1] && m[2];
+          let start = suffix ? st.size - parseInt(m[2], 10) : parseInt(m[1], 10);
+          let end = suffix || !m[2] ? st.size - 1 : parseInt(m[2], 10);
+          if (start < 0) start = 0;
+          if (end > st.size - 1) end = st.size - 1;
+          if (start > end) {
+            res.statusCode = 416;
+            res.setHeader('Content-Range', `bytes */${st.size}`);
+            return res.end();
+          }
+          res.statusCode = 206;
+          res.setHeader('Content-Range', `bytes ${start}-${end}/${st.size}`);
+          res.setHeader('Content-Length', end - start + 1);
+          return createReadStream(file, { start, end }).pipe(res);
+        }
+
+        res.setHeader('Content-Length', st.size);
+        createReadStream(file).pipe(res);
+      });
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [
     vue(),
+    gamesWorkspaceDev(),
   ],
   resolve: {
     alias: {

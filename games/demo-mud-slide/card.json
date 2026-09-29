@@ -1,0 +1,22 @@
+{
+  "apiVersion": 1,
+  "comment": "Field schema is documented in ../demo-wild-fire/card.json.",
+  "id": "demo-mud-slide",
+  "packageVersion": "0.1.0",
+  "title": {
+    "en": "Mudslide caused by typhoon in Japan, September 2026"
+  },
+  "description": {
+    "en": [
+      "Mudslides and landslides in Japan were triggered by Typhoon Dujuan, which struck the Kanto region and eastern parts of the country in late September 2026.",
+      "The towns of Chiba and Kanagawa (south of Tokyo) were impacted, as well as parts of the Izu Islands.",
+      "Multiple fatalities and missing persons were reported after homes were crushed by mud and debris. This included a fatal mudslide in Yokosuka (Kanagawa Prefecture) and a destructive slide in Mobara (Chiba Prefecture).",
+      "Authorities issued high-level emergency warnings, prompting evacuation orders for over 1.6 million residents across Tokyo and surrounding prefectures."
+    ]
+  },
+  "trailer": "trailer.mp4",
+  "poster": null,
+  "action": {
+    "kind": "play"
+  }
+}

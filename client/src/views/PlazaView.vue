@@ -4,66 +4,67 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import LoadingSpinner from "@shared/LoadingSpinner.vue";
 import { useVideos, cachedPublicVideos } from "@shared-composables/useVideos.js";
-import wildFireMp4 from "../../assets/media/wild_fire.mp4";
-import mudSlideMp4 from "../../assets/media/mud_slide.mp4";
+import {
+  cachedGameCards,
+  listGameCards,
+  cardTitle,
+  cardDescription,
+} from "@shared-composables/useGames.js";
 
-// Plaza: a masonry feed of equal-width rounded cards, one per published
-// video — embedded player on top (YouTube / Bilibili), then title, creation
-// time, author and description, and an "explore in 3D" button that jumps to
-// the 3D Exploration page. The feed is public: anonymous visitors see the
-// same cards as logged-in users.
+// Plaza: a masonry feed of equal-width rounded cards. Game packages lead —
+// each one is a directory in the repo-root games/ workspace, listed by
+// /games/catalog.json and described by its own card.json, so adding or
+// hot-fixing a game never touches this file or the engine bundle. The
+// published flight videos append below them: embedded player on top
+// (YouTube / Bilibili), then title, creation time, author and description,
+// and an "explore in 3D" button that jumps to the 3D Exploration page.
+// Both feeds are public: anonymous visitors see the same cards as logged-in
+// users.
 const { t, locale } = useI18n();
 const router = useRouter();
 const { listPublicVideos } = useVideos();
 
+const games = ref([]);
 const videos = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 
-// Hard-coded test card: a local mp4 shown ahead of the live public feed.
-// It carries only video + title + description (no date / author / route).
-const demoCard = {
-  id: "demo-wild-fire",
-  video: wildFireMp4,
-  title: "Palisades Fire in Los Angeles, 2025",
-  description: [
-    "Santa Ana winds fuel dangerous wildfires in Los Angeles by blowing hot, dry desert air toward the coast and rapidly drying out vegetation.",
-    "The Palisades Fire was a highly destructive wildfire that began in the Santa Monica Mountains of Los Angeles County on January 7, 2025, and grew to destroy large areas of Pacific Palisades, Topanga, and Malibu before it was fully contained on January 31.",
-    "One of a series of wildfires in Southern California driven by extremely powerful Santa Ana winds, it spread to 37 sq mi (95 km2), killed 12 people, and destroyed 6,837 structures, making it the tenth-deadliest and third-most destructive California wildfire on record and the second most destructive to occur in the history of the city of Los Angeles.",
-    "The fire burned simultaneously with the similarly destructive Eaton Fire at the foothills of the nearby San Gabriel Mountains.",
-  ].join("\n\n"),
-};
-
-// Hard-coded test card: a local mp4 shown ahead of the live public feed.
-// It carries only video + title + description (no date / author / route).
-const mudslideCard = {
-  id: "demo-mud-slide",
-  video: mudSlideMp4,
-  title: "Mudslide caused by typhoon in Japan, September 2026",
-  description: [
-    "Mudslides and landslides in Japan were triggered by Typhoon Dujuan, which struck the Kanto region and eastern parts of the country in late September 2026.",
-    "The towns of Chiba and Kanagawa (south of Tokyo) were impacted, as well as parts of the Izu Islands.",
-    "Multiple fatalities and missing persons were reported after homes were crushed by mud and debris. This included a fatal mudslide in Yokosuka (Kanagawa Prefecture) and a destructive slide in Mobara (Chiba Prefecture).",
-    "Authorities issued high-level emergency warnings, prompting evacuation orders for over 1.6 million residents across Tokyo and surrounding prefectures.",
-  ].join("\n\n"),
-};
-
-// The demo cards always lead; the public feed appends below them.
-const cards = computed(() => [demoCard, mudslideCard, ...videos.value]);
+// Render-ready cards. The two feeds carry different field shapes, so they
+// are normalized here and the template only ever sees one. title and
+// description are resolved for the CURRENT locale — a package ships every
+// locale it is translated into, so switching language re-resolves from data
+// already in memory instead of refetching, and depending on locale.value
+// here is what makes that reactive. `kind` picks the button.
+const cards = computed(() => [
+  ...games.value.map((g) => ({
+    kind: "game",
+    id: g.id,
+    video: g.video,
+    poster: g.poster,
+    action: g.action,
+    title: cardTitle(g, locale.value),
+    description: cardDescription(g, locale.value),
+  })),
+  ...videos.value.map((v) => ({ kind: "video", ...v })),
+]);
 
 onMounted(async () => {
-  // Instant paint from the last successful fetch (page changes remount
-  // this view); the GET below silently revalidates.
-  const cached = cachedPublicVideos();
-  if (cached) videos.value = cached;
-  loading.value = !videos.value.length;
-  try {
-    videos.value = await listPublicVideos();
-  } catch {
-    if (!videos.value.length) loadError.value = true;
-  } finally {
-    loading.value = false;
-  }
+  // Instant paint from the last successful fetch — in memory when only the
+  // page changed, from localStorage when the browser was reloaded — while
+  // the two GETs below silently revalidate.
+  games.value = cachedGameCards() || [];
+  videos.value = cachedPublicVideos() || [];
+  loading.value = !cards.value.length;
+
+  // Independent sources: a games outage must not blank the video feed and
+  // vice versa, so they settle together instead of awaiting in sequence.
+  // listGameCards() already keeps the previous cache when every package
+  // fails, so a rejected settle leaves the stale-but-valid cards showing.
+  const [g, v] = await Promise.allSettled([listGameCards(), listPublicVideos()]);
+  if (g.status === "fulfilled") games.value = g.value;
+  if (v.status === "fulfilled") videos.value = v.value;
+  loadError.value = g.status === "rejected" && v.status === "rejected";
+  loading.value = false;
 });
 
 // "Aug 22, 2026, 15:25" (en) / "2026年8月22日 15:25" (zh)
@@ -113,10 +114,17 @@ function embedUrl(v) {
   return null;
 }
 
-// "Play the game" (demo card): client-side navigate to the Play! page so
-// only the main panel swaps — the top bar, left nav, and right assistant
-// stay mounted and static. The in-app intro splash plays over the main
-// panel while Cesium / Google Earth connect.
+// "Play the game": client-side navigate to the Play! page so only the main
+// panel swaps — the top bar, left nav, and right assistant stay mounted and
+// static. The in-app intro splash plays over the main panel while Cesium /
+// Google Earth connect.
+//
+// The card is intentionally NOT passed on: every package currently plays the
+// same hard-coded Palisades scene, and the package root the engine will need
+// is already on the card object (card.baseUrl). It deliberately does not go
+// in the query string either — AerialView watches route.query and re-runs
+// applyPlayQuery on ANY change, so adding a key there is a behaviour change
+// rather than a free annotation.
 function onPlayGame() {
   router.push("/play");
 }
@@ -136,8 +144,9 @@ function onExplore(v) {
 
 <template>
   <div class="plaza-page">
-    <!-- Notes / spinner only when there is nothing to show at all (the
-         hard-coded demo card keeps the page non-empty during testing). -->
+    <!-- Notes / spinner only when there is nothing to show at all. A cached
+         catalog (in memory or in localStorage) suppresses them, so a
+         returning visitor never sees a spinner. -->
     <p v-if="loadError && !cards.length" class="plaza__note">
       {{ t("plazaview.error") }}
     </p>
@@ -154,6 +163,7 @@ function onExplore(v) {
             v-if="v.video"
             class="pcard__video"
             :src="v.video"
+            :poster="v.poster || undefined"
             controls
             preload="metadata"
             playsinline
@@ -174,12 +184,23 @@ function onExplore(v) {
         <div v-if="v.author_name" class="pcard__meta">{{ v.author_name }}</div>
         <div v-if="v.description" class="pcard__desc">{{ v.description }}</div>
 
-        <button v-if="!v.video" class="pcard__explore" @click="onExplore(v)">
-          {{ t("plazaview.explore") }}
-        </button>
-        <!-- Demo card: straight to the Play! page. -->
-        <button v-else class="pcard__explore" @click="onPlayGame">
+        <!-- A game card requests a capability by KIND; the engine owns the
+             kind -> destination mapping, so a package can never name a route
+             or a component. An unknown kind renders no button at all rather
+             than falling back to a guess. -->
+        <button
+          v-if="v.kind === 'game' && v.action === 'play'"
+          class="pcard__explore"
+          @click="onPlayGame"
+        >
           {{ t("plazaview.play_game") }}
+        </button>
+        <button
+          v-else-if="v.kind === 'video'"
+          class="pcard__explore"
+          @click="onExplore(v)"
+        >
+          {{ t("plazaview.explore") }}
         </button>
       </article>
     </div>

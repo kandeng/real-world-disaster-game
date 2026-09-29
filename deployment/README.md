@@ -168,6 +168,40 @@ rsync -avz --delete --chown=clawer:clawer --exclude 'config.json' \
   client/dist/ root@8.221.124.43:/var/www/drone-navigation/client/dist/
 ```
 
+**Game packages deploy separately.** Repo-root `games/` is the mutable half of
+the site and maps to `/var/www/drone-navigation/games/` — deliberately *outside*
+`client/dist`, so a broken package cannot break an app deploy and editing a
+package needs no rebuild. Caddy serves it at `/games/*`
+(see [`deployment/caddy/Caddyfile`](./caddy/Caddyfile)); the URL path mirrors the
+filesystem path exactly, so `/games/x/y` is `/var/www/drone-navigation/games/x/y`
+and there is nothing to translate when debugging a 404.
+
+```bash
+# One-time: create the workspace root beside the existing client/ directory.
+sudo mkdir -p /var/www/drone-navigation/games
+sudo chown clawer:clawer /var/www/drone-navigation/games
+
+# Sync the packages. Deliberately NO --delete: packages published from their
+# own repositories land in this directory too and are not in this repo.
+rsync -avz --chown=clawer:clawer \
+  -e "ssh -i deployment/tls/20260213-8-221-124-43.pem" \
+  games/ root@8.221.124.43:/var/www/drone-navigation/games/
+```
+
+Publishing a change is then edit-and-rsync — no `npm run build`, no Caddy
+reload. Three caching rules decide when visitors see it:
+
+- `games/catalog.json` is served `Cache-Control: no-cache` and revalidates by
+  ETag, so adding, removing or reordering a game is live on the next request.
+- `games/<id>/card.json` is served with a one-day `max-age`, but the client
+  requests it as `card.json?v=<packageVersion>`. **Bump `packageVersion` in
+  `catalog.json` whenever you edit a card**, or returning visitors keep the old
+  copy for up to a day.
+- Package media (`trailer.mp4`, posters, meshes) is *not* version-stamped — a
+  trailer is megabytes and a copy edit must not re-download it. A replaced
+  trailer therefore takes up to a day to reach returning visitors; rename the
+  file and update `card.json` if it must be immediate.
+
 After copying the files, configure Caddy (see the next section) and reload the service:
 
 ```bash
