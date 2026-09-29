@@ -60,12 +60,12 @@ client/public/fpv/
 # Every path below was verified to have NO reference anywhere in client/src,
 # client/components, client/composables, client/scripts, client/index.html,
 # vite.config.js, server/ or deployment/. What IS used stays tracked:
-#   assets/media/wild_fire.mp4, mud_slide.mp4  -> imported by PlazaView.vue
-#   assets/media/teammates/*.svg               -> imported by useTeamRoster.js
 #   assets/media/drone_earth_milkway.mp4, kevtoe_worldview.mp4,
 #   assets/media/palantir_maven.mp4, vantor_world3d.mp4
 #                                              -> scripts/prepare-splash-media.js
 #                                                 mirrors them into public/splash/
+# (wild_fire.mp4 and mud_slide.mp4 left this folder for games/demo-*/trailer.mp4
+#  when the Plaza game cards moved into the games workspace.)
 
 # Placeholder HTML stubs — never loaded by any route or component.
 client/assets/docs/
@@ -77,21 +77,27 @@ client/assets/media/emergency_operations_center.jpeg
 client/assets/media/from_the_new_world.mp3
 client/assets/media/theme_de_fin.mp3
 
+# Teammate avatar placeholders, superseded by the monochrome glyphs in
+# client/icons/ — useTeamRoster.js now imports commander.svg,
+# customer_service.svg, drone_front.svg and tank.svg directly, so the roster and
+# the rest of the UI share one icon language.
+client/assets/media/teammates/
+
 # Vehicle / machine meshes — a ~200 MB local reference library. Nothing in the
-# client imports these yet (useTeamRoster.js only mentions them in a comment
-# about swapping the SVG placeholders for real renders of assets/mesh/*.glb),
-# and the server's .glb code reads server/workspace/meshes/, a different
-# directory. The four already committed here (drone_dji_air3, drone_dji_inspire3,
-# drone_with_camera, lion_lowe) stay tracked: .gitignore never untracks a file
-# that is already in the index, so this only stops the NEW ones being added.
+# client imports these yet, and the server's .glb code reads
+# server/workspace/meshes/, a different directory. The four already committed
+# here (drone_dji_air3, drone_dji_inspire3, drone_with_camera, lion_lowe) stay
+# tracked: .gitignore never untracks a file that is already in the index, so
+# this only stops the NEW ones being added.
 client/assets/mesh/
 
 # Unreferenced glyphs. src/config/IconConfig.js eagerly globs icons/*.svg and
 # icons/*.png, so EVERY file left in this folder is pulled into the bundle
 # whether or not anything renders it (portrait_photo.png alone ships 2.6 MB).
 # The icons that stay tracked are the ones behind an IconMap key some component
-# actually resolves, plus drone.svg / commander.svg / customer_service.svg,
-# which are imported directly by MapView.vue and useTeamRoster.js.
+# actually resolves, plus commander.svg / customer_service.svg / drone_front.svg
+# / tank.svg, which useTeamRoster.js imports directly as teammate avatars, and
+# drone.svg, the map marker in MapView.vue.
 client/icons/account.svg
 client/icons/add.svg
 client/icons/archive.svg

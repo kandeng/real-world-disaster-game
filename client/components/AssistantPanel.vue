@@ -1,15 +1,39 @@
 <script setup>
-import { ref } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useTeamRoster } from '@shared-composables/useTeamRoster.js';
+import { useTeamChat } from '@shared-composables/useTeamChat.js';
 
 const { t } = useI18n();
 
-// Composer draft text only. Sending, streaming and every other piece of
-// internal logic intentionally arrives in a later phase — the buttons are
-// pure layout for now.
+// Composer draft. The transcript it feeds lives in useTeamChat so the history
+// outlives this component instance.
 const draft = ref('');
+
+/* ── Transcript + mention routing ──────────────────────────────────────────
+   Phase A: a teammate the commander @mentions echoes the message back. See
+   useTeamChat.js for which half of that is a smoke test and which half is the
+   permanent routing the real agent will inherit. */
+const { messages, send, displayName, avatarOf } = useTeamChat();
+
+function onSend() {
+  // send() already ignores whitespace-only text, but the draft is cleared ONLY
+  // on a real send — otherwise a lone space would eat what the player typed.
+  if (send(draft.value)) draft.value = '';
+}
+
+// Enter sends; Shift+Enter inserts a newline, since a multi-line order is
+// normal. The composition guard matters here: while a CJK IME composition is
+// open, Enter confirms the candidate list and must NOT ship a half-typed
+// message. Safari reports that state only via the legacy keyCode 229, so both
+// are checked.
+function onInputKeydown(e) {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  if (e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  onSend();
+}
 
 // Team popover: the roster of chatroom teammates (commander, AI staff and
 // one entry per machine agent). Static list for now; the live room arrives
@@ -66,12 +90,45 @@ function onInputDividerKeydown(e) {
   const step = e.shiftKey ? 48 : 16;
   inputHeight.value = clampInputHeight(inputHeight.value + (e.key === 'ArrowUp' ? step : -step));
 }
+
+// Follow the conversation: scroll to the newest message once it is in the DOM.
+// Watching the LENGTH (not the array) is enough because messages are only ever
+// appended, and it avoids a deep watcher over the whole transcript.
+watch(
+  () => messages.value.length,
+  async () => {
+    await nextTick();
+    const el = messagesEl.value;
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+);
 </script>
 
 <template>
   <div class="assistant">
-    <!-- ── Message list: rendering / streaming lands here later ── -->
-    <div ref="messagesEl" class="assistant__messages" />
+    <!-- ── Transcript: the commander's messages right-aligned, teammates left ── -->
+    <div ref="messagesEl" class="assistant__messages">
+      <!-- empty_hint contains `@`, which vue-i18n treats as its linked-message
+           prefix (@:someKey), so the JSON writes it as {'@'} — the same escape
+           AuthFlow uses for "you{'@'}example.com". Without it the message
+           compiler throws "Invalid linked format" on every render, even though
+           the text still appears. Any future string naming a handle needs it. -->
+      <p v-if="!messages.length" class="assistant__empty">{{ t('assistantpanel.empty_hint') }}</p>
+
+      <div v-for="msg in messages" :key="msg.id" class="msg" :class="{ 'msg--own': msg.own }">
+        <img
+          v-if="avatarOf(msg.from)"
+          class="msg__avatar"
+          :src="avatarOf(msg.from)"
+          :alt="displayName(msg.from)"
+          draggable="false"
+        />
+        <div class="msg__body">
+          <div class="msg__name">{{ displayName(msg.from) }}</div>
+          <div class="msg__bubble">{{ msg.text }}</div>
+        </div>
+      </div>
+    </div>
 
     <!-- Draggable divider: its height IS the textbox's ceiling. -->
     <div
@@ -118,6 +175,7 @@ function onInputDividerKeydown(e) {
           rows="3"
           :style="{ height: inputHeight + 'px' }"
           :placeholder="t('assistantpanel.placeholder')"
+          @keydown="onInputKeydown"
         />
 
         <button
@@ -125,6 +183,7 @@ function onInputDividerKeydown(e) {
           type="button"
           :title="t('assistantpanel.send')"
           :aria-label="t('assistantpanel.send')"
+          @click="onSend"
         >
           <ConfigurableIcon name="CHAT_SEND" :size="18" color="#fff" />
         </button>
@@ -184,6 +243,84 @@ function onInputDividerKeydown(e) {
   min-height: 0;
   overflow-y: auto;
   padding: 16px;
+}
+
+.assistant__empty {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #9ca3af;
+}
+
+/* ── Transcript bubbles ── */
+.msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+/* The commander's own messages mirror to the right edge. */
+.msg--own {
+  flex-direction: row-reverse;
+}
+
+.msg__avatar {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  /* contain, never cover: contain is the fit that guarantees the WHOLE viewBox
+     is visible, so nothing is ever cropped by the circular rim.
+
+     padding 3px is load-bearing, not decoration. All four roster glyphs are
+     square-viewBox and centred, so the ink circumradius is what decides the
+     floor: at this 28px box the clip radius is 13px (S/2 - 1px border) and the
+     content box is 20px, which renders ink radii of commander 11.3px,
+     drone_front 10.7px, tank 9.9px, customer_service 8.2px. Tightest is
+     commander.svg, whose floor is padding 1.52px — do not drop below 2px.
+     Re-measure with a rasterizing ink scan if any icon is swapped. */
+  object-fit: contain;
+  padding: 3px;
+  box-sizing: border-box;
+  background: #f3f4f6;
+  border: 1px solid #e5e5ea;
+}
+
+.msg__body {
+  min-width: 0;
+  max-width: 78%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.msg--own .msg__body {
+  align-items: flex-end;
+}
+
+.msg__name {
+  font-size: 0.68rem;
+  color: #6b7280;
+}
+
+.msg__bubble {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: #f3f4f6;
+  color: #111827;
+  border: 1px solid #e5e5ea;
+  /* pre-wrap: a Shift+Enter newline in the draft must survive into the bubble. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg--own .msg__bubble {
+  background: #007aff;
+  border-color: #007aff;
+  color: #ffffff;
 }
 
 /* ── Draggable divider above the composer (was a static border-top) ── */
@@ -323,7 +460,17 @@ function onInputDividerKeydown(e) {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  object-fit: cover;
+  /* contain + padding, matching .msg__avatar. Every roster viewBox is square
+     and centred on its own ink now — tank.svg was re-centred for this, since
+     its stock iconfont box left the tank 18.4% of the frame height too low.
+
+     padding 4px floor: clip radius is 16px (34/2 - 1px border), content box
+     24px, rendered ink radii commander 13.6px / drone_front 12.9px /
+     tank 11.9px / customer_service 9.9px. commander.svg sets the floor at
+     padding 1.87px — do not drop below 2px. */
+  object-fit: contain;
+  padding: 4px;
+  box-sizing: border-box;
   background: #f3f4f6;
   border: 1px solid #e5e5ea;
 }

@@ -9,6 +9,7 @@
   "resize_input": "拖动以调整输入框高度",
   "mate_commander": "总指挥",
   "mate_staff": "参谋",
-  "mate_drone01": "drone01",
-  "mate_tank01": "tank01"
+  "mate_drone": "drone",
+  "mate_tank": "tank",
+  "empty_hint": "给团队留言。用 {'@'}drone 或 {'@'}tank 提及队友，对方会应答。"
 }
