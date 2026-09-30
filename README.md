@@ -13,7 +13,7 @@ drone-navigation/
 ├── client/       # Vue 3 + Vite frontend (Cesium, Google Maps, Street View)
 ├── server/       # FastAPI backend (fastapi-users auth, settings, Matrix token brokering)
 ├── extension/    # Standalone publishers/tools (simple_webcam WHIP ingest, crazyflie_bridge)
-└── deployment/   # Production configs + ops docs (Caddy, Squid, OpenClaw, MediaMTX, Synapse)
+└── deployment/   # Production configs + ops docs (Caddy, Squid, MediaMTX, Synapse)
 ```
 
 ## How it works on Windows (read this first)
@@ -23,7 +23,7 @@ Everything server-side runs **inside WSL2 Ubuntu**; you interact with it from Wi
 Two pieces are the exception:
 
 - **The webcam publisher runs on native Windows Python.** WSL2 has no access to the laptop camera (there is no `/dev/video0`), so `simple_webcam.py` runs in Windows and pushes the stream *into* MediaMTX inside WSL via `127.0.0.1:8889` (the Windows→WSL direction of localhost forwarding).
-- **The Crazyradio PA dongle needs usbipd-win** to pass the USB device into WSL (Section 9).
+- **The Crazyradio PA dongle needs usbipd-win** to pass the USB device into WSL (Section 8).
 
 | Component | Runs in | Port(s) |
 |---|---|---|
@@ -31,7 +31,6 @@ Two pieces are the exception:
 | FastAPI backend | WSL | 8000 |
 | PostgreSQL dev cluster | WSL | 5433 |
 | Synapse (Community chat) | WSL | 8008 |
-| OpenClaw (Customer Service) | WSL | 18789 |
 | MediaMTX (Livestream) | WSL | 8889, 8888, 9997 |
 | simple_webcam publisher | **Windows** | — |
 | crazyflie_bridge (real drone) | WSL (+ usbipd radio) | 8082, 8765 |
@@ -71,7 +70,7 @@ Checkpoint: `node -v`, `npm -v`, `conda --version`, `git --version` all print ve
 ```bash
 cd ~/drone-navigation/client
 npm install
-cp config.example.json config.json   # fill in googleApiKey, cesiumIonToken, openclaw.token
+cp config.example.json config.json   # fill in googleApiKey, cesiumIonToken
 npm run dev
 ```
 
@@ -152,18 +151,7 @@ curl -s -X POST localhost:8008/_matrix/client/v3/login \
 
 **Smoke test:** with two accounts in two browser profiles, `Community -> Chat` DMs flow both ways and survive a reload.
 
-## Section 6. OpenClaw (Customer Service)
-
-```bash
-npm install -g openclaw          # or: pnpm add -g openclaw
-# Configure model provider + gateway token in ~/.openclaw/openclaw.json
-# (see deployment/openclaw/openclaw.json for the reference shape)
-openclaw gateway --port 18789    # foreground; `openclaw gateway install` for a daemon
-```
-
-The SPA connects to `ws://127.0.0.1:18789` — `openclaw.token` in `client/config.json` must match the gateway token in `~/.openclaw/openclaw.json`.
-
-## Section 7. MediaMTX (WSL) + webcam (native Windows)
+## Section 6. MediaMTX (WSL) + webcam (native Windows)
 
 **MediaMTX — inside WSL:**
 
@@ -198,7 +186,7 @@ Which stream the SPA plays is decided by the backend at runtime (`server/config.
 
 **Smoke test:** `Real Drone -> Livestream Viewer` plays the webcam; the green `crazyflie-drone - HH:MM:SS` overlay ticks.
 
-## Section 8. Whole-system smoke test
+## Section 7. Whole-system smoke test
 
 ```bash
 curl http://localhost:8000/api/health              # {"status":"ok"}
@@ -210,10 +198,9 @@ Browser checklist at `http://localhost:5173`:
 1. `My Space -> Account`: register + sign in.
 2. `My Space -> Settings`: change a value, click `Save` → green "saved" banner.
 3. `Community -> Chat`: two accounts exchange DMs; reload → history persists.
-4. `Community -> Customer Service`: connects to the local OpenClaw gateway.
-5. `Real Drone -> Livestream Viewer` (and `Host`): plays the Section 7 broadcast.
+4. `Real Drone -> Livestream Viewer` (and `Host`): plays the Section 6 broadcast.
 
-## Section 9. Real Crazyflie drone (usbipd-win + crazyflie_bridge)
+## Section 8. Real Crazyflie drone (usbipd-win + crazyflie_bridge)
 
 **New to the Crazyflie?** Start with [`extension/simple_crazyflie/README.md`](extension/simple_crazyflie/README.md) — it walks you through connecting your computer to the drone, reading its telemetry, and then flying it, one step at a time.
 
@@ -273,7 +260,7 @@ Safety rules that are always in effect:
 - Takeoff is **refused on a USB cable** (`usb://*`); flight goes over the Crazyradio only. (Using `usb://0` in WSL also requires attaching the drone's USB cable via usbipd.)
 - **Multiple drones in one room:** the default URI is for SOLO use — provision each drone with its own channel/address (steps above) and fly only on it.
 
-## Section 10. Daily workflow + troubleshooting
+## Section 9. Daily workflow + troubleshooting
 
 Start order each session (one WSL terminal tab each, except the webcam in Windows PowerShell):
 
@@ -281,11 +268,10 @@ Start order each session (one WSL terminal tab each, except the webcam in Window
 /usr/lib/postgresql/$(ls /usr/lib/postgresql)/bin/pg_ctl -D ~/pgdata -l ~/pgdata.log start
 cd ~/drone-navigation/server && conda activate drone-navigation && uvicorn app.main:app --reload --port 8000
 nohup ~/synapse-venv/bin/python -m synapse.app.homeserver -c ~/synapse-data/homeserver.yaml &
-openclaw gateway --port 18789
 ~/mediamtx_v1.9.0/mediamtx
 cd ~/drone-navigation/client && npm run dev
 # Windows PowerShell: cd $HOME\simple_webcam; $env:MEDIAMTX_URL=...; py simple_webcam.py
-# Real drone: Section 9 (usbipd attach first)
+# Real drone: Section 8 (usbipd attach first)
 ```
 
 Stop: Ctrl+C each process; `pg_ctl -D ~/pgdata stop` for PostgreSQL.
