@@ -117,9 +117,23 @@ export function useTeamChat() {
     return { text: body, replies: responders.map((mate) => mate.id) };
   }
 
+  /**
+   * Post a screenshot from the commander (the assistant's Screenshot button;
+   * in Steer it carries the freeze-pen annotations). Images get no echo
+   * reply: the Phase A echo is a TEXT smoke test, and the annotated still is
+   * meant for the vision agent that replaces `replyFrom()` — until then the
+   * transcript simply holds it.
+   * @param {string} image PNG data URL
+   * @returns {object|null} the appended message, or null if the input was bad
+   */
+  function sendImage(image) {
+    if (typeof image !== 'string' || !image.startsWith('data:image/')) return null;
+    return append(COMMANDER_ID, '', { image });
+  }
+
   function clear() {
     messages.value = [];
   }
 
-  return { messages, send, clear, mentionedMates, respondersFor, displayName, avatarOf };
+  return { messages, send, sendImage, clear, mentionedMates, respondersFor, displayName, avatarOf };
 }

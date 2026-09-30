@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useTeamRoster } from '@shared-composables/useTeamRoster.js';
 import { useTeamChat } from '@shared-composables/useTeamChat.js';
+import { useSteerFreezePen } from '@shared-composables/useSteerFreezePen.js';
 
 const { t } = useI18n();
 
@@ -16,7 +17,29 @@ const draft = ref('');
    the commander @mentions, or Staff when the message mentions nobody. See
    useTeamChat.js for which half of that is a smoke test and which half is the
    permanent routing the real agent will inherit. */
-const { messages, send, displayName, avatarOf } = useTeamChat();
+const { messages, send, sendImage, displayName, avatarOf } = useTeamChat();
+
+/* ── Screenshot button ──────────────────────────────────────────────
+   Frozen Steer FPV (a pencil is armed): composites the still + the drawn
+   lines/curves into ONE PNG, posts it here as the commander's message, and
+   releases the freeze — the marks disappear and the live view resumes at
+   the drone's current pose. Anywhere else: a plain frame of the viewport.
+   The guard makes the async capture single-shot (double-click safe). */
+const { captureForChat } = useSteerFreezePen();
+let capturing = false;
+
+async function onCapture() {
+  if (capturing) return;
+  capturing = true;
+  try {
+    const shot = await captureForChat();
+    if (shot) sendImage(shot);
+  } catch (err) {
+    console.error('[AssistantPanel] Screenshot failed:', err);
+  } finally {
+    capturing = false;
+  }
+}
 
 function onSend() {
   // send() already ignores whitespace-only text, but the draft is cleared ONLY
@@ -126,7 +149,19 @@ watch(
         />
         <div class="msg__body">
           <div class="msg__name">{{ displayName(msg.from) }}</div>
-          <div class="msg__bubble">{{ msg.text }}</div>
+          <div class="msg__bubble" :class="{ 'msg__bubble--shot': msg.image }">
+            <!-- Screenshot message: the PNG itself is the payload (download
+                 link around it); the text bubble styling would only pad it. -->
+            <a v-if="msg.image" :href="msg.image" :download="`screenshot-${msg.id}.png`">
+              <img
+                class="msg__shot"
+                :src="msg.image"
+                :alt="t('assistantpanel.capture_viewer')"
+                draggable="false"
+              />
+            </a>
+            <template v-else>{{ msg.text }}</template>
+          </div>
         </div>
       </div>
     </div>
@@ -209,6 +244,7 @@ watch(
           type="button"
           :title="t('assistantpanel.capture_viewer')"
           :aria-label="t('assistantpanel.capture_viewer')"
+          @click="onCapture"
         >
           <ConfigurableIcon name="CHAT_CAPTURE" :size="18" />
         </button>
@@ -322,6 +358,24 @@ watch(
   background: #007aff;
   border-color: #007aff;
   color: #ffffff;
+}
+
+/* Screenshot bubble: neutral frame around the image (the blue own-message
+   fill would tint nothing but look wrong as a thick border), tight padding,
+   and the image itself capped so a full-viewport still stays readable in
+   the narrow transcript column. Click = download the PNG. */
+.msg__bubble--shot,
+.msg--own .msg__bubble--shot {
+  background: #ffffff;
+  border-color: #e5e5ea;
+  padding: 4px;
+}
+
+.msg__shot {
+  display: block;
+  max-width: 260px;
+  max-height: 180px;
+  border-radius: 8px;
 }
 
 /* ── Draggable divider above the composer (was a static border-top) ── */

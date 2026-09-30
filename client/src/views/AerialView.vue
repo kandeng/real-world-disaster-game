@@ -9,7 +9,7 @@ import { MapView } from '@/2d_map/index.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
 import { useRouteAutopilot } from '@shared-composables/useRouteAutopilot.js';
-import { useCesiumPen } from '@shared-composables/useCesiumPen.js';
+import { useSteerFreezePen } from '@shared-composables/useSteerFreezePen.js';
 import { useRoutes } from '@shared-composables/useRoutes.js';
 import { useVideos } from '@shared-composables/useVideos.js';
 import { useDrone } from '@shared-composables/useDrone.js';
@@ -931,6 +931,14 @@ function onCanvasWheel() {
 }
 
 function pushCameraPose(pose) {
+  // Steer FPV freeze (pencil session): the still screenshot owns the screen,
+  // so the drone follow must not move the live camera underneath it. Dropping
+  // the cached pose makes the first push after the release snap straight to
+  // the drone's NEW pose — the accepted post-freeze "jump".
+  if (fpvFrozen.value) {
+    lastPushedPose = null;
+    return;
+  }
   if (mouseOwnsCamera) {
     if (canvasPointerDown || performance.now() - lastCanvasInputTs < CAMERA_IDLE_REPIN_MS) return;
     mouseOwnsCamera = false; // idle window elapsed — hand the camera back below
@@ -1137,29 +1145,61 @@ watch(isPlanView, (plan) => {
   if (item) item.active = plan;
 });
 
-// ── Pencil toolbox state (Plan 2D map + Steer 3D globe) ────────────────
+// ── Pencil toolbox state (Plan 2D map + Steer FPV freeze) ──────────────
 // The toolbox is controlled from here; two pen engines draw and report their
-// mark counts: MapView (Google polylines) and useCesiumPen (Cesium entities).
-// The toolbox shows the ACTIVE view's count; Clear wipes both engines.
+// mark counts: MapView (Google polylines — geographic marks on the Plan map)
+// and the Steer freeze pen. Arming any pen in Steer FREEZES the drone FPV
+// into a still 2D screenshot which the commander annotates in screen space;
+// the chat's Screenshot button sends the marked still to the transcript and
+// releases the freeze (see useSteerFreezePen.js). The toolbox shows the
+// ACTIVE view's count; Clear wipes both engines.
 const penTool = ref(null);
 const penInk = ref('#ff3b30');
 const penMarkCount2D = ref(0);
-const penMarkCount3D = ref(0);
+const {
+  frozen: fpvFrozen,
+  snapshotUrl: fpvSnapshot,
+  markCount: penMarkCount3D,
+  beginFreeze,
+  endFreeze,
+  bindCanvas: bindFreezeCanvas,
+  clearMarks: clearFreezeMarks,
+  pointerDown: freezePenDown,
+  pointerMove: freezePenMove,
+  pointerUp: freezePenUp,
+  setStreetViewProvider,
+} = useSteerFreezePen();
 const penMarkCount = computed(() =>
   isSteerView.value ? penMarkCount3D.value : penMarkCount2D.value
 );
 
-const { clearMarks: clearCesiumPenMarks } = useCesiumPen({
-  active: isSteerView,
-  tool: penTool,
-  color: penInk,
-  onMarksChange: (n) => {
-    penMarkCount3D.value = n;
-  },
+// The freeze snapshot (and the assistant's plain Screenshot) must show what
+// the commander actually sees: the Street View panorama blended over the 3D
+// tiles at the live crossfade opacity while the FPV is on the ground leg.
+setStreetViewProvider(() =>
+  !isStreet.value && svPaneState.value.visible && streetViewReady.value
+    ? svPaneState.value.opacity
+    : 0
+);
+
+// Arming a pen in Steer freezes the FPV; putting the pen away (the toolbox
+// freeze button, or leaving Steer) releases the freeze and drops the marks.
+watch([isSteerView, penTool], ([steer, tool]) => {
+  if (steer && tool) {
+    if (!fpvFrozen.value) beginFreeze();
+  } else if (fpvFrozen.value) {
+    endFreeze();
+  }
+});
+
+// The chat's Screenshot button releases the freeze after submitting; the pen
+// follows suit so the toolbox never shows an armed tool over a live view.
+watch(fpvFrozen, (f) => {
+  if (!f) penTool.value = null;
 });
 
 // Leaving both drawing surfaces puts the pens away (each engine drops its
-// own work: MapView on unmount, useCesiumPen once it goes inactive).
+// own work: MapView on unmount, the freeze pen when the freeze releases).
 watch(penViews, (on) => {
   if (!on) penTool.value = null;
 });
@@ -1172,7 +1212,18 @@ function onPenInkChange(color) {
 }
 function onPenClear() {
   mapViewRef.value?.clearPenMarks();
-  clearCesiumPenMarks();
+  clearFreezeMarks();
+}
+
+// Overlay-canvas input, forwarded to the freeze pen with the armed tool/ink.
+function onFreezePointerDown(e) {
+  freezePenDown(e, penTool.value, penInk.value);
+}
+function onFreezePointerMove(e) {
+  freezePenMove(e);
+}
+function onFreezePointerUp(e) {
+  freezePenUp(e);
 }
 
 onMounted(() => {
@@ -1271,6 +1322,9 @@ onUnmounted(() => {
   stopPlay();
   stopPlayLoading();
   resetRecorder();
+  // A freeze session must never outlive the view: it stops the camera push
+  // and holds a full-viewport overlay.
+  endFreeze();
   stopFlightKeyboard();
   stopCameraKeyboard();
   if (rafId) cancelAnimationFrame(rafId);
@@ -1356,6 +1410,27 @@ onUnmounted(() => {
         :style="{ opacity: svPaneState.opacity }"
         @ready="streetViewReady = true"
       />
+      <!-- Steer FPV freeze: while a pencil is armed the live globe is
+           replaced by its still screenshot, and annotations are drawn on
+           that still in screen space. The chat's Screenshot button sends
+           the marked still and releases the freeze; the view then jumps to
+           the drone's current pose. -->
+      <div v-if="fpvFrozen" class="fpv-freeze">
+        <img
+          v-if="fpvSnapshot"
+          class="fpv-freeze__shot"
+          :src="fpvSnapshot"
+          alt=""
+          draggable="false"
+        />
+        <canvas
+          :ref="bindFreezeCanvas"
+          class="fpv-freeze__ink"
+          @pointerdown="onFreezePointerDown"
+          @pointermove="onFreezePointerMove"
+          @pointerup="onFreezePointerUp"
+        />
+      </div>
     </template>
 
     <template #top-overlay>
@@ -1663,5 +1738,36 @@ onUnmounted(() => {
   .search-panel {
     right: 96px;
   }
+}
+
+/* ── Steer FPV freeze overlay (pencil screenshot session) ──
+   Composer background layer: above the Cesium canvas / Street View pane,
+   below every control (joystick area z 5, pens toolbox z 6, docks above),
+   so the toolbox, chat and flight disks stay usable while the FPV is frozen
+   and the drone keeps flying. */
+.fpv-freeze {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: auto;
+  overflow: hidden;
+  background: #000;
+}
+
+.fpv-freeze__shot,
+.fpv-freeze__ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fpv-freeze__shot {
+  user-select: none;
+}
+
+.fpv-freeze__ink {
+  touch-action: none;
+  cursor: crosshair;
 }
 </style>

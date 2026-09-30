@@ -108,6 +108,79 @@ function captureScreenshot() {
 }
 
 // ---------------------------------------------------------------------------
+// One-shot viewport frame (PNG data URL) — Cesium + Street View composite
+// ---------------------------------------------------------------------------
+
+// Wait (bounded) for the Street View pipe to present its first frame. The
+// panorama canvas feeds a captureStream, so a freshly built pipe needs a
+// moment before the off-DOM video has a readable frame; on timeout the
+// caller falls back to the Cesium layer only.
+function waitForSvFrame(video, timeoutMs = 700) {
+  if (video.readyState >= 2 && video.videoWidth > 0) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    const poll = () => {
+      if (done) return;
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        finish(true);
+        return;
+      }
+      requestAnimationFrame(poll);
+    };
+    poll();
+  });
+}
+
+/**
+ * Capture the CURRENT viewport as a PNG data URL: the Cesium canvas (a
+ * synchronous render keeps the WebGL drawing buffer valid) with the Street
+ * View panorama blended on top at `streetViewOpacity` (the same crossfade
+ * opacity the live view uses; 0 = 3D tiles only). Returns null when the
+ * viewer is not ready. Unlike captureScreenshot() nothing is downloaded —
+ * callers (Steer freeze pen, assistant Screenshot button) own the result.
+ */
+async function captureViewerFrame(streetViewOpacity = 0) {
+  const viewer = getViewer();
+  if (!viewer || !viewer.canvas || viewer.canvas.width === 0) {
+    console.warn('[ScreenCapture] Cesium viewer is not ready; frame capture skipped.');
+    return null;
+  }
+  viewer.render();
+  const src = viewer.canvas;
+  const out = document.createElement('canvas');
+  out.width = src.width;
+  out.height = src.height;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(src, 0, 0);
+
+  const opacity = Math.min(1, Math.max(0, streetViewOpacity || 0));
+  if (opacity > 0) {
+    const video = getStreetViewVideo();
+    if (video && (await waitForSvFrame(video))) {
+      try {
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(video, 0, 0, out.width, out.height);
+        ctx.globalAlpha = 1;
+      } catch (err) {
+        // Unreadable Street View source: keep the Cesium-only frame rather
+        // than failing the whole capture (the recorder's streetViewBlocked
+        // latch is deliberately NOT touched — it belongs to that session).
+        ctx.globalAlpha = 1;
+        console.warn('[ScreenCapture] Street View frame not readable; captured 3D tiles only.', err);
+      }
+    }
+  }
+  return out.toDataURL('image/png');
+}
+
+// ---------------------------------------------------------------------------
 // Telemetry recording (state: recording)
 // ---------------------------------------------------------------------------
 
@@ -578,6 +651,7 @@ export function useScreenCapture() {
     replayProgress,
     replayPov,
     captureScreenshot,
+    captureViewerFrame,
     sampleFrame,
     toggleRecorder,
     cancelReplay,
