@@ -1,6 +1,6 @@
 # MediaMTX (Livestream) — WHIP/WHEP :8889, HLS :8888, control API 127.0.0.1:9997.
 [Unit]
-Description=MediaMTX media server (drone-navigation, WHIP/WHEP :8889)
+Description=MediaMTX media server (real-world-disaster-game, WHIP/WHEP :8889)
 After=network.target
 
 [Service]

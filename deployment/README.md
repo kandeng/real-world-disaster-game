@@ -2,6 +2,8 @@
 
 This document describes how the `drone-navigation` project is deployed and operated in production.
 
+> **Naming — read before any rename sweep.** `drone-navigation` in this document is the *product and deployment identity*: the domain `drone-navigation.com`, the ECS web root `/var/www/drone-navigation`, the clone target `~/drone-navigation`, and the conda env `drone-navigation`. Only the Git **repository** was renamed (to `real-world-disaster-game`); the production paths, units and domain deliberately keep the legacy name. [`deployment/fastapi/drone-fastapi.service`](./fastapi/drone-fastapi.service) and [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) hardcode those paths, and the `kandeng/drone-navigation.git` clone URL below still resolves through GitHub's rename redirect — so renaming them here would break the next deployment, not fix it.
+
 
 # 1. Domain Name
 
@@ -375,6 +377,7 @@ Chat behavior is controlled by the `"chat"` block in `server/config.json`:
   "api_key": "CHANGE_ME_bailian_api_key",
   "max_tokens": 2048,
   "retention_days": 10,
+  "dsh_provider": "bailian",
   "dsh_session_root": ""
 }
 ~~~
@@ -384,13 +387,21 @@ Chat behavior is controlled by the `"chat"` block in `server/config.json`:
 | `engine` | `auto` tries DshEngine first, then falls back to BailianEngine; a specific engine can also be forced. |
 | `model` | Default model used for chat replies. |
 | `models` | Model list offered to the client. |
-| `bailian_base_url` | Bailian OpenAI-compatible endpoint used by the fallback engine. |
-| `api_key` | API key for the configured endpoint. |
+| `bailian_base_url` | Bailian OpenAI-compatible endpoint. **Both** engines use it: DshEngine through the `llm-pi-ai` adapter, BailianEngine by posting `{base}/chat/completions` itself. |
+| `api_key` | API key for the configured endpoint. DshEngine receives it as the `BAILIAN_API_KEY` variable of its runtime subprocess, so it is never written into a generated file. |
 | `max_tokens` | Maximum tokens per reply. |
 | `retention_days` | Days to keep chat transcripts before the hourly sweep deletes them. |
+| `dsh_provider` | Provider key the DSH route is registered under in the generated cordis; must match the `provider` the SDK is initialized with. Defaults to `bailian`. |
 | `dsh_session_root` | Optional directory for DeepSeek Harness session state; empty uses the default. |
 
-> **Note:** the endpoint must match the API-key type: a Coding-Plan key (`sk-sp-...`) requires the coding endpoint, while a Token-Plan key requires the token-plan endpoint.
+> **Note — the key, the endpoint and the dialect.** The `sk-sp-...` key is a company-issued **coding-suite** credential. It cannot be created or rotated from this project, so treat it as long-lived and keep it out of git (only `config.example.json` is committed). It authenticates against the host `token-plan.cn-beijing.maas.aliyuncs.com`, which serves two API dialects on different paths:
+>
+> | Path | Dialect | Used here by |
+> | --- | --- | --- |
+> | `/compatible-mode/v1/chat/completions` | OpenAI-compatible | **both engines** — this is `chat.bailian_base_url` |
+> | `/apps/anthropic/v1/messages` | Anthropic Messages | nothing (verified reachable, listed for reference) |
+>
+> DSH must reach the gateway through the **`llm-pi-ai`** adapter (`api: openai-completions`). The `llm-deepseek` adapter speaks the Anthropic dialect instead and gets **HTTP 404** from this gateway — and because `stream_reply` catches that and falls back to BailianEngine, the failure is silent apart from a `dsh engine failed, falling back to bailian` log line. The route shape in the generated cordis (provider block, `compat.thinkingFormat: qwen`, `compat.supportsDeveloperRole: false`, `reasoning` / `reasoningEfforts`) is copied from the manually verified `bailian.patch.yml` of the `mesh-controller-codegen` project. `supportsDeveloperRole: false` is load-bearing: this gateway rejects a `developer` system role with `400 invalid_parameter_error`, which would kill every turn before the model saw it.
 
 &nbsp;
 ### 3. Restart and verify
@@ -415,6 +426,14 @@ curl -X DELETE 'https://drone-navigation.com/api/chat/context?page=2d_map' -H 'X
 ~~~
 
 An hourly retention sweep (`chat_sweep_loop`, started with `drone-fastapi`) deletes `chat_context` rows older than `retention_days`.
+
+A streamed reply does **not** by itself prove DshEngine answered — BailianEngine produces the same SSE stream. To confirm which engine served a turn, look for the fallback warning:
+
+~~~
+sudo journalctl -u drone-fastapi --since '-10 min' | grep -E 'dsh engine (failed|returned no text)'
+~~~
+
+No matches means DshEngine served it. Its per-page composition is generated (never committed) at `server/.dsh_sessions/cordis/<page>.yml`; that file carries a `# cordis-version: N` marker and is rewritten automatically whenever the template in `chat_engine.py` changes, so no manual cleanup is needed after an upgrade.
 
 
 &nbsp;

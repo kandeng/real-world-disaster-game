@@ -2,7 +2,7 @@
 # Install: cp deployment/local-systemd/*.service ~/.config/systemd/user/
 #          systemctl --user daemon-reload
 [Unit]
-Description=PostgreSQL dev cluster (drone-navigation, port 5433)
+Description=PostgreSQL dev cluster (real-world-disaster-game, port 5433)
 After=network.target
 
 [Service]

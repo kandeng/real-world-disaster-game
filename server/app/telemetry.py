@@ -3,11 +3,14 @@
 Mirrors the livestream video topology: the drone is tethered to a desktop,
 so telemetry must travel desktop -> server -> browsers:
 
-    motion_control_ws.py (owns the Crazyflie link, ws://:8765)
-      -> extension/crazyflie_bridge/telemetry_relay.py  (WS client, publish)
-        -> WS /api/drone/telemetry/publish              (this module, ingest)
-          -> WS /api/drone/telemetry                    (this module, fan-out)
-            -> SPA useDroneTelemetry -> HUD (Real Drone -> Livestream Host)
+    desktop-side drone bridge (owns the Crazyflie radio link)
+      -> WS /api/drone/telemetry/publish              (this module, ingest)
+        -> WS /api/drone/telemetry                    (this module, fan-out)
+          -> SPA useDroneTelemetry -> HUD (Real Drone -> Livestream Host)
+
+The publisher is an external desktop process that speaks the protocol below:
+this module neither imports nor spawns it, so both endpoints stay up when
+nothing is publishing and simply report "no link" (nulls) to the SPA.
 
 Both endpoints sit under ``/api`` so the existing Caddy reverse-proxy rule
 (WebSocket upgrade is automatic) covers them — identical URLs in dev and

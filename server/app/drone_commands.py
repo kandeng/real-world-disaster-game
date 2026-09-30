@@ -6,13 +6,13 @@ browser -> server -> desktop -> drone:
     SPA useDroneCommands (Real Drone -> Livestream Host, Takeoff/Landing)
       -> WS /api/drone/command             (this module, browser side)
         -> WS /api/drone/command/downlink  (this module, relay side)
-          -> extension/crazyflie_bridge/telemetry_relay.py command_forwarder()
-            -> motion_control_ws.py (owns the Crazyflie link, ws://:8765)
+          -> desktop-side drone bridge (subscribes to the downlink and owns
+             the Crazyflie radio link)
 
 Kept deliberately separate from telemetry.py: commands are validated against
-a strict whitelist (action + numeric clamps mirroring
-motion_control_ws._handle_command) before they are forwarded — the server
-never relays arbitrary payloads to the drone.
+a strict whitelist (action + numeric clamps matching the schema the desktop
+bridge accepts) before they are forwarded — the server never relays arbitrary
+payloads to the drone.
 
 Downlink auth: same shared secret as telemetry publish
 (config.json -> "drone" -> "telemetry_token", passed as ?token=...).
@@ -55,7 +55,7 @@ def _clamp(value, lo, hi, default):
 def _validate(raw: dict) -> dict | None:
     """Whitelist + clamp an incoming command; None = reject.
 
-    Mirrors the accepted schema and clamps of motion_control_ws._dispatch_command
+    Mirrors the schema and clamps the desktop-side drone bridge accepts
     (note: the bridge spells the yaw field "yawrate").
     """
     if not isinstance(raw, dict):

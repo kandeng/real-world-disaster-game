@@ -10,8 +10,8 @@ deployment/tls/
 # deployment/acert is the cookie jar curl writes when invoked as `curl -c acert`
 # from inside deployment/ (used while probing the ECS01 endpoints). It is a
 # Netscape-format cookie file and can hold live session credentials, so it must
-# never be committed. The file itself was deleted during the deployment/ +
-# extension/ audit, but the rule STAYS: the next curl run recreates it.
+# never be committed. The file itself was deleted during the deployment/ audit,
+# but the rule STAYS: the next curl run recreates it.
 # (Contrast the public/fpv/ note below, where the rule was removed on purpose.)
 deployment/acert
 server/local_dev.db
@@ -66,11 +66,6 @@ client/public/splash/*.mp3
 # copying 6.6 MB into dist/ for nothing. The ignore rule left with the folder
 # on purpose: silently ignoring public/fpv/ would trap a future FPV feature,
 # whose clips would then bundle on this machine yet never reach a fresh clone.
-#
-# UPDATE (same audit): the four masters at extension/assets/fpv_*.mp4 — 6.6 MB,
-# the only other copy — were deleted too, after confirming that nothing in the
-# repo references them either. They are still recoverable from git history:
-# commit 5d9fa4f, "real-drone: ... FPV splash overlay under docks/Flight disk".
 
 # client/assets/media/ holds the master copies that the build actually needs.
 # The unused ones are listed in the section below instead of being tracked.
@@ -199,14 +194,3 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 logs/
-
-# cflib parameter cache — DO NOT DELETE WHEN TIDYING; just keep it untracked.
-# Crazyflie(rw_cache='./cache') appears at 7 call sites across extension/
-# (simple_crazyflie/01_connect, 02_telemetry, 03_propellers, 04_flying, and
-# crazyflie_bridge/provision_drone.py + motion_control_ws.py). The JSON files
-# are keyed by real drone radio IDs (67270310, C931D955) and hold each drone's
-# parameter TOC, so a connect does not have to re-sync ~60-95 KB over the radio.
-# Regenerable in principle, but only by talking to the physical drone — unlike
-# __pycache__ these are live hardware state, not a build artifact.
-extension/crazyflie_bridge/cache/
-extension/simple_crazyflie/cache/
