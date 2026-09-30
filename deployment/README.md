@@ -390,7 +390,7 @@ Chat behavior is controlled by the `"chat"` block in `server/config.json`:
 | `retention_days` | Days to keep chat transcripts before the hourly sweep deletes them. |
 | `dsh_session_root` | Optional directory for DeepSeek Harness session state; empty uses the default. |
 
-> **Note:** the endpoint must match the API-key type: a Coding-Plan key (`sk-sp-...`) requires the coding endpoint, while a Token-Plan key requires the token-plan endpoint. Verify key/endpoint pairing with [`deployment/openclaw/test_bailian_access.py`](./openclaw/test_bailian_access.py).
+> **Note:** the endpoint must match the API-key type: a Coding-Plan key (`sk-sp-...`) requires the coding endpoint, while a Token-Plan key requires the token-plan endpoint.
 
 &nbsp;
 ### 3. Restart and verify
