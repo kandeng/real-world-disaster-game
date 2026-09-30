@@ -40,6 +40,7 @@
     "api_key": "CHANGE_ME_bailian_api_key",
     "max_tokens": 2048,
     "retention_days": 10,
+    "dsh_provider": "bailian",
     "dsh_session_root": ""
   }
 }
