@@ -125,7 +125,12 @@ export default defineConfig({
       '@shared-composables': resolve(__dirname, 'composables'),
       'vue-i18n': resolve(__dirname, 'node_modules/vue-i18n/dist/vue-i18n.esm-bundler.js'),
       'vue': resolve(__dirname, 'node_modules/vue/dist/vue.esm-bundler.js'),
-      'vue-router': resolve(__dirname, 'node_modules/vue-router/dist/vue-router.esm-bundler.js'),
+      // NO 'vue-router' alias: vue-router 4.6 turned dist/vue-router.esm-bundler.js
+      // into a 2-line shim that only console.warns and re-exports vue-router.mjs.
+      // Letting the package's own `exports` map resolve 'vue-router' gives the
+      // exact same module without the deprecation warning. (The vue / vue-i18n
+      // aliases above stay: those esm-bundler files are the REAL builds that
+      // honour the feature flags.)
     },
   },
   server: {
