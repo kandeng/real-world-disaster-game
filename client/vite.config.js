@@ -115,6 +115,9 @@ export default defineConfig({
     vue(),
     gamesWorkspaceDev(),
   ],
+  // NOTE: no assetsInclude for .glb — the fleet machine meshes moved out of
+  // client/ into the games/<id>/ packages and are fetched at runtime by URL
+  // (useFleet.js), so the engine bundle never imports a binary asset again.
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),

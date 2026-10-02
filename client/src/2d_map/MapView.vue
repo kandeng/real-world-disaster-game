@@ -4,11 +4,12 @@ import { useI18n } from 'vue-i18n';
 import { acquireMap, releaseMap } from './mapSingleton.js';
 import { splinePath } from './spline.js';
 import droneIconUrl from '../../icons/drone.svg';
-// Team-marker glyphs are inlined into a composed badge SVG (white disc +
-// ring + the monochrome icon) so the markers stay readable on BOTH the
-// terrain and the satellite base layers. A data-URL SVG cannot reference
-// external files, hence the ?raw source imports.
-import droneGlyphRaw from '../../icons/drone.svg?raw';
+// Team-marker avatars are the SAME svg files the chat Team popover shows
+// (useTeamRoster): the drone's front elevation and the tank glyph, inlined
+// into a composed badge SVG (white disc + ring + avatar) so the markers stay
+// readable on BOTH the terrain and the satellite base layers. A data-URL SVG
+// cannot reference external files, hence the ?raw source imports.
+import droneGlyphRaw from '../../icons/drone_front.svg?raw';
 import tankGlyphRaw from '../../icons/tank.svg?raw';
 
 const { t, locale } = useI18n();

@@ -8,6 +8,7 @@ import {
   listGameCards,
   cardTitle,
   cardDescription,
+  setActiveGamePackage,
 } from "@shared-composables/useGames.js";
 
 // Plaza: a masonry feed of equal-width rounded cards, one per game package.
@@ -42,6 +43,7 @@ const cards = computed(() =>
     video: g.video,
     poster: g.poster,
     action: g.action,
+    baseUrl: g.baseUrl,
     title: cardTitle(g, locale.value),
     description: cardDescription(g, locale.value),
   })),
@@ -70,13 +72,15 @@ onMounted(async () => {
 // static. The in-app intro splash plays over the main panel while Cesium /
 // Google Earth connect.
 //
-// The card is intentionally NOT passed on: every package currently plays the
-// same hard-coded Palisades scene, and the package root the engine will need
-// is already on the card object (card.baseUrl). It deliberately does not go
-// in the query string either — AerialView watches route.query and re-runs
-// applyPlayQuery on ANY change, so adding a key there is a behaviour change
-// rather than a free annotation.
-function onPlayGame() {
+// The card itself is intentionally NOT passed on the route: every package
+// currently plays the same hard-coded Palisades scene, and AerialView watches
+// route.query and re-runs applyPlayQuery on ANY change, so a query-string key
+// would be a behaviour change rather than a free annotation. But the engine
+// DOES need the clicked package's root to load its owned assets (the fleet
+// meshes live beside card.json), so the click records it in useGames' module
+// state, which outlives this view's unmount.
+function onPlayGame(card) {
+  setActiveGamePackage(card?.baseUrl);
   router.push("/play");
 }
 </script>
@@ -120,7 +124,7 @@ function onPlayGame() {
         <button
           v-if="v.kind === 'game' && v.action === 'play'"
           class="pcard__cta"
-          @click="onPlayGame"
+          @click="onPlayGame(v)"
         >
           {{ t("plazaview.play_game") }}
         </button>

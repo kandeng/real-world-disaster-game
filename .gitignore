@@ -101,11 +101,14 @@ client/assets/media/theme_de_fin.mp3
 # client/composables/useTeamRoster.js before adding or replacing one.
 
 # Vehicle / machine meshes — a ~200 MB local reference library. Nothing in the
-# client imports these yet, and the server's .glb code reads
-# server/workspace/meshes/, a different directory. The four already committed
-# here (drone_dji_air3, drone_dji_inspire3, drone_with_camera, lion_lowe) stay
-# tracked: .gitignore never untracks a file that is already in the index, so
-# this only stops the NEW ones being added.
+# client imports from here: the fleet's two machine meshes MOVED OUT to
+# games/demo-wild-fire/ and games/demo-mud-slide/ (a game package carries every
+# asset it needs; useFleet.js fetches them by URL at runtime), and the server's
+# .glb code reads server/workspace/meshes/, a different directory. The three
+# already committed here (drone_dji_inspire3, drone_with_camera, lion_lowe)
+# stay tracked: .gitignore never untracks a file that is already in the index,
+# so this only stops the NEW ones being added. (drone_dji_air3 was the fourth
+# tracked one; its move to the games packages is recorded as a deletion here.)
 client/assets/mesh/
 
 # Unreferenced glyphs. src/config/IconConfig.js eagerly globs icons/*.svg and

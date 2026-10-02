@@ -83,7 +83,7 @@ defineEmits([
             @stop="$emit('flightStop')"
             @modeChange="$emit('flightModeChange', $event)"
           />
-          <span class="joystick-label">{{ t('viewcomposer.flight') }}</span>
+          <span class="joystick-label">{{ t('viewcomposer.steer') }}</span>
         </div>
       </div>
     </main>
@@ -100,7 +100,7 @@ defineEmits([
 
     <HUD v-if="showHud" :flight="flight" :camera="camera" />
 
-    <!-- Pencil toolbox, bottom-centred (Plan 2D map + Steer 3D globe) -->
+    <!-- Pencil toolbox, top-centred (Plan 2D map + Steer 3D globe) -->
     <PenToolbox
       v-if="showPens"
       :tool="penTool"

@@ -50,7 +50,7 @@ const { drone, gimbal } = useDrone();
 // Test phase: both assets are auto-driven along hardcoded routes near the
 // fire zone by stepFleet() below; the active-asset pick is wired to the chat
 // Team popover and the Plan view's map badges.
-const { FLEET, activeAsset, activeAssetId, activeIsDrone, setActiveAsset, stepFleet } = useFleet();
+const { FLEET, activeAsset, activeAssetId, activeIsDrone, setActiveAsset, stepFleet, getTankSurface, chaseCameraPose, syncFleetModels } = useFleet();
 const { session } = useSessionState();
 // Altitude split: the 2D street-map zoom height (mapAlt) is a SEPARATE value
 // from the true drone/camera altitude (drone.alt). They are reconciled only
@@ -103,7 +103,7 @@ const {
   stopKeyboard: stopCameraKeyboard,
 } = useCameraCommands();
 
-const { computeDesiredEnuMove, applyEnuMove, updateTelemetry: updateFlightTelemetry } = useFlightPhysics();
+const { applyEnuMove, updateTelemetry: updateFlightTelemetry } = useFlightPhysics();
 const { step: stepCameraPhysics } = useCameraPhysics();
 const { rightItems, registerRight, clear } = useDockRegistry();
 const { recorderState, replayProgress, replayPov, sampleFrame, resetRecorder } = useScreenCapture();
@@ -986,18 +986,33 @@ function syncCesiumCamera() {
     });
     return;
   }
-  // Steer FPV (and the Plan warm mirror): the pose + gimbal of whichever
-  // fleet machine is currently active — the drone at ~1000 m AGL or the
-  // tank's 10 m ground camera.
-  const asset = activeAsset.value;
+  // Steer chase cam (and the Plan warm mirror): a third-person virtual
+  // camera 15 m above the ACTIVE asset and 30 m behind it (opposite its
+  // travel direction), framing the asset's GLB mesh in the Google 3D scene.
+  // Burial rescue: if the live Cesium camera ever ends up BELOW the sampled
+  // tileset surface of the ACTIVE asset (a mouse wheel dug it in, or a
+  // transient bad state), drop the mouse ownership and the cached pose so
+  // this frame re-pins the camera to the chase pose. A landed asset sits
+  // exactly ON the surface, so the 1 m underground threshold never fires
+  // legitimately.
+  const viewer = window.cesiumViewer;
+  const camAlt = viewer?.camera?.positionCartographic?.height;
+  const activeSurface = activeIsDrone.value
+    ? altitudeGate.surfaceAlt.value
+    : (getTankSurface() ?? altitudeGate.surfaceAlt.value);
+  if (Number.isFinite(camAlt) && camAlt < activeSurface - 1) {
+    mouseOwnsCamera = false;
+    lastPushedPose = null;
+  }
+  const cam = chaseCameraPose(activeAsset.value);
   pushCameraPose({
-    lat: asset.pose.lat,
-    lon: asset.pose.lon,
-    alt: asset.pose.alt,
-    heading: asset.pose.heading,
-    gimbalYaw: asset.gimbal.yaw,
-    gimbalPitch: asset.gimbal.pitch,
-    gimbalRoll: asset.gimbal.roll,
+    lat: cam.lat,
+    lon: cam.lon,
+    alt: cam.alt,
+    heading: cam.heading,
+    gimbalYaw: 0,
+    gimbalPitch: cam.pitch,
+    gimbalRoll: cam.roll,
   });
 }
 
@@ -1016,19 +1031,27 @@ watch(activeAssetId, () => {
   mouseOwnsCamera = false;
 });
 
-// Fleet test-phase autopilot: the hardcoded routes own both machine assets.
-// The drone yields to anything else that legitimately owns it (takeoff /
-// landing sequence, play-link route autopilot, a deflected Flight stick) and
-// rejoins its orbit once that input ends; the tank always drives itself.
+// Fleet test-phase autopilot: the hardcoded routes own both machine assets
+// until the human takes the stick. Steer-disk / WASD input is car-style and
+// is consumed by the fleet sim EVERY FRAME while held (continuous motion):
+// up/w forward, down/s backward, left/a turn left, right/d turn right on the
+// ACTIVE machine; releasing hands the machine back to its route with a
+// smooth glide (no snap). The drone also yields to the takeoff/landing
+// sequence and the play-link route autopilot.
 function stepFleetSim() {
-  const droneManual =
-    isTakeoffLanding.value ||
-    autopilot.active.value ||
-    !!(flightCmd.vx || flightCmd.vy || flightCmd.vz || flightCmd.yaw);
+  // Normalise the ±3 sensitivity range of the disk / keys to −1..1.
+  const norm = (v) => Math.max(-1, Math.min(1, v / 3));
+  const flightInput = !!(flightCmd.vx || flightCmd.vy || flightCmd.vz || flightCmd.yaw);
+  const fwd = norm(flightCmd.vy);
+  const turn = norm(flightCmd.vx + flightCmd.yaw);
+  const climb = norm(flightCmd.vz);
   stepFleet(1 / 60, {
     viewer: window.cesiumViewer,
     droneSurfaceAlt: altitudeGate.surfaceAlt.value,
-    droneManual,
+    droneSurfaceOk: altitudeGate.hasSurface.value,
+    droneManual: isTakeoffLanding.value || autopilot.active.value,
+    droneCtl: flightInput && activeIsDrone.value ? { fwd, turn, climb } : null,
+    tankCtl: flightInput && !activeIsDrone.value ? { fwd, turn } : null,
   });
 }
 
@@ -1087,12 +1110,12 @@ function updateDroneState() {
 
   if (showFlight.value) {
     // Play-link autopilot: with the Flight stick / keys released the drone
-    // flies on toward the next waypoint; any manual input takes over the
-    // flight domain for that frame (same movement + collision path).
+    // flies on toward the next waypoint (same movement + collision path).
+    // Manual stick input on the ACTIVE machine is NOT applied here: the
+    // fleet sim consumes flightCmd every frame while it is held (car-style
+    // forward / turn / climb), which keeps hold-input continuous.
     if (autopilot.active.value && autopilot.flightIdle()) {
       enuMove = autopilot.stepFlight(dt);
-    } else {
-      enuMove = computeDesiredEnuMove(dt, allowAltitude);
     }
   }
 
@@ -1109,12 +1132,11 @@ function updateDroneState() {
   }
 
   if (showFlight.value) {
-    applyEnuMove(enuMove);
+    // Only the autopilot's ENU move reaches the drone pose from here; stick
+    // input is owned by the fleet sim (see stepFleetSim). Telemetry still
+    // mirrors the stick so the HUD reads live while held.
+    if (enuMove) applyEnuMove(enuMove);
     updateFlightTelemetry(allowAltitude);
-    // R-mode: rotate drone heading (3D view rotates accordingly)
-    if (activeFlightMode.value === 'R') {
-      drone.heading += flightCmd.yaw * 60.0 * dt;
-    }
   }
 
   if (altitudeGate.isOnGround.value) {
@@ -1131,7 +1153,20 @@ function updateDroneState() {
   }
 
   if (showCamera.value) {
+    // The Gimbal disk writes the shared `gimbal` object (drone's). When the
+    // TANK is active, mirror the per-frame delta into the tank's gimbal and
+    // undo it on the drone's, so the chase view (whose heading = machine
+    // heading + gimbal yaw) responds and the drone keeps its own angles.
+    const gSnap = activeIsDrone.value ? null : { yaw: gimbal.yaw, pitch: gimbal.pitch, roll: gimbal.roll };
     stepCameraPhysics(dt, { applyMovement: true });
+    if (gSnap) {
+      session.tankGimbal.yaw += gimbal.yaw - gSnap.yaw;
+      session.tankGimbal.pitch += gimbal.pitch - gSnap.pitch;
+      session.tankGimbal.roll += gimbal.roll - gSnap.roll;
+      gimbal.yaw = gSnap.yaw;
+      gimbal.pitch = gSnap.pitch;
+      gimbal.roll = gSnap.roll;
+    }
     // Released Gimbal stick / keys during play: ease the camera back to the
     // target waypoint's saved angles (cinematic playback of the route).
     if (autopilot.active.value && autopilot.cameraIdle()) {
@@ -1155,6 +1190,7 @@ function loop() {
     if (recorderState.value !== 'replaying') {
       updateDroneState();
       stepFleetSim();
+      syncFleetModels(window.cesiumViewer);
       syncCesiumCamera();
       updatePlanTeamMarkers();
     } else {

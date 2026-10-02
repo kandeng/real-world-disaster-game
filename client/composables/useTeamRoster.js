@@ -56,8 +56,9 @@ import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import commanderIcon from '../icons/commander.svg';
 import staffIcon from '../icons/customer_service.svg';
-// drone_front.svg (front elevation) is the avatar; drone.svg (plan view) stays
-// the map marker in MapView.vue. Both remain in the bundle.
+// drone_front.svg (front elevation) is the avatar AND the Plan-map badge
+// glyph in MapView.vue; drone.svg (plan view) remains for the non-team asset
+// markers there. Both remain in the bundle.
 import droneIcon from '../icons/drone_front.svg';
 // tank.svg's viewBox was re-centred on its artwork for exactly the reason above:
 // the stock iconfont box left the tank sitting in the bottom of the frame.

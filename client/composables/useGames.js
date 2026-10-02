@@ -101,6 +101,31 @@ function packageBase(baseUrl) {
   return url.href.endsWith('/') ? url.href : `${url.href}/`;
 }
 
+// ── Active game package ─────────────────────────────────────────────────────
+// The Plaza records the clicked card's package root here; the engine resolves
+// package-owned assets (the fleet machine meshes today, scene / story / audio
+// files later) against it. Module-level like the caches above: the play view
+// mounts only after the route change, so the click must outlive the Plaza.
+//
+// Default is the wild-fire package: the engine's only scene is still the
+// hard-coded Palisades one, and a direct /play hit (reload, bookmark) never
+// passes a card click.
+const DEFAULT_PACKAGE_BASE = packageBase('/games/demo-wild-fire/');
+let activeBase = DEFAULT_PACKAGE_BASE;
+
+/** Record which package the play button was clicked for (catalog baseUrl). */
+export function setActiveGamePackage(baseUrl) {
+  activeBase =
+    typeof baseUrl === 'string' && baseUrl
+      ? packageBase(baseUrl)
+      : DEFAULT_PACKAGE_BASE;
+}
+
+/** Absolute, trailing-slashed root of the package engine assets load from. */
+export function activeGamePackageBase() {
+  return activeBase;
+}
+
 async function fetchJson(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`games_unavailable:${res.status}`);

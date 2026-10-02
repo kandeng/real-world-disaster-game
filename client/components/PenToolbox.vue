@@ -126,7 +126,7 @@ function disarm() {
 <style scoped>
 .pens {
   position: absolute;
-  bottom: 12px;
+  top: 12px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 6;

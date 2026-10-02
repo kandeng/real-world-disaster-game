@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
+import { sampleGroundHeight } from './useGroundSample.js';
 import { prewarmStreetView } from '@/3d_street/streetView.js';
 
 /* global Cesium */
@@ -33,6 +34,10 @@ export const PHASES = {
 export function useAltitudeGate(drone) {
   const { getActiveTileset, activeSource } = useTilesetSource();
   const surfaceAlt = ref(0);
+  // False until the first raycast sample is accepted: callers that lock an
+  // altitude reference on first contact must not lock onto the pre-sample
+  // default of 0 (see useFleet's horizontal-flight altitude lock).
+  const hasSurface = ref(false);
   const isOnGround = ref(true);
   const flightPhase = ref(PHASES.IDLE);
   const lastSequence = ref('landing'); // tracks last auto sequence: 'takeoff' or 'landing'
@@ -48,26 +53,26 @@ export function useAltitudeGate(drone) {
    * Sample the 3D tileset surface directly beneath the drone.
    * Returns the surface altitude in meters above the ellipsoid, or null if
    * the scene is not ready or nothing was hit.
+   *
+   * Delegates to the shared validated ray sampler (useGroundSample): the ray
+   * starts well ABOVE the last good surface — never at the drone itself — so
+   * a drone that ever ends up inside the mesh still samples the true surface
+   * on the next frame, and crack / interior hits are rejected instead of
+   * being fed back as "the ground".
    */
+  let surfaceValidated = false; // null lastGood until the first accepted hit
   function sampleSurfaceAltitude(viewer) {
-    if (!viewer) return null;
-    const position = Cesium.Cartesian3.fromDegrees(drone.lon, drone.lat, drone.alt);
-    const down = Cesium.Cartesian3.negate(
-      Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(position, new Cesium.Cartesian3()),
-      new Cesium.Cartesian3()
+    const sampled = sampleGroundHeight(
+      viewer,
+      drone.lon,
+      drone.lat,
+      surfaceValidated ? surfaceAlt.value : null
     );
-    const ray = new Cesium.Ray(position, down);
-    let hit = null;
-    try {
-      hit = viewer.scene.pickFromRay(ray);
-    } catch {
-      return null; // transient raycast failure while tiles stream — keep last estimate
+    if (sampled !== null) {
+      surfaceValidated = true;
+      hasSurface.value = true;
     }
-    if (hit && hit.position) {
-      const cartographic = Cesium.Cartographic.fromCartesian(hit.position);
-      return cartographic.height;
-    }
-    return null;
+    return sampled;
   }
 
   /**
@@ -341,6 +346,7 @@ export function useAltitudeGate(drone) {
 
   return {
     surfaceAlt,
+    hasSurface,
     isOnGround,
     flightPhase,
     lastSequence,
