@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n';
 import { useRouter, useRoute } from 'vue-router';
 import ViewComposer from '@shared/_ViewComposer.vue';
 import CollisionWarning from '@shared/CollisionWarning.vue';
-import StreetViewPane from '@shared/StreetViewPane.vue';
 import { MapView } from '@/2d_map/index.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useRouteScene3D } from '@shared-composables/useRouteScene3D.js';
@@ -16,7 +15,7 @@ import { useDrone } from '@shared-composables/useDrone.js';
 import { useFleet } from '@shared-composables/useFleet.js';
 import { mateById } from '@shared-composables/useTeamRoster.js';
 import { useSessionState } from '@shared-composables/useSessionState.js';
-import { useAltitudeGate, PHASES, DESCEND_THRESHOLD, ASCEND_THRESHOLD } from '@shared-composables/useAltitudeGate.js';
+import { useAltitudeGate, PHASES } from '@shared-composables/useAltitudeGate.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
 import { useCameraCommands } from '@shared-composables/useCameraCommands.js';
 import { useFlightPhysics } from '@shared-composables/useFlightPhysics.js';
@@ -106,7 +105,7 @@ const {
 const { applyEnuMove, updateTelemetry: updateFlightTelemetry } = useFlightPhysics();
 const { step: stepCameraPhysics } = useCameraPhysics();
 const { rightItems, registerRight, clear } = useDockRegistry();
-const { recorderState, replayProgress, replayPov, sampleFrame, resetRecorder } = useScreenCapture();
+const { recorderState, replayProgress, sampleFrame, resetRecorder } = useScreenCapture();
 const { settings } = useAppSettings();
 
 let savedDiskVisibility = null;
@@ -136,7 +135,6 @@ const showConnectionError = computed(() => !cesiumReady.value || !googleReady.va
 let connectionCheckInterval = null;
 
 const cesiumContainer = ref(null);
-const streetViewReady = ref(false);
 const lockedMessage = ref('');
 let lockedMessageTimer = null;
 
@@ -530,63 +528,6 @@ const isPreCaching = computed(() => {
   const p = altitudeGate.flightPhase.value;
   return p === PHASES.PRE_TAKEOFF || p === PHASES.PRE_LANDING;
 });
-// Street View is only used on the 3D Aerial (Google tiles) subpage AND only
-// for the drone. On the 3D Mesh (OSM Buildings) subpage the drone renders OSM
-// buildings all the way from airborne to ground, so no Street View switch-over
-// happens. Loading Google Street View there would also spin up a second WebGL
-// context that fights the Cesium context (the source of the uniform3fv
-// warnings). The tank's FPV never crossfades to Street View either: its camera
-// rides 10 m above ground precisely so the Google Earth 3D tiles render its
-// view at fine granularity — a panorama would defeat the point.
-const streetViewEnabled = computed(() => activeSource.value !== 'osm');
-const showStreetView = computed(() => activeIsDrone.value && streetViewEnabled.value && (drone.alt - altitudeGate.surfaceAlt.value) < ASCEND_THRESHOLD);
-const shouldPrewarmSV = computed(() => {
-  if (!activeIsDrone.value || !streetViewEnabled.value) return false;
-  const phase = altitudeGate.flightPhase.value;
-  if (phase === PHASES.PRE_LANDING || phase === PHASES.DESCENDING) return true;
-  return (drone.alt - altitudeGate.surfaceAlt.value) < 20;
-});
-const isTransitioning = computed(() => {
-  const rel = drone.alt - altitudeGate.surfaceAlt.value;
-  return rel >= DESCEND_THRESHOLD && rel < ASCEND_THRESHOLD;
-});
-const streetViewOpacity = computed(() => {
-  if (!streetViewEnabled.value) return 0;
-  const rel = drone.alt - altitudeGate.surfaceAlt.value;
-  if (rel <= DESCEND_THRESHOLD) return 1;
-  if (rel >= ASCEND_THRESHOLD) return 0;
-  return 1 - (rel - DESCEND_THRESHOLD) / (ASCEND_THRESHOLD - DESCEND_THRESHOLD);
-});
-// Effective state bound to StreetViewPane: live flight values normally, the
-// replayed trajectory while the recorder replays it. Without this the replay
-// (and the recorded clip) would stick to the 3D tiles and never reproduce
-// the aerial -> street view asset switch.
-const svPaneState = computed(() => {
-  if (recorderState.value === 'replaying' && replayPov.value) {
-    const pov = replayPov.value;
-    return {
-      lat: pov.lat,
-      lon: pov.lon,
-      headingRad: pov.headingRad,
-      pitchRad: pov.pitchRad,
-      relativeAlt: pov.relativeAlt,
-      visible: pov.showStreetView,
-      opacity: pov.streetViewOpacity,
-      transitioning: pov.relativeAlt >= DESCEND_THRESHOLD && pov.relativeAlt < ASCEND_THRESHOLD,
-    };
-  }
-  const pov = getStreetViewPov();
-  return {
-    lat: drone.lat,
-    lon: drone.lon,
-    headingRad: pov.headingRad,
-    pitchRad: pov.pitchRad,
-    relativeAlt: pov.relativeAlt,
-    visible: showStreetView.value,
-    opacity: streetViewOpacity.value,
-    transitioning: isTransitioning.value,
-  };
-});
 const takeoffLandingLabel = computed(() => {
   const p = altitudeGate.flightPhase.value;
   if (p === PHASES.PRE_TAKEOFF) return t('aerialview.preparing_takeoff');
@@ -629,11 +570,11 @@ function toggleTakeoffLanding() {
     // the user just gets the green reminder below.
     //
     // The takeoff tile pre-warm teleports the Cesium camera to the target
-    // altitude for a few frames. Only allow that while the Street View
-    // overlay fully covers the (still rendering) Cesium canvas — mirrored
-    // from the .cesium-hidden watcher below — otherwise the teleport shows
-    // up as a visible tremble.
-    const cesiumCovered = svPaneState.value.visible && !svPaneState.value.transitioning && streetViewReady.value;
+    // altitude for a few frames. Only allow that while the 2D street map
+    // fully covers the (still rendering) Cesium canvas — mirrored from the
+    // .cesium-hidden watcher below — otherwise the teleport shows up as a
+    // visible tremble.
+    const cesiumCovered = isStreet.value;
     if (!altitudeGate.startTakeoff(viewer, { cameraPrewarm: cesiumCovered })) {
       flashTakeoffLimitNotice();
     }
@@ -721,29 +662,19 @@ function toggleSteer() {
 // canvas keeps opacity: 0 from the previous visit and the Play view is BLACK.
 function applyCesiumVisibility() {
   const viewer = window.cesiumViewer;
-  const show = svPaneState.value.visible;
-  const transitioning = svPaneState.value.transitioning;
   const street = isStreet.value;
   if (viewer) {
     // In mesh (OSM) mode the globe must stay visible as ground context; in
-    // aerial (Google) mode it is only shown during the street-view
-    // transition crossfade. The 2D street map always covers the globe.
-    viewer.scene.globe.show = (activeSource.value === 'osm' || (show && transitioning)) && !street;
+    // aerial (Google) mode the photorealistic tiles render their own ground,
+    // so the globe is switched off. The 2D street map always covers it.
+    viewer.scene.globe.show = activeSource.value === 'osm' && !street;
   }
   if (cesiumContainer.value) {
-    // Only hide Cesium when Street View is fully loaded to prevent black flash
-    cesiumContainer.value.classList.toggle(
-      'cesium-hidden',
-      street || (show && !transitioning && streetViewReady.value)
-    );
+    cesiumContainer.value.classList.toggle('cesium-hidden', street);
   }
 }
 
-watch(
-  [() => svPaneState.value.visible, () => svPaneState.value.transitioning, streetViewReady, isStreet],
-  applyCesiumVisibility,
-  { immediate: true }
-);
+watch([activeSource, isStreet], applyCesiumVisibility, { immediate: true });
 
 /**
  * Unit direction (ECEF) the flight disk is asking the drone to travel in.
@@ -955,9 +886,9 @@ function pushCameraPose(pose) {
   }
   // During an auto takeoff / landing the app owns the camera outright: the
   // sequence must stay framed on the drone, and altitudeGate.prewarmTiles()
-  // deliberately teleports the (Street-View-covered) camera during
-  // PRE_TAKEOFF, when the pose is otherwise static. Never idle-skip there, or
-  // a pre-warm pose could be left parked on screen.
+  // deliberately teleports the (2D-map-covered) camera during PRE_TAKEOFF,
+  // when the pose is otherwise static. Never idle-skip there, or a pre-warm
+  // pose could be left parked on screen.
   if (!isTakeoffLanding.value && lastPushedPose && samePose(pose, lastPushedPose)) return;
   lastPushedPose = pose;
   window.updateCesiumCamera(pose);
@@ -1014,13 +945,6 @@ function syncCesiumCamera() {
     gimbalPitch: cam.pitch,
     gimbalRoll: cam.roll,
   });
-}
-
-function getStreetViewPov() {
-  const headingRad = ((drone.heading + gimbal.yaw) * Math.PI) / 180;
-  const pitchRad = (gimbal.pitch * Math.PI) / 180;
-  const relativeAlt = Math.max(0, drone.alt - altitudeGate.surfaceAlt.value);
-  return { headingRad, pitchRad, relativeAlt };
 }
 
 // Switching the ACTIVE asset (chat Team popover / Plan-map badge click): drop
@@ -1183,7 +1107,7 @@ function loop() {
   // appear dead. Log throttled and keep animating.
   try {
     if (recorderState.value === 'recording') {
-      sampleFrame(drone, gimbal, altitudeGate.surfaceAlt.value);
+      sampleFrame(drone, gimbal);
     }
     // During replay the replay engine owns the Cesium camera; skip the flight
     // physics, collision checks and camera sync so they cannot fight it.
@@ -1275,19 +1199,9 @@ const {
   pointerDown: freezePenDown,
   pointerMove: freezePenMove,
   pointerUp: freezePenUp,
-  setStreetViewProvider,
 } = useSteerFreezePen();
 const penMarkCount = computed(() =>
   isSteerView.value ? penMarkCount3D.value : penMarkCount2D.value
-);
-
-// The freeze snapshot (and the assistant's plain Screenshot) must show what
-// the commander actually sees: the Street View panorama blended over the 3D
-// tiles at the live crossfade opacity while the FPV is on the ground leg.
-setStreetViewProvider(() =>
-  !isStreet.value && svPaneState.value.visible && streetViewReady.value
-    ? svPaneState.value.opacity
-    : 0
 );
 
 // Arming a pen in Steer freezes the FPV; putting the pen away (the toolbox
@@ -1340,8 +1254,8 @@ onMounted(() => {
   // (see onUnmounted). It is a page-lifetime singleton, so on a warm
   // client-side re-entry it already holds the streamed tiles.
   if (window.cesiumViewer) window.cesiumViewer.useDefaultRenderLoop = true;
-  // The street-view watcher's { immediate: true } pass already ran during setup,
-  // when cesiumContainer.value was still null, so it could not clear the
+  // The cesium-visibility watcher's { immediate: true } pass already ran during
+  // setup, when cesiumContainer.value was still null, so it could not clear the
   // .cesium-hidden that the previous onUnmounted added. Re-apply it now that the
   // container is known — otherwise a client-side re-entry to /play stays BLACK.
   applyCesiumVisibility();
@@ -1506,18 +1420,6 @@ onUnmounted(() => {
         @poisError="onPoisError"
         @teamClick="onTeamMarkerClick"
         @marksChange="penMarkCount2D = $event"
-      />
-      <StreetViewPane
-        class="view-composer__background"
-        :lat="svPaneState.lat"
-        :lon="svPaneState.lon"
-        :heading="svPaneState.headingRad"
-        :pitch="svPaneState.pitchRad"
-        :altitude="svPaneState.relativeAlt"
-        :visible="svPaneState.visible && !isStreet"
-        :prewarm="shouldPrewarmSV"
-        :style="{ opacity: svPaneState.opacity }"
-        @ready="streetViewReady = true"
       />
       <!-- Steer FPV freeze: while a pencil is armed the live globe is
            replaced by its still screenshot, and annotations are drawn on
@@ -1690,15 +1592,11 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-:deep(.view-composer__background.street-view-pane--visible) {
-  pointer-events: auto;
-}
-
 /* The 2D street map must receive its pan / zoom gestures. It fills the page
    area (the composer / shell-main) instead of the whole viewport: the right
    assistant panel (z-index above the page) would otherwise cover the map's
    bottom-right zoom controls and shift the visible map centre. The 3D globe
-   and Street View backgrounds stay full-bleed (position: fixed). */
+   background stays full-bleed (position: fixed). */
 :deep(.view-composer__background.aerial-street-map) {
   position: absolute;
   pointer-events: auto;
@@ -1850,7 +1748,7 @@ onUnmounted(() => {
 }
 
 /* ── Steer FPV freeze overlay (pencil screenshot session) ──
-   Composer background layer: above the Cesium canvas / Street View pane,
+   Composer background layer: above the Cesium canvas / 2D map,
    below every control (joystick area z 5, pens toolbox z 6, docks above),
    so the toolbox, chat and flight disks stay usable while the FPV is frozen
    and the drone keeps flying. */

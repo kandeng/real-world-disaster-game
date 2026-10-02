@@ -2,20 +2,19 @@ import { ref, computed } from 'vue';
 import { useAppSettings } from '@shared-composables/useAppSettings.js';
 import { useTilesetSource } from '@shared-composables/useTilesetSource.js';
 import { sampleGroundHeight } from './useGroundSample.js';
-import { prewarmStreetView } from '@/3d_street/streetView.js';
 
 /* global Cesium */
 
 const { settings } = useAppSettings();
 
-export const SWITCH_ALTITUDE = 10.0;  // meters: center of the switch threshold (test: 15, 20, etc.)
+export const SWITCH_ALTITUDE = 10.0;  // meters: centre of the ground band (test: 15, 20, etc.)
 const HYSTERESIS = 2.0;               // meters: half-width of the hysteresis band
-export const DESCEND_THRESHOLD = SWITCH_ALTITUDE - HYSTERESIS; // switch to street view
-export const ASCEND_THRESHOLD = SWITCH_ALTITUDE + HYSTERESIS;  // switch back to aerial view
+export const DESCEND_THRESHOLD = SWITCH_ALTITUDE - HYSTERESIS; // below: counted as on the ground
+export const ASCEND_THRESHOLD = SWITCH_ALTITUDE + HYSTERESIS;  // above: counted as airborne
 const AUTO_SPEED = 8.0;         // meters per second for auto takeoff/landing
 const AUTO_TOLERANCE = 0.2;     // meters: stop auto when within this distance
 const PRE_TAKEOFF_DELAY = 2500; // ms: hold during PRE_TAKEOFF for tile caching
-const PRE_LANDING_DELAY = 1500; // ms: hold during PRE_LANDING for panorama caching
+const PRE_LANDING_DELAY = 1500; // ms: hold during PRE_LANDING before descending
 
 export const PHASES = {
   IDLE: 'IDLE',
@@ -32,7 +31,7 @@ export const PHASES = {
  * automatic takeoff/landing sequences with pre-cache delay phases.
  */
 export function useAltitudeGate(drone) {
-  const { getActiveTileset, activeSource } = useTilesetSource();
+  const { getActiveTileset } = useTilesetSource();
   const surfaceAlt = ref(0);
   // False until the first raycast sample is accepted: callers that lock an
   // altitude reference on first contact must not lock onto the pre-sample
@@ -154,13 +153,6 @@ export function useAltitudeGate(drone) {
     update(viewer); // refresh surfaceAlt first
     flightPhase.value = PHASES.PRE_LANDING;
     lastSequence.value = 'landing';
-    // Only pre-warm Street View on the Google-tiles (aerial) source. On OSM
-    // Buildings the drone stays on the 3D tiles all the way to the ground, and
-    // loading Street View would spin up a second WebGL context that fights
-    // Cesium's (the uniform3fv warnings).
-    if (activeSource.value !== 'osm') {
-      prewarmStreetView(drone.lat, drone.lon);
-    }
     clearTimeout(phaseTimer);
     phaseTimer = setTimeout(() => {
       flightPhase.value = PHASES.DESCENDING;
@@ -293,8 +285,8 @@ export function useAltitudeGate(drone) {
    * pose every animation frame (window.updateCesiumCamera), so each teleport
    * snaps back one frame later — when the Cesium canvas is visible this reads
    * as a short "tremble". Pass allowTeleport=true ONLY when the canvas is
-   * fully covered (Street View overlay, .cesium-hidden = opacity 0 — the
-   * canvas keeps rendering, so the warm poses still trigger tile requests).
+   * fully covered (.cesium-hidden = opacity 0 — the canvas keeps rendering, so
+   * the warm poses still trigger tile requests).
    * When skipped, tiles simply stream in progressively during the slow
    * (8 m/s) ascent, which is visually fine.
    */

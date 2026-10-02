@@ -132,7 +132,7 @@ npm install
 # 4. Configure API keys (baked into the bundle at build time)
 # client/config.json holds googleApiKey + cesiumIonToken. It is NOT a runtime
 # file: Vite imports it directly into the JS bundle (src/cesium-main.js,
-# src/2d_map/googleMaps.js, src/3d_street/streetView.js). So it must be correct
+# src/2d_map/googleMaps.js). So it must be correct
 # BEFORE `npm run build`; any change here requires a rebuild. There is no
 # dist/config.json to edit afterwards.
 vim config.json

@@ -10,7 +10,7 @@ This guide runs the **entire system locally on Windows 10/11 with WSL2** — no 
 
 ```
 real-world-disaster-game/
-├── client/       # Vue 3 + Vite frontend (Cesium, Google Maps, Street View)
+├── client/       # Vue 3 + Vite frontend (Cesium, Google Maps)
 ├── server/       # FastAPI backend (fastapi-users auth, settings, Matrix token brokering)
 └── deployment/   # Production configs + ops docs (Caddy, Squid, MediaMTX, Synapse)
 ```

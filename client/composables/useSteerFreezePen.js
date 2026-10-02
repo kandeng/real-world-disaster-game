@@ -5,8 +5,8 @@
 //   • Steer (3D FPV): the commander's objective is a MARKED 2D SCREENSHOT of
 //     the first-person view — an artifact to hand to the AI for image
 //     analysis — not marks glued to the globe. So arming any pen in Steer
-//     FREEZES the FPV: a still frame is captured (Cesium canvas + Street View
-//     crossfade via useScreenCapture.captureViewerFrame), the live drone
+//     FREEZES the FPV: a still frame is captured (Cesium canvas via
+//     useScreenCapture.captureViewerFrame), the live drone
 //     follow stops, and the still is shown full-viewport with a transparent
 //     ink canvas on top. Pens draw in plain screen space on that still.
 //
@@ -41,9 +41,6 @@ let cssW = 0;                     // canvas CSS-pixel size at bind time
 let cssH = 0;
 let textInputEl = null;
 let freezeSeq = 0;                // guards stale async captures
-// Supplies the live Street View crossfade opacity (0 when SV is not on
-// screen). Registered by AerialView, which owns svPaneState.
-let svOpacityProvider = () => 0;
 
 // ── drawing primitives (canvas CSS pixels) ────────────────────────────────
 
@@ -247,7 +244,7 @@ async function beginFreeze() {
   if (frozen.value) return;
   const seq = ++freezeSeq;
   frozen.value = true; // stops the drone-follow camera push immediately
-  const url = await captureViewerFrame(svOpacityProvider());
+  const url = await captureViewerFrame();
   if (seq !== freezeSeq || !frozen.value) return; // cancelled while capturing
   if (!url) {
     endFreeze();
@@ -288,7 +285,7 @@ function endFreeze() {
  */
 async function captureForChat() {
   if (!frozen.value) {
-    return captureViewerFrame(svOpacityProvider());
+    return captureViewerFrame();
   }
   if (!snapshotImg) return null;
   let url;
@@ -313,10 +310,6 @@ async function captureForChat() {
   return url;
 }
 
-function setStreetViewProvider(fn) {
-  svOpacityProvider = typeof fn === 'function' ? fn : () => 0;
-}
-
 export function useSteerFreezePen() {
   return {
     frozen,
@@ -330,6 +323,5 @@ export function useSteerFreezePen() {
     pointerMove,
     pointerUp,
     captureForChat,
-    setStreetViewProvider,
   };
 }

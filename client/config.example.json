@@ -1,5 +1,5 @@
 {
   "googleApiKey": "YOUR_GOOGLE_MAPS_API_KEY",
   "cesiumIonToken": "YOUR_CESIUM_ION_ACCESS_TOKEN",
-  "_note": "The Google API key must have both Map Tiles API and Maps JavaScript API enabled for 3D aerial tiles, Street View, and the 2D map toggle."
+  "_note": "The Google API key must have both Map Tiles API and Maps JavaScript API enabled for 3D aerial tiles and the 2D map."
 }

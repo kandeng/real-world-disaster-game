@@ -14,11 +14,10 @@ client/                     # Vite project root
 │   ├── main.js             # Vue app initialization
 │   ├── router/             # Vue Router routes
 │   ├── views/              # Page components (AerialView, Satellite2DView, RoutePlanningView, ChatView, MySpaceView)
-│   ├── components/         # App-specific components (CollisionWarning, StreetViewPane)
+│   ├── components/         # App-specific components (CollisionWarning)
 │   ├── composables/        # App-specific composables (useAltitudeGate)
 │   ├── config/             # IconConfig.js — centralized SVG icon registry
 │   ├── 2d_map/             # Google Maps 2D map module (MapView.vue)
-│   ├── 3d_street/          # Google Street View panorama module (streetView.js)
 │   ├── cesium-main.js      # Cesium viewer init, Google 3D Tiles, camera sync
 │   └── dronePhysics.js     # Keyboard-driven drone physics (WASD + arrows)
 ├── components/             # Shared UI components (@shared alias)
@@ -58,7 +57,7 @@ Each page registers its own dock buttons through `useDockRegistry()` (a module-l
 
 | Route | Page | Description |
 |-------|------|-------------|
-| `/` | `AerialView.vue` | 3D photorealistic aerial view (Cesium) with collision detection, auto takeoff/landing, and Street View fallback when grounded. |
+| `/` | `AerialView.vue` | 3D photorealistic aerial view (Cesium) with collision detection, auto takeoff/landing, and a Google 2D street map for Search / Route / Plan. |
 | `/satellite` | `Satellite2DView.vue` | 2D Google Satellite view. |
 | `/chat` | `ChatView.vue` | Mission-control chat interface. |
 
@@ -76,11 +75,7 @@ A hysteresis-based altitude gate manages ground/air state:
 - **Ascend threshold**: ≥ 18 m above surface → considered airborne.
 - **Auto sequence**: moves altitude at 8 m/s toward the target (surface altitude for landing, surface + 15 m for takeoff).
 
-Flight controls are locked during the transition. When the drone is on the ground, the Cesium globe is hidden and a Google Street View panorama (`StreetViewPane.vue`) is shown instead, synced to drone position, heading, and gimbal angles.
-
-### Street View ground mode (`src/3d_street/`)
-
-Dynamically loads the Google Maps JavaScript API and creates a `StreetViewPanorama` inside `StreetViewPane.vue`. The panorama's position, heading, pitch, and zoom are kept in sync with the drone state. Zoom is mapped from altitude (0 m → wide FOV, 15 m → narrow elevated FOV) to give an immersive ground-level feel.
+Flight controls are locked during the transition. The Google Earth 3D tiles render the drone's view all the way down to the ground, so no separate ground-level asset is swapped in.
 
 ### Cesium fallback (`cesium-main.js`)
 
@@ -99,7 +94,7 @@ This project needs two external credentials. Set them in `config.json` (this fil
 Required APIs to enable on the same key:
 
 - **Map Tiles API** — loads Google Photorealistic 3D Tiles in Cesium.
-- **Maps JavaScript API** — loads the interactive Street View panorama during takeoff/landing and the 2D map toggle.
+- **Maps JavaScript API** — loads the interactive 2D map used by the Search / Route / Plan sub-views.
 - **Places API (New)** — fetches nearby points of interest when selecting a waypoint origin on the 2D map or satellite view. The 2D map uses the new `google.maps.places.Place.searchNearby` API.
 - **Geocoding API** — converts latitude/longitude to a human-readable address for waypoint details.
 - **Maps Elevation API** — samples terrain elevation for route and altitude planning.
@@ -137,7 +132,7 @@ Required APIs to enable on the same key:
 | API | Purpose in this project |
 |---|---|
 | **Map Tiles API** | Loads Google Photorealistic 3D Tiles in Cesium. |
-| **Maps JavaScript API** | Loads the interactive 2D map and Street View panorama. |
+| **Maps JavaScript API** | Loads the interactive 2D map. |
 | **Places API (New)** | Fetches nearby points of interest for waypoint origin selection. The code uses the new `google.maps.places.Place.searchNearby` API. |
 | **Geocoding API** | Converts latitude/longitude to a human-readable address. |
 | **Maps Elevation API** | Samples terrain elevation for route and altitude planning. |
@@ -172,7 +167,7 @@ Then edit it:
 {
   "googleApiKey": "YOUR_GOOGLE_MAPS_API_KEY",
   "cesiumIonToken": "YOUR_CESIUM_ION_ACCESS_TOKEN",
-  "_note": "The Google API key must have Map Tiles API, Maps JavaScript API, Places API (New), Geocoding API, Maps Elevation API, Routes API, and Roads API enabled for 3D aerial tiles, Street View, the 2D map toggle, waypoint POI lookup, address geocoding, elevation sampling, route computation, and road snapping."
+  "_note": "The Google API key must have Map Tiles API, Maps JavaScript API, Places API (New), Geocoding API, Maps Elevation API, Routes API, and Roads API enabled for 3D aerial tiles, the 2D map toggle, waypoint POI lookup, address geocoding, elevation sampling, route computation, and road snapping."
 }
 ```
 
