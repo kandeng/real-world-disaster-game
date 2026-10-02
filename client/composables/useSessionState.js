@@ -38,6 +38,30 @@ export const session = reactive({
     roll: settings.defaultRoll,
   },
 
+  // ── Fleet: the second machine asset (the tank) ─────────────────────────
+  // Same pose shape as the drone, driven by useFleet.js (hardcoded patrol
+  // route in the test phase). The tank is a ground vehicle: its gimbal
+  // camera rides ~10 m above the surface so the Google Earth 3D tiles keep
+  // a fine LOD in its first-person view. The exact start position is
+  // imposed by useFleet on module load; the values here are placeholders
+  // near the Palisades fire centre.
+  tank: {
+    lat: 34.048,
+    lon: -118.532,
+    alt: 10,
+    heading: 0,
+    speed: 0,
+  },
+  tankGimbal: {
+    yaw: 0,
+    pitch: -10, // slight downward look along the road
+    roll: 0,
+  },
+  // Which machine asset the Steer FPV (and the Plan-view marker highlight)
+  // is currently following: 'drone' | 'tank'. Selecting a teammate in the
+  // chat Team popover or clicking its Plan-map icon writes this.
+  fleet: { activeAssetId: 'drone' },
+
   // ── Phase 2: route (owned here; seeded by AerialView route playback) ───
   route: {
     waypoints: [],        // maintained waypoint list [{id,index,lat,lng,alt,speed,camYaw,camPitch,camRoll}]

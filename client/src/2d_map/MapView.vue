@@ -4,6 +4,12 @@ import { useI18n } from 'vue-i18n';
 import { acquireMap, releaseMap } from './mapSingleton.js';
 import { splinePath } from './spline.js';
 import droneIconUrl from '../../icons/drone.svg';
+// Team-marker glyphs are inlined into a composed badge SVG (white disc +
+// ring + the monochrome icon) so the markers stay readable on BOTH the
+// terrain and the satellite base layers. A data-URL SVG cannot reference
+// external files, hence the ?raw source imports.
+import droneGlyphRaw from '../../icons/drone.svg?raw';
+import tankGlyphRaw from '../../icons/tank.svg?raw';
 
 const { t, locale } = useI18n();
 
@@ -36,7 +42,7 @@ const props = defineProps({
   penColor: { type: String, default: '#ff3b30' },
 });
 
-const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease', 'assetPress', 'assetMove', 'assetRelease', 'marksChange']);
+const emit = defineEmits(['centerChange', 'zoomChange', 'mapClick', 'poisFound', 'poisError', 'routeFound', 'routeError', 'mapReady', 'waypointPress', 'waypointMove', 'waypointRelease', 'assetPress', 'assetMove', 'assetRelease', 'teamClick', 'marksChange']);
 
 const containerRef = ref(null);
 const map = ref(null);
@@ -332,6 +338,9 @@ onUnmounted(() => {
   }
   assetMarkers.forEach((m) => m.setMap(null));
   assetMarkers = [];
+  // Team badges must never orphan onto the next mount of the persistent map.
+  teamMarkers.forEach((rec) => rec.marker.setMap(null));
+  teamMarkers.clear();
   if (assetDrag) {
     mapsApi.event.removeListener(assetDrag.moveL);
     window.removeEventListener('mouseup', assetDrag.endDrag);
@@ -838,6 +847,83 @@ function clearLivePosition() {
   }
 }
 
+// ── Team markers (drone + tank glyphs, Plan view) ──────────────────────
+// One marker per fleet machine asset, fed live positions by the parent
+// every frame. Google markers are sized in SCREEN pixels, so the glyphs
+// keep a fixed size at every zoom level. A click selects that asset as
+// the fleet's ACTIVE one (emitted as teamClick) — the parent decides what
+// else happens (it does NOT switch views). The active asset's badge gets
+// a blue ring + tint.
+const TEAM_GLYPHS = { drone: droneGlyphRaw, tank: tankGlyphRaw };
+const teamMarkers = new Map(); // id -> { marker, active }
+
+// Strip the XML prolog / DOCTYPE / comments and re-size the root <svg> so
+// the glyph nests as a 22px child of the 34px badge at (6,6).
+function inlineGlyph(raw) {
+  const m = String(raw || '').match(/<svg[\s\S]*<\/svg>/);
+  if (!m) return '';
+  return m[0]
+    .replace(/\swidth="[^"]*"/, ' width="22"')
+    .replace(/\sheight="[^"]*"/, ' height="22"')
+    .replace('<svg', '<svg x="6" y="6"');
+}
+
+function teamBadgeIcon(id, active) {
+  const D = 34;
+  const c = D / 2;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${D}" height="${D}">` +
+    `<circle cx="${c}" cy="${c}" r="${c - 2}" fill="${active ? '#dbeafe' : '#ffffff'}" ` +
+    `stroke="${active ? '#2563eb' : '#6b7280'}" stroke-width="2.5"/>` +
+    inlineGlyph(TEAM_GLYPHS[id]) +
+    `</svg>`;
+  return {
+    url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+    scaledSize: new mapsApi.Size(D, D),
+    anchor: new mapsApi.Point(c, c),
+  };
+}
+
+// Idempotent per-frame update: existing markers only move; icons are
+// rebuilt solely when the ACTIVE flag flips; ids no longer present are
+// removed (the parent feeds [] when leaving the Plan view).
+function setTeamMarkers(entries) {
+  if (!mapsApi || !map.value) return;
+  const seen = new Set();
+  for (const e of entries || []) {
+    if (!e || !e.id || e.lat == null || e.lon == null) continue;
+    seen.add(e.id);
+    const position = new mapsApi.LatLng(e.lat, e.lon);
+    const active = !!e.active;
+    const rec = teamMarkers.get(e.id);
+    if (rec) {
+      rec.marker.setPosition(position);
+      if (active !== rec.active) {
+        rec.marker.setIcon(teamBadgeIcon(e.id, active));
+        rec.active = active;
+      }
+    } else {
+      const marker = new mapsApi.Marker({
+        position,
+        map: map.value,
+        icon: teamBadgeIcon(e.id, active),
+        clickable: true,
+        cursor: 'pointer',
+        title: e.name || e.id,
+        zIndex: 1500000,
+      });
+      marker.addListener('click', () => emit('teamClick', e.id));
+      teamMarkers.set(e.id, { marker, active });
+    }
+  }
+  for (const [id, rec] of teamMarkers) {
+    if (!seen.has(id)) {
+      rec.marker.setMap(null);
+      teamMarkers.delete(id);
+    }
+  }
+}
+
 // Replace the whole set of asset dots (Build Scene). Unlike the waypoints of
 // the Plan Route page, assets never link up: no polyline / spline is drawn
 // between them, each circle stands on its own.
@@ -1304,6 +1390,7 @@ defineExpose({
   redrawWaypointMarkers,
   redrawWaypointPath,
   setAssetMarkers,
+  setTeamMarkers,
   clearPenMarks,
 });
 

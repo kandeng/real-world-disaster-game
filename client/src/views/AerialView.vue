@@ -13,6 +13,8 @@ import { useSteerFreezePen } from '@shared-composables/useSteerFreezePen.js';
 import { useRoutes } from '@shared-composables/useRoutes.js';
 import { useVideos } from '@shared-composables/useVideos.js';
 import { useDrone } from '@shared-composables/useDrone.js';
+import { useFleet } from '@shared-composables/useFleet.js';
+import { mateById } from '@shared-composables/useTeamRoster.js';
 import { useSessionState } from '@shared-composables/useSessionState.js';
 import { useAltitudeGate, PHASES, DESCEND_THRESHOLD, ASCEND_THRESHOLD } from '@shared-composables/useAltitudeGate.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
@@ -44,6 +46,11 @@ function onIntroDismissed() {
 }
 
 const { drone, gimbal } = useDrone();
+// The machine fleet (drone + tank) and which of them the Steer FPV follows.
+// Test phase: both assets are auto-driven along hardcoded routes near the
+// fire zone by stepFleet() below; the active-asset pick is wired to the chat
+// Team popover and the Plan view's map badges.
+const { FLEET, activeAsset, activeAssetId, activeIsDrone, setActiveAsset, stepFleet } = useFleet();
 const { session } = useSessionState();
 // Altitude split: the 2D street-map zoom height (mapAlt) is a SEPARATE value
 // from the true drone/camera altitude (drone.alt). They are reconciled only
@@ -523,15 +530,18 @@ const isPreCaching = computed(() => {
   const p = altitudeGate.flightPhase.value;
   return p === PHASES.PRE_TAKEOFF || p === PHASES.PRE_LANDING;
 });
-// Street View is only used on the 3D Aerial (Google tiles) subpage. On the
-// 3D Mesh (OSM Buildings) subpage the drone renders OSM buildings all the way
-// from airborne to ground, so no Street View switch-over happens. Loading
-// Google Street View there would also spin up a second WebGL context that
-// fights the Cesium context (the source of the uniform3fv warnings).
+// Street View is only used on the 3D Aerial (Google tiles) subpage AND only
+// for the drone. On the 3D Mesh (OSM Buildings) subpage the drone renders OSM
+// buildings all the way from airborne to ground, so no Street View switch-over
+// happens. Loading Google Street View there would also spin up a second WebGL
+// context that fights the Cesium context (the source of the uniform3fv
+// warnings). The tank's FPV never crossfades to Street View either: its camera
+// rides 10 m above ground precisely so the Google Earth 3D tiles render its
+// view at fine granularity — a panorama would defeat the point.
 const streetViewEnabled = computed(() => activeSource.value !== 'osm');
-const showStreetView = computed(() => streetViewEnabled.value && (drone.alt - altitudeGate.surfaceAlt.value) < ASCEND_THRESHOLD);
+const showStreetView = computed(() => activeIsDrone.value && streetViewEnabled.value && (drone.alt - altitudeGate.surfaceAlt.value) < ASCEND_THRESHOLD);
 const shouldPrewarmSV = computed(() => {
-  if (!streetViewEnabled.value) return false;
+  if (!activeIsDrone.value || !streetViewEnabled.value) return false;
   const phase = altitudeGate.flightPhase.value;
   if (phase === PHASES.PRE_LANDING || phase === PHASES.DESCENDING) return true;
   return (drone.alt - altitudeGate.surfaceAlt.value) < 20;
@@ -956,9 +966,10 @@ function pushCameraPose(pose) {
 function syncCesiumCamera() {
   if (typeof window.updateCesiumCamera !== 'function') return;
   // The Plan map has its own camera, so the hidden globe keeps mirroring the
-  // DRONE there rather than the map: that is what makes the return to Steer
-  // land on the flight that has been running all along, and what keeps its
-  // tiles warm. Only Search / Route mirror the map into a nadir pre-stream.
+  // ACTIVE ASSET's FPV there rather than the map: that is what makes the
+  // return to Steer land on the machine that has been flying (or driving)
+  // all along, and what keeps its tiles warm. Only Search / Route mirror the
+  // map into a nadir pre-stream.
   if (isStreet.value && !isPlanView.value) {
     // While the 2D street map covers the globe, the hidden (still
     // rendering, opacity 0) Cesium canvas mirrors the map as a nadir view
@@ -975,14 +986,18 @@ function syncCesiumCamera() {
     });
     return;
   }
+  // Steer FPV (and the Plan warm mirror): the pose + gimbal of whichever
+  // fleet machine is currently active — the drone at ~1000 m AGL or the
+  // tank's 10 m ground camera.
+  const asset = activeAsset.value;
   pushCameraPose({
-    lat: drone.lat,
-    lon: drone.lon,
-    alt: drone.alt,
-    heading: drone.heading,
-    gimbalYaw: gimbal.yaw,
-    gimbalPitch: gimbal.pitch,
-    gimbalRoll: gimbal.roll,
+    lat: asset.pose.lat,
+    lon: asset.pose.lon,
+    alt: asset.pose.alt,
+    heading: asset.pose.heading,
+    gimbalYaw: asset.gimbal.yaw,
+    gimbalPitch: asset.gimbal.pitch,
+    gimbalRoll: asset.gimbal.roll,
   });
 }
 
@@ -991,6 +1006,61 @@ function getStreetViewPov() {
   const pitchRad = (gimbal.pitch * Math.PI) / 180;
   const relativeAlt = Math.max(0, drone.alt - altitudeGate.surfaceAlt.value);
   return { headingRad, pitchRad, relativeAlt };
+}
+
+// Switching the ACTIVE asset (chat Team popover / Plan-map badge click): drop
+// the cached pose and the mouse-look ownership so the FPV re-pins straight to
+// the newly selected machine — same accepted "jump" as the freeze release.
+watch(activeAssetId, () => {
+  lastPushedPose = null;
+  mouseOwnsCamera = false;
+});
+
+// Fleet test-phase autopilot: the hardcoded routes own both machine assets.
+// The drone yields to anything else that legitimately owns it (takeoff /
+// landing sequence, play-link route autopilot, a deflected Flight stick) and
+// rejoins its orbit once that input ends; the tank always drives itself.
+function stepFleetSim() {
+  const droneManual =
+    isTakeoffLanding.value ||
+    autopilot.active.value ||
+    !!(flightCmd.vx || flightCmd.vy || flightCmd.vz || flightCmd.yaw);
+  stepFleet(1 / 60, {
+    viewer: window.cesiumViewer,
+    droneSurfaceAlt: altitudeGate.surfaceAlt.value,
+    droneManual,
+  });
+}
+
+// Plan view: feed the fleet's live positions into the 2D map's team badges
+// (fixed screen size at every zoom). A badge click makes that asset ACTIVE
+// but never switches the view; any other street sub-view clears the badges.
+let planTeamFed = false;
+function updatePlanTeamMarkers() {
+  if (!mapViewRef.value) return;
+  if (!isPlanView.value) {
+    if (planTeamFed) {
+      mapViewRef.value.setTeamMarkers([]);
+      planTeamFed = false;
+    }
+    return;
+  }
+  planTeamFed = true;
+  mapViewRef.value.setTeamMarkers(
+    FLEET.map((a) => ({
+      id: a.id,
+      lat: a.pose.lat,
+      lon: a.pose.lon,
+      active: a.id === activeAssetId.value,
+      name: t(mateById(a.id)?.nameKey || a.id),
+    }))
+  );
+}
+
+// A Plan-map badge click only re-targets the fleet (requirement: NO view
+// switch); the Steer button then lifts into the ACTIVE asset's FPV.
+function onTeamMarkerClick(id) {
+  setActiveAsset(id);
 }
 
 let rafId = null;
@@ -1084,7 +1154,9 @@ function loop() {
     // physics, collision checks and camera sync so they cannot fight it.
     if (recorderState.value !== 'replaying') {
       updateDroneState();
+      stepFleetSim();
       syncCesiumCamera();
+      updatePlanTeamMarkers();
     } else {
       // The replay engine owns the Cesium camera; drop the cached pose so the
       // first frame after the replay always re-pins to the drone.
@@ -1396,6 +1468,7 @@ onUnmounted(() => {
         @zoomChange="onMapZoomChange"
         @poisFound="onPoisFound"
         @poisError="onPoisError"
+        @teamClick="onTeamMarkerClick"
         @marksChange="penMarkCount2D = $event"
       />
       <StreetViewPane

@@ -1,10 +1,13 @@
 <script setup>
 import { nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRouter, useRoute } from 'vue-router';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import { useTeamRoster } from '@shared-composables/useTeamRoster.js';
 import { useTeamChat } from '@shared-composables/useTeamChat.js';
 import { useSteerFreezePen } from '@shared-composables/useSteerFreezePen.js';
+import { useFleet } from '@shared-composables/useFleet.js';
+import { useSessionState } from '@shared-composables/useSessionState.js';
 
 const { t } = useI18n();
 
@@ -64,6 +67,24 @@ function onInputKeydown(e) {
 // with the DSH integration.
 const { team } = useTeamRoster();
 const teamOpen = ref(false);
+
+/* ── Machine teammates are FPV selectors ────────────────────────────────
+   Clicking the drone's (or the tank's) icon makes that machine the fleet's
+   ACTIVE asset and switches the main panel to its first-person Steer view —
+   navigating to /play first when the commander is on another page. The
+   commander and Staff entries are humans/AI, not machines: no view switch. */
+const router = useRouter();
+const route = useRoute();
+const { session } = useSessionState();
+const { activeAssetId, setActiveAsset } = useFleet();
+
+function onMateClick(mate) {
+  if (mate.kind !== 'machine') return;
+  teamOpen.value = false;
+  setActiveAsset(mate.id);
+  if (route.path !== '/play') router.push('/play');
+  session.view.aerial.subView = 'steer';
+}
 
 /* ── Draggable hairline above the composer ───────────────────────────────
    Dragging it UP grows the textbox (the transcript above shrinks by the
@@ -187,7 +208,21 @@ watch(
         <div class="assistant__team-pop">
           <div class="assistant__team-title">{{ t('assistantpanel.team_title') }}</div>
           <div class="assistant__team-list">
-            <div v-for="mate in team" :key="mate.id" class="assistant__team-mate" :title="mate.name">
+            <div
+              v-for="mate in team"
+              :key="mate.id"
+              class="assistant__team-mate"
+              :class="{
+                'assistant__team-mate--machine': mate.kind === 'machine',
+                'assistant__team-mate--active': mate.kind === 'machine' && mate.id === activeAssetId,
+              }"
+              :title="mate.name"
+              :role="mate.kind === 'machine' ? 'button' : undefined"
+              :tabindex="mate.kind === 'machine' ? 0 : undefined"
+              @click="onMateClick(mate)"
+              @keydown.enter="onMateClick(mate)"
+              @keydown.space.prevent="onMateClick(mate)"
+            >
               <img class="assistant__team-avatar" :src="mate.avatar" :alt="mate.name" draggable="false" />
               <span class="assistant__team-name">{{ mate.name }}</span>
             </div>
@@ -509,6 +544,23 @@ watch(
   align-items: center;
   gap: 5px;
   width: 56px;
+}
+
+/* Machine teammates (drone / tank) double as FPV selectors: clicking one
+   makes it the active asset and lifts the main panel into its Steer view. */
+.assistant__team-mate--machine {
+  cursor: pointer;
+  border-radius: 10px;
+}
+
+.assistant__team-mate--machine:hover .assistant__team-avatar {
+  border-color: #007aff;
+}
+
+/* The fleet's ACTIVE machine: blue ring around its avatar. */
+.assistant__team-mate--active .assistant__team-avatar {
+  border-color: #007aff;
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.35);
 }
 
 .assistant__team-avatar {
