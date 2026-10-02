@@ -64,6 +64,46 @@ import { applyNeutralSphericalHarmonics, pinSceneSphericalHarmonics } from '@sha
 Cesium.GoogleMaps.defaultApiKey = config.googleApiKey;
 Cesium.Ion.defaultAccessToken = config.cesiumIonToken;
 
+// ── Tile-streaming resilience ──
+// Cesium defaults Resource.retryAttempts to 0 and ships no generic retry
+// callback (its only built-in one lives in IonResource and re-fetches an
+// expired Ion token on HTTP 401 — unrelated to transport errors). A tile whose
+// body is cut mid-transfer — net::ERR_CONNECTION_CLOSED after a 200 header,
+// which is what a lossy VPN exit node does to Chrome's multiplexed streams —
+// is therefore marked FAILED and NEVER re-requested: the scene keeps a
+// permanent hole, the tileset's pending count never drains, tilesLoaded never
+// becomes true, and waitForTilesRendered burns its whole timeout. That reads to
+// the user as "cannot connect to Google Earth" even though root.json, the
+// session token and the first tiles all arrived fine.
+// Resource.getDerivedResource clones retryCallback/retryAttempts into every
+// per-tile resource, so installing both on the tileset's own Resource lets
+// Cesium's retryOnError() re-issue the failed request after our backoff.
+const TILE_RETRY_ATTEMPTS = 4;
+const tileRetryCounts = new WeakMap(); // Resource → retries already spent
+
+function installTileRetry(resource) {
+    if (!resource) return;
+    resource.retryAttempts = TILE_RETRY_ATTEMPTS;
+    resource.retryCallback = function (res, error) {
+        const n = (tileRetryCounts.get(res) || 0) + 1;
+        tileRetryCounts.set(res, n);
+        const delayMs = Math.min(250 * 2 ** (n - 1), 4000); // 250 / 500 / 1s / 2s
+        const detail = error && error.message ? error.message : String(error);
+        console.warn(`[Cesium] tile body dropped — retry ${n}/${TILE_RETRY_ATTEMPTS} in ${delayMs}ms (${detail})`);
+        // Resolving truthy is what makes retryOnError() reset the request to
+        // UNISSUED and fetch it again; the delayed promise IS the backoff.
+        return new Promise((resolve) => setTimeout(() => resolve(true), delayMs));
+    };
+}
+
+// Fewer simultaneous streams per host. Chrome multiplexes every
+// tile.googleapis.com request onto one CONNECT tunnel through the local proxy,
+// and that tunnel is where the resets appear; Cesium's default of 18 is
+// aggressive for a tunneled path. 8 keeps the initial view filling quickly
+// while leaving far fewer streams to be cut. The global cap (50) is left alone:
+// it also covers localhost and Ion, which are not the problem.
+Cesium.RequestScheduler.maximumRequestsPerServer = 8;
+
 // Initialize with standard terrain mapping configuration profiles
 let googleTileset = null;
 const viewer = new Cesium.Viewer('cesiumContainer', {
@@ -113,7 +153,7 @@ pinSceneSphericalHarmonics(viewer.scene);
 // ── WebGL context-loss detection ──
 // If the GPU kills the WebGL context (memory pressure, driver reset), the
 // canvas keeps showing its last frame while the rest of the app (physics,
-// HUD, street view) keeps running — the 3D scene looks "frozen" even though
+// HUD, 2D map) keeps running — the 3D scene looks "frozen" even though
 // nothing in the JS logic is broken. Surface it loudly instead of failing
 // silently, and reload once the browser restores the context.
 function showContextLostBanner() {
@@ -222,6 +262,20 @@ async function loadArena() {
         googleTileset = await Cesium.createGooglePhotorealistic3DTileset({
             onlyUsingWithGoogleGeocoder: true,
         });
+        // Install BEFORE the tileset enters the scene so every tile content
+        // resource derived during traversal inherits the retry settings.
+        installTileRetry(googleTileset.resource);
+        // Tally permanent failures (this event fires only once retries are
+        // exhausted). Attaching a listener also suppresses Cesium's default
+        // per-failure "A 3D tile failed to load" + stack-trace dump, and the URL
+        // is logged without its query string so the API key never reaches the
+        // console. Exposed for diagnostics: window.__googleTileFailures.
+        window.__googleTileFailures = 0;
+        googleTileset.tileFailed.addEventListener((failure) => {
+            window.__googleTileFailures += 1;
+            const url = failure && failure.url ? String(failure.url).split('?')[0] : '(unknown)';
+            console.warn(`[Cesium] tile failed permanently after ${TILE_RETRY_ATTEMPTS} retries (total ${window.__googleTileFailures}): ${url}`);
+        });
         // Larger tile cache (default is 512 MB): on this machine the default
         // evicts tiles that were just streamed, forcing them to be
         // re-downloaded when the camera revisits the area — a major cause of
@@ -253,6 +307,7 @@ async function loadArena() {
         // Add OSM Buildings as a fallback 3D dataset.
         try {
             const osmBuildings = await Cesium.createOsmBuildingsAsync();
+            installTileRetry(osmBuildings.resource);
             viewer.scene.primitives.add(osmBuildings);
             console.log('[Cesium] OSM Buildings loaded.');
         } catch (osmError) {
