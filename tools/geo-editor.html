@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<!-- geo-editor.html — DEV-ONLY geo-boundary polygon sketchpad.
+     Served at http://localhost:5173/tools/geo-editor.html by the Vite dev
+     middleware for the repo-root tools/ workspace. It is OUTSIDE client/src:
+     no SPA route, no bundle chunk, and production (Caddy serves client/dist
+     only) never exposes it. The play site cannot be disturbed by this page.
+
+     Purpose: draw / edit lat-lon polygons (disaster perimeters, water masks,
+     drop zones) against satellite imagery and export them in the exact
+     [[lat, lon], ...] format used by client/src/config/palisadesFire.js and
+     games/*/fire_sim.js perimeters.
+
+     Controls:
+       left-click map ....... append vertex
+       drag a vertex ........ move it
+       right-click vertex ... delete it
+       ctrl/cmd+Z ........... undo last vertex
+     Presets load the live engine config polygons for editing (dev-only
+     module import; this page does not exist in production). -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Geo Boundary Editor (dev tool)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  html, body { margin: 0; height: 100%; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  #map { position: absolute; inset: 0 320px 0 0; background: #0b0e11; }
+  #panel { position: absolute; top: 0; right: 0; bottom: 0; width: 320px; box-sizing: border-box;
+           padding: 10px; overflow-y: auto; background: #14181d; color: #dfe6ec;
+           border-left: 1px solid #2c3a46; display: flex; flex-direction: column; gap: 8px; }
+  h1 { font-size: 14px; margin: 0; }
+  .hint { color: #8fa3b0; font-size: 12px; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  button { padding: 6px 9px; background: #1b2530; color: #dfe6ec; border: 1px solid #35485a;
+           font: inherit; cursor: pointer; }
+  button:hover { background: #24323f; }
+  #stats { padding: 8px 10px; background: rgba(8, 12, 16, 0.72); border: 1px solid #2c3a46; white-space: pre; }
+  textarea { flex: 1; min-height: 140px; resize: none; background: #0d1116; color: #cfe3cf;
+             border: 1px solid #2c3a46; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+             padding: 6px; box-sizing: border-box; }
+  .vertex-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff3b30;
+                border: 2px solid #fff; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>Geo Boundary Editor</h1>
+  <div class="hint">left-click: add vertex · drag: move · right-click vertex: delete · ctrl+Z: undo</div>
+  <div class="row">
+    <button id="presetPerimeter">load: fire perimeter</button>
+    <button id="presetBay">load: bay mask</button>
+  </div>
+  <div class="row">
+    <button id="undo">undo</button>
+    <button id="clear">clear all</button>
+  </div>
+  <div id="stats">verts 0\narea 0.0 ha\nperim 0.00 km</div>
+  <textarea id="json" spellcheck="false" placeholder="[[lat, lon], ...]"></textarea>
+  <div class="row">
+    <button id="loadJson">load from box</button>
+    <button id="copy">copy</button>
+    <button id="download">download .json</button>
+  </div>
+  <div class="hint" id="msg"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script type="module">
+const map = L.map('map', { center: [34.045, -118.53], zoom: 13, zoomControl: true });
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics',
+}).addTo(map);
+// Labels/roads over the imagery for geographic context while tracing.
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, attribution: 'Labels © Esri',
+}).addTo(map);
+
+const verts = [];   // { lat, lng, marker }
+const polygon = L.polygon([], { color: '#ff3b30', weight: 2, fillOpacity: 0.25 }).addTo(map);
+const jsonBox = document.getElementById('json');
+const stats = document.getElementById('stats');
+const msg = document.getElementById('msg');
+
+const M_PER_DEG_LAT = 111320;
+const rad = (d) => (d * Math.PI) / 180;
+
+function flash(text) {
+  msg.textContent = text;
+  clearTimeout(flash.t);
+  flash.t = setTimeout(() => { msg.textContent = ''; }, 2500);
+}
+
+function metrics() {
+  const n = verts.length;
+  if (n < 3) return { ha: 0, km: 0 };
+  const lat0 = verts.reduce((s, v) => s + v.lat, 0) / n;
+  const mPerDegLon = M_PER_DEG_LAT * Math.cos(rad(lat0));
+  const xy = verts.map((v) => [(v.lng - verts[0].lng) * mPerDegLon, (v.lat - lat0) * M_PER_DEG_LAT]);
+  let a = 0;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = xy[i], [x2, y2] = xy[(i + 1) % n];
+    a += x1 * y2 - x2 * y1;
+  }
+  let per = 0;
+  for (let i = 0; i < n; i++) {
+    const p = verts[i], q = verts[(i + 1) % n];
+    const dx = (q.lng - p.lng) * mPerDegLon, dy = (q.lat - p.lat) * M_PER_DEG_LAT;
+    per += Math.hypot(dx, dy);
+  }
+  return { ha: Math.abs(a) / 2 / 10000, km: per / 1000 };
+}
+
+function refresh() {
+  polygon.setLatLngs(verts.map((v) => [v.lat, v.lng]));
+  const m = metrics();
+  stats.textContent = 'verts ' + verts.length + '\narea  ' + m.ha.toFixed(1) + ' ha\nperim ' + m.km.toFixed(2) + ' km';
+  jsonBox.value = JSON.stringify(verts.map((v) => [+v.lat.toFixed(5), +v.lng.toFixed(5)]));
+}
+
+function addVert(lat, lng) {
+  const marker = L.marker([lat, lng], {
+    draggable: true,
+    icon: L.divIcon({ className: '', html: '<div class="vertex-dot"></div>', iconSize: [10, 10], iconAnchor: [5, 5] }),
+  }).addTo(map);
+  const vert = { lat, lng, marker };
+  marker.on('dragend', () => {
+    const p = marker.getLatLng();
+    vert.lat = p.lat; vert.lng = p.lng;
+    refresh();
+  });
+  marker.on('contextmenu', () => removeVert(vert));
+  verts.push(vert);
+  refresh();
+}
+
+function removeVert(vert) {
+  const i = verts.indexOf(vert);
+  if (i < 0) return;
+  vert.marker.remove();
+  verts.splice(i, 1);
+  refresh();
+}
+
+function loadPairs(pairs, label) {
+  if (!Array.isArray(pairs) || pairs.some((p) => !Array.isArray(p) || p.length < 2 || !isFinite(p[0]) || !isFinite(p[1]))) {
+    flash('bad polygon JSON: expected [[lat, lon], ...]');
+    return;
+  }
+  verts.splice(0).forEach((v) => v.marker.remove());
+  for (const [lat, lng] of pairs) addVert(lat, lng);
+  map.fitBounds(polygon.getBounds().pad(0.2));
+  flash('loaded ' + (label || 'polygon') + ': ' + pairs.length + ' verts');
+}
+
+map.on('click', (e) => addVert(e.latlng.lat, e.latlng.lng));
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (verts.length) removeVert(verts[verts.length - 1]);
+  }
+});
+document.getElementById('undo').addEventListener('click', () => { if (verts.length) removeVert(verts[verts.length - 1]); });
+document.getElementById('clear').addEventListener('click', () => { verts.splice(0).forEach((v) => v.marker.remove()); refresh(); });
+document.getElementById('loadJson').addEventListener('click', () => {
+  try { loadPairs(JSON.parse(jsonBox.value), 'box'); } catch { flash('JSON parse error'); }
+});
+document.getElementById('copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(jsonBox.value); flash('copied ' + verts.length + ' verts'); }
+  catch { jsonBox.select(); document.execCommand('copy'); flash('copied (fallback)'); }
+});
+document.getElementById('download').addEventListener('click', () => {
+  const blob = new Blob([jsonBox.value + '\n'], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'boundary.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  flash('downloaded boundary.json');
+});
+
+// Presets: the LIVE engine config module (dev-only import; Vite transforms
+// /src/* on the fly). Editing here never writes back — export is copy/paste.
+let cfg = null;
+async function presets() {
+  if (cfg) return cfg;
+  cfg = await import('/src/config/palisadesFire.js');
+  return cfg;
+}
+document.getElementById('presetPerimeter').addEventListener('click', async () => {
+  try { loadPairs((await presets()).PALISADES_FIRE.perimeter, 'fire perimeter'); }
+  catch (e) { flash('preset import failed: ' + e.message); }
+});
+document.getElementById('presetBay').addEventListener('click', async () => {
+  try { loadPairs((await presets()).SANTA_MONICA_BAY, 'bay mask'); }
+  catch (e) { flash('preset import failed: ' + e.message); }
+});
+
+refresh();
+</script>
+</body>
+</html>

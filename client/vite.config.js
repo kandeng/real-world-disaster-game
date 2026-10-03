@@ -20,11 +20,13 @@ import { createReadStream, statSync } from 'fs';
  * would answer /games/catalog.json with index.html, exactly the trap the
  * production Caddyfile avoids by matching /games/* ahead of the catch-all.
  */
-function gamesWorkspaceDev() {
-  const root = resolve(__dirname, '..', 'games');
+function staticWorkspaceDev(pluginName, urlPrefix, root) {
   const MIME = {
     '.json': 'application/json; charset=utf-8',
     '.js': 'text/javascript; charset=utf-8',
+    // Package dev tools (e.g. controller_viewer.html) must render in-place,
+    // not download: octet-stream would make the browser save the page.
+    '.html': 'text/html; charset=utf-8',
     '.mp4': 'video/mp4',
     '.webm': 'video/webm',
     '.mp3': 'audio/mpeg',
@@ -39,15 +41,15 @@ function gamesWorkspaceDev() {
   };
 
   return {
-    name: 'games-workspace-dev',
+    name: pluginName,
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (!req.url || !req.url.startsWith('/games/')) return next();
+        if (!req.url || !req.url.startsWith(urlPrefix)) return next();
 
         let rel;
         try {
-          rel = decodeURIComponent(req.url.slice('/games/'.length).split('?')[0]);
+          rel = decodeURIComponent(req.url.slice(urlPrefix.length).split('?')[0]);
         } catch {
           res.statusCode = 400;
           return res.end('bad request');
@@ -110,10 +112,19 @@ function gamesWorkspaceDev() {
   };
 }
 
+// Game packages (mutable half of the site) and developer tools both live
+// OUTSIDE client/ and must never enter the engine bundle. Production serves
+// /games/* from Caddy; /tools/* is DEV-ONLY and simply does not exist there.
+const gamesWorkspaceDev = () =>
+  staticWorkspaceDev('games-workspace-dev', '/games/', resolve(__dirname, '..', 'games'));
+const toolsWorkspaceDev = () =>
+  staticWorkspaceDev('tools-workspace-dev', '/tools/', resolve(__dirname, '..', 'tools'));
+
 export default defineConfig({
   plugins: [
     vue(),
     gamesWorkspaceDev(),
+    toolsWorkspaceDev(),
   ],
   // NOTE: no assetsInclude for .glb — the fleet machine meshes moved out of
   // client/ into the games/<id>/ packages and are fetched at runtime by URL
