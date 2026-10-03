@@ -1377,11 +1377,18 @@ watch(map, (m) => {
   if (props.penTool) attachPenListeners();
 });
 
+// Engine effect glue (fire overlay canvas) needs the live map instance plus
+// the Google Maps namespace to construct an OverlayView against it.
+function getGoogleMap() {
+  return mapsApi && map.value ? { mapsApi, map: map.value } : null;
+}
+
 defineExpose({
   searchNearbyPoisAt,
   searchPoisByText,
   panTo,
   searchRoutes,
+  getGoogleMap,
   setSelectionMarker,
   setSelectionMarkerVisible,
   setLivePosition,

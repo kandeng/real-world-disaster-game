@@ -28,6 +28,7 @@ import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } fro
 import ConnectionError from '@shared/ConnectionError.vue';
 import SplashOverlay from '@shared/SplashOverlay.vue';
 import { PALISADES_FIRE, PLAN_VIEW_ALT } from '@/config/palisadesFire.js';
+import { useFireDemo } from '@/composables/useFireDemo.js';
 import { getGameIntro } from '@/config/gameIntro.js';
 
 const { t, locale } = useI18n();
@@ -321,6 +322,9 @@ watch(() => route.query, applyPlayQuery);
 
 // ── Search panel state (address finding — same workflow as Route Planning) ──
 const mapViewRef = ref(null);
+// Fire effect demo driver (?fireDemo=1): ticks the package fire_sim and feeds
+// the engine effect layer through protocol commands only.
+const fireDemo = useFireDemo();
 const showSearchPanel = computed(() => viewCtx.subView === 'search');
 const searchQuery = toRef(viewCtx, 'searchQuery');
 const searchResults = ref([]);
@@ -438,6 +442,9 @@ function onMapReady() {
   }
   if (routeActive.value) redrawRouteMarkers();
   if (showLivePos.value) mapViewRef.value?.setLivePosition(drone.lat, drone.lon);
+  // No-op unless ?fireDemo=1; re-attaches the overlay when the map instance
+  // changed (Plan <-> Steer round trips recreate the Google map).
+  fireDemo.start(() => mapViewRef.value?.getGoogleMap?.() ?? null);
 }
 
 // Read-only route illustration (Content -> Steer handoff): while the Route
@@ -1343,6 +1350,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopPlay();
   stopPlayLoading();
+  fireDemo.stop();
   resetRecorder();
   // A freeze session must never outlive the view: it stops the camera push
   // and holds a full-viewport overlay.
