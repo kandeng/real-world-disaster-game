@@ -16,6 +16,21 @@ export const PALISADES_FIRE = {
   ],
 };
 
+// Rough Santa Monica Bay water mask: the disaster-zone perimeter above has a
+// southern lobe over the ocean, and the fire simulation must never burn water.
+// Coastline runs Topanga Beach -> Santa Monica; the polygon closes south of
+// the sim grid, so only the bay inside the perimeter matters.
+export const SANTA_MONICA_BAY = [
+  [34.0465, -118.580],
+  [34.0405, -118.565],
+  [34.0300, -118.545],
+  [34.0215, -118.525],
+  [34.0120, -118.508],
+  [34.0040, -118.495],
+  [33.9800, -118.495],
+  [33.9800, -118.580],
+];
+
 // 2D map height (m) the Plan view opens at — roughly zoom 12, so the
 // whole disaster zone plus the neighbouring towns fit on screen.
 export const PLAN_VIEW_ALT = 5200;
