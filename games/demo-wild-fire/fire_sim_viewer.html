@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<!-- fire_sim_viewer.html — visual verification harness for fire_sim.js.
+     Top-down grid canvas: one pixel per CA cell, painted INCREMENTALLY from
+     takeChanges() (the same delta feed the real engine effect layer will use).
+     What to verify:
+       • ignite -> radial growth with wind calm; anisotropic (downwind fast,
+         upwind crawl) with a wind preset.
+       • behind the orange front the cells burn out to BLACK ash.
+       • click in water mode -> blue wet patch steams, then settles black;
+         a partial drop leaves a black hole inside a living orange ring.
+       • full knockdown -> phase extinguished, black scar remains.
+     Colours: green fuel / orange burning / black ash / blue wet / dark no-fuel. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>fire_sim.js visual harness</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #101418; color: #dfe6ec;
+               font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; }
+  #wrap { display: flex; gap: 10px; padding: 10px; height: 100%; box-sizing: border-box; }
+  #stage { position: relative; flex: 1; min-width: 0; }
+  canvas#view { width: 100%; height: 100%; image-rendering: pixelated; cursor: crosshair;
+                background: #101418; }
+  #side { width: 250px; display: flex; flex-direction: column; gap: 8px; }
+  #hud { padding: 8px 10px; background: rgba(8, 12, 16, 0.72); border: 1px solid #2c3a46; white-space: pre; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  button { padding: 7px 10px; background: #1b2530; color: #dfe6ec; border: 1px solid #35485a;
+           font: inherit; cursor: pointer; }
+  button.on { background: #2a4a5c; border-color: #4a7a94; }
+  #legend { padding: 8px 10px; background: rgba(8, 12, 16, 0.72); border: 1px solid #2c3a46; }
+  .sw { display: inline-block; width: 10px; height: 10px; margin: 0 4px -1px 8px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="view"></canvas></div>
+  <div id="side">
+    <div id="hud">booting…</div>
+    <div class="row" id="modes">
+      <button data-mode="water" class="on">click = water</button>
+      <button data-mode="ignite">click = ignite</button>
+    </div>
+    <div class="row" id="winds">
+      <button data-wind="calm">wind calm</button>
+      <button data-wind="santaana" class="on">Santa Ana</button>
+      <button data-wind="east">wind east</button>
+    </div>
+    <div class="row" id="speeds">
+      <button data-speed="1">1×</button>
+      <button data-speed="8" class="on">8×</button>
+      <button data-speed="32">32×</button>
+      <button data-speed="0">pause</button>
+    </div>
+    <div class="row">
+      <button id="igniteCenter">ignite center</button>
+      <button id="reset">reset</button>
+    </div>
+    <div id="legend">fuel<span class="sw" style="background:#2f5d33"></span>burn<span class="sw" style="background:#ff7a1a"></span>ash<span class="sw" style="background:#141414;outline:1px solid #444"></span>wet<span class="sw" style="background:#3a6ea5"></span></div>
+  </div>
+</div>
+<script type="module">
+import { createFireSim, CELL } from './fire_sim.js';
+
+// Palisades Fire perimeter (same shape as client/src/config/palisadesFire.js;
+// duplicated on purpose: packages must not import engine internals).
+const PERIMETER = [
+  [34.085, -118.545], [34.075, -118.51], [34.055, -118.495], [34.03, -118.5],
+  [34.01, -118.52], [34.005, -118.55], [34.02, -118.575], [34.05, -118.58], [34.07, -118.565],
+];
+const WINDS = { calm: { toDeg: 225, speedMps: 0 }, santaana: { toDeg: 225, speedMps: 12 }, east: { toDeg: 90, speedMps: 12 } };
+const SEED = 7;
+
+let windKey = 'santaana';
+let mode = 'water';
+let speedMult = 8;
+let sim = null;
+let grid = null;
+
+// Offscreen canvas at grid resolution; display canvas upscales pixelated.
+const off = document.createElement('canvas');
+const octx = off.getContext('2d');
+let img = null;
+const view = document.getElementById('view');
+const vctx = view.getContext('2d');
+vctx.imageSmoothingEnabled = false;
+
+const px = (c, r) => (r * off.width + c) * 4;
+function paintCell(i, s, flicker) {
+  const c = i % grid.cols, r = (i / grid.cols) | 0;
+  const p = px(c, r);
+  let R = 16, G = 20, B = 24, A = 255;                       // no-fuel backdrop
+  if (s === CELL.UNBURNED) { const n = (i * 2654435761 % 23) - 11; R = 47 + n; G = 93 + n; B = 51 + n; }
+  else if (s === CELL.BURNING) { const f = flicker ? 180 + ((Math.random() * 75) | 0) : 255; R = f; G = 90 + ((Math.random() * 60) | 0); B = 26; }
+  else if (s === CELL.ASH) { const n = (i * 40503 % 17) - 8; R = 20 + n; G = 20 + n; B = 20 + n; }
+  else if (s === CELL.WET) { R = 58; G = 110; B = 165; }
+  img.data[p] = R; img.data[p + 1] = G; img.data[p + 2] = B; img.data[p + 3] = A;
+}
+
+function makeSim() {
+  sim = createFireSim({ perimeter: PERIMETER, cellSizeM: 60, seed: SEED, wind: WINDS[windKey] });
+  grid = sim.gridInfo();
+  off.width = grid.cols; off.height = grid.rows;
+  img = octx.createImageData(grid.cols, grid.rows);
+  for (let i = 0; i < grid.cols * grid.rows; i++) paintCell(i, grid.stateAt(i % grid.cols, (i / grid.cols) | 0), false);
+  sim.takeChanges();   // discard build-time "changes"
+  acc = 0;
+}
+
+function applyChanges() {
+  const ch = sim.takeChanges();
+  for (const i of ch.burning) paintCell(i, CELL.BURNING, false);
+  for (const i of ch.ash) paintCell(i, CELL.ASH, false);
+  for (const i of ch.wet) paintCell(i, CELL.WET, false);
+  for (const i of ch.unburned) paintCell(i, CELL.UNBURNED, false);
+}
+
+function flickerFront() {
+  // Visual-only: re-roll burning pixel shades each frame so the front dances.
+  for (let r = 0; r < grid.rows; r++) for (let c = 0; c < grid.cols; c++) {
+    if (grid.stateAt(c, r) === CELL.BURNING) paintCell(r * grid.cols + c, CELL.BURNING, true);
+  }
+}
+
+function drawPerimeter() {
+  vctx.strokeStyle = 'rgba(255, 90, 90, 0.9)';
+  vctx.lineWidth = 1.5;
+  vctx.beginPath();
+  PERIMETER.forEach(([lat, lon], k) => {
+    const x = (lon - grid.lonMin) / grid.cellDegLon / grid.cols * view.width;
+    const y = (grid.latMax - lat) / grid.cellDegLat / grid.rows * view.height;
+    k ? vctx.lineTo(x, y) : vctx.moveTo(x, y);
+  });
+  vctx.closePath();
+  vctx.stroke();
+}
+
+function resize() {
+  const st = document.getElementById('stage');
+  view.width = st.clientWidth; view.height = st.clientHeight;
+  vctx.imageSmoothingEnabled = false;
+}
+addEventListener('resize', resize);
+
+view.addEventListener('click', (e) => {
+  const rect = view.getBoundingClientRect();
+  const c = Math.floor((e.clientX - rect.left) / rect.width * grid.cols);
+  const r = Math.floor((e.clientY - rect.top) / rect.height * grid.rows);
+  if (c < 0 || c >= grid.cols || r < 0 || r >= grid.rows) return;
+  const [lon, lat] = grid.lonLatOf(r * grid.cols + c);
+  if (mode === 'water') sim.dropWater(lon, lat, 400);
+  else sim.ignite(lon, lat, 90);
+});
+
+document.querySelectorAll('#modes button').forEach((b) => b.addEventListener('click', () => {
+  mode = b.dataset.mode;
+  document.querySelectorAll('#modes button').forEach((x) => x.classList.toggle('on', x === b));
+}));
+document.querySelectorAll('#winds button').forEach((b) => b.addEventListener('click', () => {
+  windKey = b.dataset.wind;
+  document.querySelectorAll('#winds button').forEach((x) => x.classList.toggle('on', x === b));
+  makeSim();   // wind is construction config: reset the world
+}));
+document.querySelectorAll('#speeds button').forEach((b) => b.addEventListener('click', () => {
+  speedMult = Number(b.dataset.speed);
+  document.querySelectorAll('#speeds button').forEach((x) => x.classList.toggle('on', x === b));
+}));
+document.getElementById('igniteCenter').addEventListener('click', () => {
+  sim.ignite(-118.532, 34.048, 150);
+});
+document.getElementById('reset').addEventListener('click', makeSim);
+
+const hud = document.getElementById('hud');
+let acc = 0, last = performance.now();
+function loop(now) {
+  const dtReal = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += dtReal * speedMult;
+  while (acc >= 0.5) { sim.tick(0.5); acc -= 0.5; }
+  applyChanges();
+  flickerFront();
+  octx.putImageData(img, 0, 0);
+  vctx.drawImage(off, 0, 0, view.width, view.height);
+  drawPerimeter();
+  const s = sim.getState();
+  hud.textContent =
+    'phase      ' + s.phase + '\n' +
+    'sim time   ' + s.time.toFixed(0) + ' s\n' +
+    'burning    ' + String(s.counts.burning).padStart(5) + '\n' +
+    'ash        ' + String(s.counts.ash).padStart(5) + '\n' +
+    'wet        ' + String(s.counts.wet).padStart(5) + '\n' +
+    'burned     ' + s.burnedAreaHa.toFixed(1) + ' ha\n' +
+    'contained  ' + (s.containedFrac * 100).toFixed(0) + ' %';
+  requestAnimationFrame(loop);
+}
+
+resize();
+makeSim();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
