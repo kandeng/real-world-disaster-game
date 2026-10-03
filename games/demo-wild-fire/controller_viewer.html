@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>controller_drone.js — visual check</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14171c; color: #e8eaed;
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; }
+  #app { position: fixed; inset: 0; }
+  #hud { position: fixed; top: 10px; left: 10px; padding: 8px 10px;
+    background: rgba(10, 12, 16, .72); border: 1px solid #2a2f37; border-radius: 8px;
+    white-space: pre; pointer-events: none; }
+  #pad { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+    display: grid; grid-template-columns: repeat(4, auto); gap: 6px; }
+  #pad button { padding: 10px 14px; border: 1px solid #2a2f37; border-radius: 8px;
+    background: #1d222a; color: #e8eaed; font: inherit; cursor: pointer;
+    user-select: none; touch-action: none; }
+  #pad button:active { background: #2c3542; border-color: #4a5566; }
+  #pad button.wide { grid-column: span 4; background: #3a2020; border-color: #5a2f2f; }
+  #status { position: fixed; top: 10px; right: 10px; max-width: 46ch; padding: 8px 10px;
+    background: rgba(10, 12, 16, .72); border: 1px solid #2a2f37; border-radius: 8px; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud">booting…</div>
+<div id="status">loading controller + mesh…</div>
+<div id="pad">
+  <button data-cmd="turnLeft">turn left</button>
+  <button data-cmd="forward">forward</button>
+  <button data-cmd="backward">backward</button>
+  <button data-cmd="turnRight">turn right</button>
+  <button data-cmd="rotateCcw">rotate CCW</button>
+  <button data-cmd="ascend">up</button>
+  <button data-cmd="descend">down</button>
+  <button data-cmd="rotateCw">rotate CW</button>
+  <button class="wide" data-cmd="stop">stop (release also stops)</button>
+  <button class="wide" data-cmd="reset">reset pose (heading 0, back to origin)</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const hud = document.getElementById('hud');
+const status = document.getElementById('status');
+
+// ---- renderer / scene -------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14171c);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3f46, 2.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+sun.position.set(6, 12, 7);
+scene.add(sun);
+scene.add(new THREE.GridHelper(40, 40, 0x39404a, 0x232830));   // 1 m cells: scale cue
+// North marker: the red arrow points to world -Z = heading 0 = the mesh nose.
+scene.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0.2, 0), 3, 0xff5040, 0.6, 0.3));
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 4000);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---- the artifact under test: the package's own controller, by relative URL --
+const mod = await import('./controller_drone.js');
+const START = { lon: -118.4955, lat: 34.0430, alt: 60, headingDeg: 0 };
+let ctl = mod.createDroneController(START);
+status.textContent = 'controller ok: ' + Object.keys(mod).join(', ');
+
+// Propeller assemblies of drone_dji_air3.glb, identified in ROOT space (metres):
+// each corner's two thin blade nodes cross at the motor hub. The arm rods
+// (Object_35/37/75/77, Object_147/149/210/212) are deliberately EXCLUDED —
+// they connect hub to body and must stay static. Spin signs come from the
+// controller's own ROTOR_GROUPS (diagonal pairs counter-rotate).
+// Hubs are NOT hardcoded: each pivot is placed at the world-space centre of its
+// group's geometry box (two blades cross at the hub, so the box centre is it).
+const PROP_GROUPS = [
+  { key: 'rightFront', names: ['Object_59', 'Object_55'] },
+  { key: 'rightRear',  names: ['Object_198', 'Object_194'] },
+  { key: 'leftFront',  names: ['Object_15', 'Object_19'] },
+  { key: 'leftRear',   names: ['Object_164', 'Object_168'] },
+];
+let rotorTargets = null;
+function makeController() {
+  ctl = mod.createDroneController(START);
+  if (rotorTargets) ctl.bindRotors(rotorTargets);
+}
+
+// ---- the mesh it commands ----------------------------------------------------
+const wrapper = new THREE.Object3D();   // pose applied here, in metres
+scene.add(wrapper);
+// Green nose arrow, rigidly attached: always shows the direction the mesh
+// nose (glTF -Z) points, so 'forward must move along green' is checkable.
+wrapper.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, 0), 1.0, 0x35d07f, 0.3, 0.15));
+new GLTFLoader().load('./drone_dji_air3.glb', (gltf) => {
+  // The asset bakes a 0.01 unit-fix scale into node WM233_352, so an extra
+  // 0.1 here yields the intended 0.001 (mm -> m). Do NOT add another 0.001:
+  // that double-scale rendered the drone at 0.3 mm — an invisible speck.
+  gltf.scene.scale.setScalar(0.1);
+  wrapper.add(gltf.scene);
+  gltf.scene.updateMatrixWorld(true);
+
+  // Harness visibility insurance: some Sketchfab exports ship inverted
+  // winding (backface culling then hides every face from outside) or
+  // alpha-blended materials that fade to nothing. Force double-sided opaque
+  // and disable culling so the spin is always observable in this viewer.
+  gltf.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    for (const m of mats) {
+      m.side = THREE.DoubleSide;
+      m.transparent = false;
+      m.opacity = 1;
+      // glTF defaults metallicFactor to 1.0; a full metal with no environment
+      // map shades black-on-black. Force dielectric so the body reads grey.
+      m.metalness = 0;
+      m.roughness = 0.9;
+    }
+  });
+  const box = new THREE.Box3().setFromObject(gltf.scene);
+  const sz = box.getSize(new THREE.Vector3());
+  const ct = box.getCenter(new THREE.Vector3());
+
+  // Self-diagnostics: an empty Box3 with 'mesh ok' means the loader built the
+  // node hierarchy but no Mesh objects — surface the counts instead of guessing.
+  let objs = 0, meshes = 0, verts = 0;
+  gltf.scene.traverse((o) => {
+    objs++;
+    if (o.isMesh) { meshes++; const p = o.geometry && o.geometry.getAttribute('position'); verts += p ? p.count : 0; }
+  });
+  console.log('glTF tree:', { objs, meshes, verts, parserMeshes: (gltf.parser.json.meshes || []).length });
+  // Degeneracy probe: zero-filled positions or a zeroed matrixWorld both render
+  // as an invisible point at the origin while reporting 'mesh ok'.
+  let fm = null;
+  gltf.scene.traverse((o) => { if (o.isMesh && !fm) fm = o; });
+  if (fm) {
+    const p = fm.geometry.getAttribute('position');
+    console.log('firstMesh', fm.name, 'pos0', p ? [p.getX(0), p.getY(0), p.getZ(0)] : null,
+      'mw0', Array.from(fm.matrixWorld.elements.slice(0, 4)),
+      'parentChain', (function () { const c = []; let q = fm; while (q) { c.push(q.name || q.type); q = q.parent; } return c; })());
+  }
+
+  // One pivot per motor hub, placed at the group's world-space box centre;
+  // propeller nodes are attach()ed to it so only the pivot rotates (rigidity
+  // rule: per-node rotation tears blades off hubs).
+  const byName = {};
+  gltf.scene.traverse((o) => { if (o.name && !byName[o.name]) byName[o.name] = o; });
+  rotorTargets = [];
+  let bound = 0;
+  const misses = [];
+  const corner = new THREE.Vector3();
+  for (const g of PROP_GROUPS) {
+    const nodes = [];
+    for (const name of g.names) {
+      const nd = byName[name];
+      if (nd && nd.isMesh) nodes.push(nd); else misses.push(name);
+    }
+    const bb = new THREE.Box3();
+    for (const nd of nodes) {
+      nd.geometry.computeBoundingBox();
+      const b = nd.geometry.boundingBox;
+      for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) {
+        corner.set(x, y, z);
+        nd.localToWorld(corner);
+        bb.expandByPoint(corner);
+      }
+    }
+    const pivot = new THREE.Object3D();
+    pivot.name = '__pivot_' + g.key;
+    pivot.position.copy(wrapper.worldToLocal(bb.getCenter(new THREE.Vector3())));
+    wrapper.add(pivot);
+    wrapper.updateMatrixWorld(true);
+    for (const nd of nodes) pivot.attach(nd);
+    rotorTargets.push({ key: g.key, node: pivot });
+  }
+  bound = ctl.bindRotors(rotorTargets);
+  status.textContent = 'mesh ok — bound ' + bound + '/4 — tree ' + objs + ' objs / ' +
+    meshes + ' meshes / ' + verts + ' verts — body ' +
+    sz.x.toFixed(2) + ' x ' + sz.y.toFixed(2) + ' x ' + sz.z.toFixed(2) + ' m' +
+    (misses.length ? ' — MISSING: ' + misses.join(',') : '');
+}, undefined, (e) => { status.textContent = 'mesh load failed: ' + e.message; });
+
+// ---- command pad -------------------------------------------------------------
+// Hold = continuous command, release = stop. A quick CLICK (<200 ms) becomes a
+// ~0.8 s pulse, otherwise a 100 ms click commands too little yaw/speed to see.
+for (const btn of document.querySelectorAll('#pad button')) {
+  const cmd = btn.dataset.cmd;
+  let t0 = 0;
+  let pulse = 0;
+  const release = () => {
+    clearTimeout(pulse);
+    ctl.stop();
+  };
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    clearTimeout(pulse);
+    t0 = performance.now();
+    if (cmd === 'reset') { makeController(); return; }
+    ctl[cmd]();
+  });
+  btn.addEventListener('pointerleave', release);
+  btn.addEventListener('pointerup', () => {
+    if (cmd === 'reset') return;
+    if (performance.now() - t0 < 200) pulse = setTimeout(() => ctl.stop(), 800);
+    else ctl.stop();
+  });
+}
+
+// ---- loop: controller integrates pose; viewer maps pose -> world --------------
+const M_PER_DEG_LAT = 111320;
+const lat0 = START.lat, lon0 = START.lon, alt0 = START.alt;
+let last = performance.now();
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  ctl.update(dt);
+  const s = ctl.getState();
+
+  // Pose (lon/lat/alt metres relative to start) -> three.js world metres.
+  const mPerDegLon = M_PER_DEG_LAT * Math.cos(lat0 * Math.PI / 180);
+  const eastM = (s.pose.lon - lon0) * mPerDegLon;
+  const northM = (s.pose.lat - lat0) * M_PER_DEG_LAT;
+  wrapper.position.set(eastM, s.pose.alt - alt0, -northM);
+  // Compass heading (clockwise from north) -> three.js Y rotation; the mesh
+  // nose is glTF -Z, which is world -Z (north) at heading 0, so no trim.
+  wrapper.rotation.y = -(s.pose.headingDeg * Math.PI) / 180;
+
+  // Close chase framing: the machine is only ~0.3 m across, so the camera
+  // must sit ~2.4 m away for it to fill the frame. Offset is WORLD-fixed
+  // (not heading-fixed), so screen motion direction == world motion
+  // direction == the red/green arrow projections.
+  camera.position.set(wrapper.position.x + 1.6, wrapper.position.y + 1.1, wrapper.position.z + 1.6);
+  camera.lookAt(wrapper.position);
+
+  hud.textContent =
+    'heading  ' + s.pose.headingDeg.toFixed(1).padStart(6) + ' deg\n' +
+    'alt      ' + (s.pose.alt).toFixed(1).padStart(6) + ' m\n' +
+    'speed    ' + s.speed.toFixed(2).padStart(6) + ' m/s\n' +
+    'vz       ' + s.vz.toFixed(2).padStart(6) + ' m/s\n' +
+    'yawRate  ' + s.yawRate.toFixed(1).padStart(6) + ' deg/s\n' +
+    'rpm      ' + s.rotors.map((r) => String(Math.round(r.rpm)).padStart(5)).join('') + '\n' +
+    'angle    ' + s.rotors.map((r) => String(Math.round(r.angleDeg) % 360).padStart(5)).join('') + '\n' +
+    '         RF   RR   LF   LR';
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
