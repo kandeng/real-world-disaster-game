@@ -351,6 +351,28 @@ export function createFireSim(config = {}) {
     return out;
   }
 
+  /**
+   * hotspot() -> { lon, lat, burning } | null
+   * Centroid of the currently BURNING cells, in WGS84 degrees — the "where is
+   * the fire right now" point an AI advisor aims a water drop at. A pure,
+   * deterministic function of the grid (no PRNG, no clock), so it never
+   * affects evolution or gridHash. null when nothing burns (caller holds).
+   * Engine-side drivers fold this into the observation they send the
+   * slow-clock agent worker; the sim itself decides nothing.
+   */
+  function hotspot() {
+    let sumLon = 0, sumLat = 0, n = 0;
+    for (let i = 0; i < state.length; i++) {
+      if (state[i] !== CELL.BURNING) continue;
+      const c = i % cols, r = (i / cols) | 0;
+      sumLon += lonMin + (c + 0.5) * cellDegLon;
+      sumLat += latMax - (r + 0.5) * cellDegLat;
+      n++;
+    }
+    if (!n) return null;
+    return { lon: sumLon / n, lat: sumLat / n, burning: n };
+  }
+
   /** Cells changed since the previous takeChanges(); renderer delta feed. */
   function takeChanges() {
     const out = changes;
@@ -384,11 +406,11 @@ export function createFireSim(config = {}) {
         windKeyframes: 'piecewise-linear timeline, shortest-arc angle lerp',
         loss: 'lost latches at occupyFrac >= loss.occupyFrac; at fire-out the residue islands count, water-saved fuel does not',
       },
-      commands: ['ignite', 'dropWater', 'tick', 'getState', 'takeChanges', 'gridInfo', 'describe'],
+      commands: ['ignite', 'dropWater', 'tick', 'getState', 'takeChanges', 'gridInfo', 'hotspot', 'describe'],
     };
   }
 
-  return { ignite, dropWater, tick, getState, takeChanges, gridInfo, describe, CELL };
+  return { ignite, dropWater, tick, getState, takeChanges, gridInfo, hotspot, describe, CELL };
 }
 
 export default createFireSim;

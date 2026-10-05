@@ -1,6 +1,6 @@
 # Matrix Synapse (Community chat, 127.0.0.1:8008) — local dev homeserver.
 [Unit]
-Description=Matrix Synapse homeserver (real-world-disaster-game, port 8008)
+Description=Matrix Synapse homeserver (web-geospatial-multi-agent-simulation-engine, port 8008)
 After=network.target
 
 [Service]

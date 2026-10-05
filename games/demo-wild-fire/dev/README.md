@@ -24,7 +24,7 @@ game engine is the one component that translates those messages into browser
 API calls (Google Maps overlays, Cesium entities, canvas rAF loops, audio).
 
 ```
-package (sim / controllers / agent worker)
+package (sim / controllers / scenario — pure data + functions)
    │   { "type": "fire.delta", "burning": [...], ... }   <- JSON only
    ▼
 static engine (effect catalog, overlays, views)
@@ -35,14 +35,22 @@ DOM / WebGL / Google Maps / Cesium
 
 - Message vocabulary: `{ type, ...payload }`, JSON-serializable, versioned per
   effect (e.g. `FIRE_EFFECT_PROTOCOL` in the engine's `fireEffect.js`). The
+  NORMATIVE definition of every wire type is the engine registry:
+  `client/src/engine/protocol.js` (envelope kernel, validation policy) +
+  `client/src/engine/families/fire.js` (the fire family — events and commands
+  with required/optional field specs). Both edges validate in warn mode:
+  invalid envelopes are reported loudly but still delivered (v1); the
   engine ignores unknown types instead of failing — fail-safe against a newer
   package running on an older engine.
 - A package does not even load its own files: the engine resolves URLs through
   `scene.json` → the asset manifest and imports the module. Packages never fetch.
 - Structural enforcement: at play time package code runs in a per-session Web
-  Worker (engine-owned `client/src/workers/fireAgent.worker.js`), where
-  `window`/`document` do not exist — a violation is not a review finding, it
-  is a crash on arrival.
+  Worker — the generic core `client/src/workers/gameCore.worker.js` (L1). It
+  boots a Cordis context, resolves `scene.json` → manifests, and mounts each
+  asset's engine-side driver plugin (fire → `client/src/engine/drivers/fire.js`),
+  which is what imports the package's sim/scenario modules. `window`/`document`
+  do not exist in the worker, so a violation is not a review finding, it is a
+  crash on arrival.
 - Audit grep before shipping any package (comments are the only acceptable hit):
   `grep -n "window\.\|document\.\|fetch(\|THREE\|canvas\|navigator\." assets/*/*.js`
 - The ONE exception is this `dev/` directory: a harness *stands in for the
@@ -126,12 +134,18 @@ care about (spread anisotropy under wind, water knockdown leaving an ash hole,
 water masks impassable, loss latch). Write the assertions to a scratch `.mjs`
 file and run `node file.mjs` — long `node -e` one-liners fight shell quoting.
 
-The fire agent WORKER is headless-testable too: stub `globalThis.self`
+The generic core WORKER is headless-testable too: stub `globalThis.self`
 (capture `postMessage`) and `globalThis.fetch` (read from disk), import
-`client/src/workers/fireAgent.worker.js`, drive `self.onmessage({data:
-{type:'start', packageBase:'<repo>/games/demo-wild-fire/', speed:3600}})` and
-assert the message lifecycle `fire.setGrid → fire.delta* → fire.state* →
-game.over{outcome:'lost'|'held'}`.
+`client/src/workers/gameCore.worker.js`, drive `self.onmessage({data:
+{type:'boot', packageBase:'<repo>/games/demo-wild-fire/', speed:3600}})` and
+assert the message lifecycle `core.ready → fire.setGrid → fire.delta* →
+fire.state* → game.over{outcome:'lost'|'held'}` (see `/tmp/e2_core_test.mjs`).
+Content-only assets with no driver (drone, tank) are reported in
+`core.ready.skipped`, not as errors — degrade, never break. Each periodic
+`fire.state` beat is paired with a `fire.observe` snapshot (burning-frontier
+`hotspot()` + grid bounds) for the slow-clock advisor; at high test speeds the
+periodic beat may not fire before `game.over`, but `finish()` emits a terminal
+`fire.observe` too (`/tmp/e3_observe_check.mjs` asserts this).
 
 ## How to test an asset visually (the harnesses here)
 
@@ -167,6 +181,63 @@ Two related instruments live elsewhere:
   red debug outline. Console handle `__fireDemo`: `drop(lon,lat[,r])` (the
   player capability), `ignite(...)`, `state()` (last snapshot), `speed(x)`,
   `stop()`.
+- `http://localhost:5173/play?fireDemo=1&aiAdvisor=1` — the two-clock AI
+  advisor (E3, the SLOW clock). Alongside the deterministic core worker the
+  host spawns a second, separate worker — the per-session agent worker
+  `client/src/workers/gameAgent.worker.js` — that owns every remote-AI call so
+  the tick never awaits a model. Like the core worker it is engine-side (not
+  package code), so its `fetch` is legitimate; the one rule binds `assets/*`
+  only. Data flow: the fire driver folds `fire_sim.hotspot()` + bounds into a
+  `fire.observe` snapshot each beat → the host relays it as `agent.observe` →
+  the agent worker POSTs `/api/game/agent/decide` (beat-throttled, one request
+  in flight, coalesced to the latest observation) → the server returns an
+  *intent* → the agent worker emits `agent.intent` → the host forwards the
+  intent verbatim to the core worker as an ordinary `dropWater` command, applied
+  at the next tick commit. The model never mutates state; it only proposes
+  intents the core validates. Wire protocol:
+  `client/src/engine/families/agent.js` (normative).
+  - The server is required. Dev: `cd server && python3
+    scripts/agent_dev_server.py` (heuristic policy, offline, :8000); the Vite
+    `/api` proxy forwards `:5173/api/*` to it, so the worker's origin-relative
+    fetch works with no client change. URL overrides: `&agentApi=http://localhost:8000`
+    (bypass the proxy), `&agentPolicy=llm|dsh|auto`, `&agentBeatMs=2500`, `&session=<id>`.
+  - Console handles: `__fireDemo.advisor(true|false)` (spawn/stop the agent
+    worker at runtime), `__fireDemo.policy('heuristic'|'llm'|'dsh'|'auto')`.
+  - Headless: `node /tmp/e3_agent_test.mjs` (T17) stubs `self`+`fetch` and
+    asserts config probe → `agent.status`, observation → `agent.intent`, beat
+    throttle and stop.
+  - **DSH counselor + session lifecycle (E4, the SLOW clock gets memory).**
+    The `heuristic` and `llm` policies are stateless (one shot per beat). The
+    `dsh` policy is the real counselor: a persistent, session-keyed
+    `DeepSeekHarness` (the `deepseek-harness-sdk` child process) that keeps
+    model-side conversation context across beats, so the advisor remembers what
+    it already tried. It is keyed by the browser agent worker's `session` id —
+    one counselor per session. On `agent.start` the worker POSTs
+    `/api/game/agent/session/open` (adopting the server session id); on
+    `agent.stop` it best-effort POSTs `/session/close` (`keepalive`). Both are
+    courtesies: the server keeps an authoritative idle GC
+    (`game_agent.session_ttl_s`, default 900 s) so a closed tab / crash that
+    never sends close is still reaped. `GET /api/game/agent/sessions` lists live
+    sessions (ops visibility). The counselor reuses `chat_engine`'s proven
+    Bailian cordis template (single source of truth for the load-bearing
+    `supportsDeveloperRole:false` / `thinkingFormat:qwen` block), but keeps its
+    OWN isolated root at `server/.dsh_sessions/game/` (gitignored). The SDK is
+    an OPTIONAL dependency: `GET /config` reports `dshAvailable`, and the mode
+    ladder degrades gracefully — `auto` = dsh → llm → heuristic; explicit `dsh`
+    with no SDK returns a safe hold (`intent:null`), never raising into the tick.
+    Headless: `python3 /tmp/e4_server_test.py` (registry / idle GC / cordis
+    render / fallback) and `node /tmp/e4_session_lifecycle.mjs` (worker
+    open→decide→close).
+  - Production (ECS01): `app.main` already mounts the same router under `/api`
+    (`game_agent_api.py`) and Caddy already forwards `/api/*` → `127.0.0.1:8000`,
+    so the identical origin-relative URL works with no client or Caddyfile
+    change — only the host differs. Set `game_agent.engine`
+    (`heuristic|llm|dsh|auto`) and the Bailian creds in the gitignored
+    `server/config.json`. The `dsh` counselor additionally needs
+    `deepseek-harness-sdk==0.1.1rc1` (in `server/requirements.txt`, installed on
+    ECS01, absent on a plain localhost box — there `dshAvailable:false` and
+    `auto` falls back to llm/heuristic). `auto` degrades to the deterministic
+    heuristic on any failure, so the beat never blocks on a model.
 
 ## Adding a new harness
 

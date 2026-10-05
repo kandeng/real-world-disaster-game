@@ -1,4 +1,4 @@
-# Drone Navigation Client
+# The Client Side of the Web Geospatial Multi-Agent Simulation Engine
 
 A multi-view drone navigation dashboard with a shared component architecture.
 

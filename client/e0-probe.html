@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>E0 — Cordis-in-Worker Probe</title>
+  <style>
+    body { font-family: ui-monospace, monospace; background: #111; color: #eee; padding: 24px; }
+    .pass { color: #7ddf7d; } .fail { color: #ff6b6b; } h1 { font-size: 18px; }
+    #out { white-space: pre-wrap; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>E0 audit — @deepseek-ai/cordis booting inside a browser module Worker</h1>
+  <div id="out">running…</div>
+  <script type="module">
+    import { startE0Probe } from './src/e0/probeLauncher.js';
+    startE0Probe();
+    const out = document.getElementById('out');
+    const t = setInterval(() => {
+      const ms = window.__e0Probe?.messages || [];
+      out.innerHTML = ms.map((m) => {
+        if (m.type === 'e0.phase') return `<span class="${m.ok ? 'pass' : 'fail'}">${m.ok ? 'PASS' : 'FAIL'}</span>  ${m.name} — ${m.detail ?? ''}`;
+        if (m.type === 'e0.done') return `<b class="${m.allOk ? 'pass' : 'fail'}">DONE allOk=${m.allOk}</b>\n${m.summary}`;
+        if (m.type === 'e0.error') return `<span class="fail">ERROR\n${m.message}</span>`;
+        return JSON.stringify(m);
+      }).join('\n');
+      if (ms.some((m) => m.type === 'e0.done' || m.type === 'e0.error')) clearInterval(t);
+    }, 150);
+  </script>
+</body>
+</html>

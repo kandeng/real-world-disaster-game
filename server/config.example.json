@@ -42,5 +42,17 @@
     "retention_days": 10,
     "dsh_provider": "bailian",
     "dsh_session_root": ""
+  },
+  "game_agent": {
+    "_comment": "Slow-clock fire counselor. Every field is optional: model/bailian_base_url/api_key/dsh_provider fall back to the chat block above. engine: heuristic (deterministic, offline default) | llm (stateless one-shot Bailian) | dsh (persistent session counselor, needs deepseek-harness-sdk) | auto (dsh -> llm -> heuristic graceful degradation). session_ttl_s: idle seconds before the server GC reaps a counselor session (facility 7). drop_radius_m/wind_lead_s/max_lead_m: heuristic water-drop tuning. dsh_session_root: counselor cordis+sessions+workspace root (default server/.dsh_sessions/game, gitignored).",
+    "engine": "heuristic",
+    "max_tokens": 256,
+    "drop_radius_m": 400,
+    "wind_lead_s": 6.0,
+    "max_lead_m": 350,
+    "llm_concurrency": 2,
+    "session_ttl_s": 900,
+    "dsh_provider": "bailian",
+    "dsh_session_root": ""
   }
 }

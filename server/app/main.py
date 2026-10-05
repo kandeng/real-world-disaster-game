@@ -21,6 +21,7 @@ from .chat_api import router as chat_router, sweep_loop as chat_sweep_loop
 from .config import CONFIG
 from .db import Base, engine
 from .drone_commands import router as drone_commands_router
+from .game_agent_api import router as game_agent_router
 from .matrix_auth import router as matrix_router
 from .meshes_api import router as meshes_router
 from .schemas import UserCreate, UserRead, UserUpdate
@@ -146,6 +147,9 @@ app.include_router(drone_commands_router, prefix="/api")
 
 # --- Customer service chatbot (GET/POST/DELETE /api/chat/*) ------------------
 app.include_router(chat_router, prefix="/api")
+
+# --- Game agent (slow clock): observation -> intent (POST /api/game/agent/*) --
+app.include_router(game_agent_router, prefix="/api")
 
 
 @app.get("/api/health")

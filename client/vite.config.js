@@ -151,5 +151,17 @@ export default defineConfig({
     fs: {
       allow: ['./'],
     },
+    // Dev parity with Caddy's `handle /api/*` -> 127.0.0.1:8000. The game
+    // agent worker (E3, slow clock) fetches origin-relative /api/game/agent/*,
+    // so in dev the Vite server proxies it to the local FastAPI (either the
+    // full app.main or scripts/agent_dev_server.py). In production the same
+    // relative URL hits Caddy, which already forwards /api/* to :8000 — no
+    // client change between dev and prod, only the host.
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
   },
 });

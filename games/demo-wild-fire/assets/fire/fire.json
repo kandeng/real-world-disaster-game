@@ -8,6 +8,7 @@
   ],
   "id": "fire",
   "kind": "hazard",
+  "driver": "fire",
   "sim": {
     "url": "fire_sim.js",
     "api": 1,

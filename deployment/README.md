@@ -1,8 +1,8 @@
-# Drone\-Navigation Website
+# The Deployment of the Web Geospatial Multi-Agent Simulation Engine
 
 This document describes how the `drone-navigation` project is deployed and operated in production.
 
-> **Naming — read before any rename sweep.** `drone-navigation` in this document is the *product and deployment identity*: the domain `drone-navigation.com`, the ECS web root `/var/www/drone-navigation`, the clone target `~/drone-navigation`, and the conda env `drone-navigation`. Only the Git **repository** was renamed (to `real-world-disaster-game`); the production paths, units and domain deliberately keep the legacy name. [`deployment/fastapi/drone-fastapi.service`](./fastapi/drone-fastapi.service) and [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) hardcode those paths, and the `kandeng/drone-navigation.git` clone URL below still resolves through GitHub's rename redirect — so renaming them here would break the next deployment, not fix it.
+> **Naming — read before any rename sweep.** `drone-navigation` in this document is the *product and deployment identity*: the domain `drone-navigation.com`, the ECS web root `/var/www/drone-navigation`, the clone target `~/drone-navigation`, and the conda env `drone-navigation`. Only the Git **repository** carries a different name (now `web-geospatial-multi-agent-simulation-engine`; formerly `real-world-disaster-game`, originally `drone-navigation`); the production paths, units and domain deliberately keep the legacy name. [`deployment/fastapi/drone-fastapi.service`](./fastapi/drone-fastapi.service) and [`deployment/caddy/Caddyfile`](./caddy/Caddyfile) hardcode those paths, and the clone command below names the current repository explicitly while cloning into a `drone-navigation` directory — so renaming the production paths here would break the next deployment, not fix it.
 
 
 # 1. Domain Name
@@ -118,7 +118,7 @@ Build the Vue frontend and deploy it behind Caddy.
 ```bash
 # 1. Download the entire repository
 cd ~
-git clone https://github.com/kandeng/drone-navigation.git
+git clone https://github.com/kandeng/web-geospatial-multi-agent-simulation-engine.git drone-navigation
 cd drone-navigation/client/
 
 # 2. Fetch latest code + merge into your local branch
