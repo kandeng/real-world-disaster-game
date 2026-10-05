@@ -22,6 +22,21 @@
 //   • Determinism: seeded PRNG, one stream per tick index. Same seed + same
 //     command sequence => identical evolution (getState().gridHash proves it).
 //
+// Scenario-driven (the generated controller_fire.js feeds all of this):
+//   • ignitions: [{ lon, lat, radiusM, atSimS }] fire themselves automatically
+//     when sim time reaches atSimS — scenario beats, not player actions.
+//   • wind.keyframes: [{ tS, toDeg, speedMps }] piecewise-linear wind timeline
+//     (shortest-arc angle interpolation). A shift in strength or direction
+//     bends the front mid-run; absent keyframes = constant wind.
+//   • loss.occupyFrac: when (burning + ash) / fuelCells reaches this threshold
+//     the `lost` flag latches true — the fire occupied the whole disaster
+//     polygon, game over. Cellular automata leave unburned islands inside the
+//     scar, so raw occupancy stalls below 1; therefore once the fire is out
+//     (burning == 0, no scheduled ignition pending) the latch instead uses
+//     (ash + residual unburned islands) / fuelCells. Fuel the players SAVED
+//     (soaked with water, dried back) is excluded from that residue — it was
+//     defended, not occupied.
+//
 // Dependency-free ESM: runs in the browser (package URL import) and in Node
 // (headless validation).
 
@@ -44,6 +59,12 @@ const NEIGHBORS = [
 ];
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+// Shortest-arc compass interpolation: 350 deg -> 10 deg goes through 0, not 180.
+function lerpDeg(a, b, u) {
+  const d = ((b - a + 540) % 360) - 180;
+  return (a + d * u + 360) % 360;
+}
 
 // mulberry32: tiny seeded PRNG, stable across engines.
 function mulberry32(a) {
@@ -73,8 +94,10 @@ function pointInPolygon(lat, lon, poly) {
  *                urban firebreaks). Fire cannot cross them.
  *   cellSizeM:   grid pitch, default 50
  *   seed:        integer, default 1
- *   wind:        { toDeg (compass direction wind blows TOWARD), speedMps }
- * }
+ *   wind:        { toDeg (compass direction wind blows TOWARD), speedMps,
+ *                  keyframes: optional [{ tS, toDeg, speedMps }] timeline }
+ *   ignitions:   optional [{ lon, lat, radiusM, atSimS }] auto-ignitions
+ *   loss:        { occupyFrac } game-over threshold, default 1.0
  */
 export function createFireSim(config = {}) {
   const poly = config.perimeter || [];
@@ -84,6 +107,14 @@ export function createFireSim(config = {}) {
   const seed = Number.isFinite(config.seed) ? config.seed : 1;
   const windToDeg = Number.isFinite(config.wind?.toDeg) ? config.wind.toDeg : 225;
   const windMps = Number.isFinite(config.wind?.speedMps) ? config.wind.speedMps : 8;
+  const keyframes = (config.wind?.keyframes || [])
+    .filter((k) => k && Number.isFinite(k.tS) && Number.isFinite(k.toDeg) && Number.isFinite(k.speedMps))
+    .sort((a, b) => a.tS - b.tS);
+  const pendingIgnitions = (config.ignitions || [])
+    .filter((g) => g && Number.isFinite(g.lon) && Number.isFinite(g.lat))
+    .map((g) => ({ lon: g.lon, lat: g.lat, radiusM: Number.isFinite(g.radiusM) ? g.radiusM : cellSizeM, atSimS: Number.isFinite(g.atSimS) ? g.atSimS : 0 }))
+    .sort((a, b) => a.atSimS - b.atSimS);
+  const lossThreshold = clamp(Number.isFinite(config.loss?.occupyFrac) ? config.loss.occupyFrac : 1, 0, 1);
 
   const lats = poly.map((p) => p[0]);
   const lons = poly.map((p) => p[1]);
@@ -99,6 +130,8 @@ export function createFireSim(config = {}) {
   const fuel = new Float32Array(cols * rows);
   const age = new Float32Array(cols * rows);
   const wasBurning = new Uint8Array(cols * rows);
+  const wasSoaked = new Uint8Array(cols * rows);   // watered while unburned => saved fuel
+  let fuelCells = 0;
   const noise = mulberry32((seed ^ 0x9e3779b9) | 0);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -108,6 +141,7 @@ export function createFireSim(config = {}) {
       if (pointInPolygon(lat, lon, poly)) {
         state[i] = CELL.UNBURNED;
         fuel[i] = 0.6 + noise() * 0.8;               // heterogeneous fuel load
+        fuelCells++;
       } else {
         state[i] = CELL.NO_FUEL;                     // ocean, town, firebreak
       }
@@ -121,12 +155,44 @@ export function createFireSim(config = {}) {
     }
   }
 
-  const windEast = Math.sin(windToDeg * DEG2RAD);
-  const windNorth = Math.cos(windToDeg * DEG2RAD);
-  const aniso = clamp(windMps / WIND_REF_MPS, 0, 1);
+  let windEast = Math.sin(windToDeg * DEG2RAD);
+  let windNorth = Math.cos(windToDeg * DEG2RAD);
+  let aniso = clamp(windMps / WIND_REF_MPS, 0, 1);
+  let curToDeg = windToDeg;
+  let curMps = windMps;
+
+  // Wind timeline lookup: hold before the first keyframe, piecewise-linear
+  // between them, hold after the last.
+  function applyWindAt(time) {
+    let toDeg = windToDeg, mps = windMps;
+    if (keyframes.length) {
+      if (time <= keyframes[0].tS) {
+        toDeg = keyframes[0].toDeg; mps = keyframes[0].speedMps;
+      } else if (time >= keyframes[keyframes.length - 1].tS) {
+        const k = keyframes[keyframes.length - 1];
+        toDeg = k.toDeg; mps = k.speedMps;
+      } else {
+        for (let k = 0; k < keyframes.length - 1; k++) {
+          const a = keyframes[k], b = keyframes[k + 1];
+          if (time >= a.tS && time <= b.tS) {
+            const u = b.tS === a.tS ? 1 : (time - a.tS) / (b.tS - a.tS);
+            toDeg = lerpDeg(a.toDeg, b.toDeg, u);
+            mps = a.speedMps + (b.speedMps - a.speedMps) * u;
+            break;
+          }
+        }
+      }
+    }
+    curToDeg = toDeg; curMps = mps;
+    windEast = Math.sin(toDeg * DEG2RAD);
+    windNorth = Math.cos(toDeg * DEG2RAD);
+    aniso = clamp(mps / WIND_REF_MPS, 0, 1);
+  }
 
   let t = 0;
   let tickIndex = 0;
+  let nextIgnition = 0;
+  let lost = false;
   let changes = { burning: [], ash: [], wet: [], unburned: [] };
 
   const idxAt = (lon, lat) => {
@@ -170,7 +236,7 @@ export function createFireSim(config = {}) {
   function dropWater(lon, lat, radiusM = cellSizeM * 2) {
     for (const i of cellsInRadius(lon, lat, radiusM)) {
       if (state[i] === CELL.BURNING) { wasBurning[i] = 1; age[i] = 0; mark(i, CELL.WET); }
-      else if (state[i] === CELL.UNBURNED) { wasBurning[i] = 0; age[i] = 0; mark(i, CELL.WET); }
+      else if (state[i] === CELL.UNBURNED) { wasBurning[i] = 0; wasSoaked[i] = 1; age[i] = 0; mark(i, CELL.WET); }
     }
     return getState();
   }
@@ -180,7 +246,16 @@ export function createFireSim(config = {}) {
     if (!Number.isFinite(dt) || dt <= 0) return getState();
     t += dt;
     tickIndex++;
+    applyWindAt(t);
     const rng = mulberry32((seed + Math.imul(tickIndex, 2654435761)) | 0);
+
+    // Scenario beats: scheduled ignitions fire once sim time passes them.
+    while (nextIgnition < pendingIgnitions.length && pendingIgnitions[nextIgnition].atSimS <= t) {
+      const g = pendingIgnitions[nextIgnition++];
+      for (const i of cellsInRadius(g.lon, g.lat, g.radiusM)) {
+        if (state[i] === CELL.UNBURNED) { state[i] = CELL.BURNING; age[i] = 0; changes.burning.push(i); }
+      }
+    }
 
     const burningAtStart = [];
     for (let i = 0; i < state.length; i++) if (state[i] === CELL.BURNING) burningAtStart.push(i);
@@ -209,6 +284,26 @@ export function createFireSim(config = {}) {
         if (rng() < SPREAD_RATE * w * fuel[j] * dt) {
           state[j] = CELL.BURNING; age[j] = 0; changes.burning.push(j);
         }
+      }
+    }
+
+    // Game-over latch: the fire occupied the whole disaster polygon.
+    // Mid-run: raw footprint (burning + ash). At fire-out: footprint plus the
+    // residual unburned islands the CA leaves inside the scar, minus fuel the
+    // players soaked (saved). Only applies while no ignition beat is pending.
+    if (!lost && fuelCells > 0) {
+      let occ = 0, burningNow = 0;
+      for (let i = 0; i < state.length; i++) {
+        if (state[i] === CELL.BURNING) { occ++; burningNow++; }
+        else if (state[i] === CELL.ASH) occ++;
+      }
+      if (occ / fuelCells >= lossThreshold) lost = true;
+      else if (burningNow === 0 && occ > 0 && nextIgnition >= pendingIgnitions.length) {
+        let residue = 0;
+        for (let i = 0; i < state.length; i++) {
+          if (state[i] === CELL.UNBURNED && !wasSoaked[i]) residue++;
+        }
+        if ((occ + residue) / fuelCells >= lossThreshold) lost = true;
       }
     }
     return getState();
@@ -242,6 +337,10 @@ export function createFireSim(config = {}) {
       counts: { burning, ash, wet, unburned },
       burnedAreaHa: (ash + knocked) * cellHa,  // ash + still-steaming knocked-down
       containedFrac: burning > 0 ? 1 - openFront / burning : 1,
+      occupyFrac: fuelCells > 0 ? (burning + ash) / fuelCells : 0,
+      pending: pendingIgnitions.length - nextIgnition,   // scheduled beats not yet fired
+      lost,
+      wind: { toDeg: curToDeg, speedMps: curMps },
       gridHash: hash >>> 0,
     };
   }
@@ -280,6 +379,11 @@ export function createFireSim(config = {}) {
         determinism: 'seeded per-tick PRNG; same seed + commands => same gridHash',
       },
       limits: { spreadRatePerSec: SPREAD_RATE, fuelDurationS: FUEL_DURATION_S, steamS: STEAM_S },
+      scenario: {
+        ignitions: 'scheduled auto-ignitions at atSimS, radius radiusM',
+        windKeyframes: 'piecewise-linear timeline, shortest-arc angle lerp',
+        loss: 'lost latches at occupyFrac >= loss.occupyFrac; at fire-out the residue islands count, water-saved fuel does not',
+      },
       commands: ['ignite', 'dropWater', 'tick', 'getState', 'takeChanges', 'gridInfo', 'describe'],
     };
   }

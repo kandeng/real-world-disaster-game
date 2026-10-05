@@ -1,0 +1,25 @@
+{
+  "apiVersion": 1,
+  "comment": [
+    "Fire asset manifest. The sim OWNS fire state; the scenario is the",
+    "generated scene-asset data (drawn in tools/geo-editor.html); the",
+    "renderers are ENGINE-owned effects referenced by name only — a",
+    "package never ships or imports rendering code."
+  ],
+  "id": "fire",
+  "kind": "hazard",
+  "sim": {
+    "url": "fire_sim.js",
+    "api": 1,
+    "factory": "createFireSim"
+  },
+  "scenario": {
+    "url": "controller_fire.js",
+    "api": 1,
+    "factory": "createFireScenario"
+  },
+  "effects": {
+    "2d": "engine:fireOverlay2d",
+    "3d": "engine:fireOverlay3d"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "apiVersion": 1,
+  "comment": [
+    "Tank asset manifest. Rig conventions proven by headless GLB forensics:",
+    "the gun-barrel bounding-box asymmetry (+4.73 m vs -3.56 m) puts the nose",
+    "on glTF +Z, so hosts apply yawTrimDeg 180 to make heading 0 face north;",
+    "the ground plane sits at y = -1.098 m, so hosts lift the wrapper by",
+    "groundLiftM to put the tracks on the surface."
+  ],
+  "id": "tank",
+  "kind": "vehicle",
+  "mesh": {
+    "url": "tank_usa_type10.glb",
+    "units": "m",
+    "noseAxis": "+Z",
+    "yawTrimDeg": 180,
+    "groundLiftM": 1.098
+  },
+  "controller": {
+    "url": "controller_tank.js",
+    "api": 1,
+    "factory": "createTankController"
+  }
+}

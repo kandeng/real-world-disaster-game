@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <!-- controller_tank_viewer.html — visual verification harness for controller_tank.js.
-     Package-local page: imports the controller module and tank_usa_type10.glb from
-     this directory, renders pose on a metres grid, and exposes the four rate
+     Package-local page: imports the controller module from ../assets/tank/
+     and tank_usa_type10.glb from the same asset directory, renders pose on a
+     metres grid, and exposes the four rate
      commands as click-pulses. What to verify:
        • forward/backward: tank translates along the green nose arrow (nose =
          asset +Z; harness applies the 180 deg yaw trim the contract demands).
@@ -47,7 +48,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { createTankController } from './controller_tank.js';
+import { createTankController } from '../assets/tank/controller_tank.js';
 
 const DEG2RAD = Math.PI / 180;
 const GROUND_LIFT_M = 1.098;   // asset ground plane sits at y = -1.098
@@ -76,7 +77,7 @@ scene.add(wrapper);
 const noseArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 2.6, 0), 5, 0x44dd66, 1.2, 0.6);
 wrapper.add(noseArrow);
 
-new GLTFLoader().load('./tank_usa_type10.glb', (gltf) => {
+new GLTFLoader().load('../assets/tank/tank_usa_type10.glb', (gltf) => {
   wrapper.add(gltf.scene);   // asset already in metres; no scale factor
 }, undefined, (e) => { hud.textContent = 'LOAD ERROR: ' + (e && e.message); });
 

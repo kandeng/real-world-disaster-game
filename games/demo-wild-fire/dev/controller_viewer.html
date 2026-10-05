@@ -76,7 +76,7 @@ addEventListener('resize', () => {
 });
 
 // ---- the artifact under test: the package's own controller, by relative URL --
-const mod = await import('./controller_drone.js');
+const mod = await import('../assets/drone/controller_drone.js');
 const START = { lon: -118.4955, lat: 34.0430, alt: 60, headingDeg: 0 };
 let ctl = mod.createDroneController(START);
 status.textContent = 'controller ok: ' + Object.keys(mod).join(', ');
@@ -106,7 +106,7 @@ scene.add(wrapper);
 // Green nose arrow, rigidly attached: always shows the direction the mesh
 // nose (glTF -Z) points, so 'forward must move along green' is checkable.
 wrapper.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, 0), 1.0, 0x35d07f, 0.3, 0.15));
-new GLTFLoader().load('./drone_dji_air3.glb', (gltf) => {
+new GLTFLoader().load('../assets/drone/drone_dji_air3.glb', (gltf) => {
   // The asset bakes a 0.01 unit-fix scale into node WM233_352, so an extra
   // 0.1 here yields the intended 0.001 (mm -> m). Do NOT add another 0.001:
   // that double-scale rendered the drone at 0.3 mm — an invisible speck.

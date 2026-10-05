@@ -1,0 +1,25 @@
+{
+  "apiVersion": 1,
+  "comment": [
+    "Runtime index of the package: the ONLY file /play fetches first.",
+    "card.json stays the Plaza storefront (title, copy, trailer, action);",
+    "this file is the runtime half — what assets exist and where their",
+    "manifests live. Component URLs are resolved through the per-asset",
+    "manifests, so the engine never hardcodes a package-internal path.",
+    "All paths are RELATIVE to the package baseUrl (catalog.json), so the",
+    "package can be republished from a CDN with a one-field catalog change.",
+    "'worker' is the reserved slot for the per-session game-agent worker",
+    "entry; null until it lands.",
+    "",
+    "THE ONE RULE: package code never calls browser APIs (no DOM, canvas,",
+    "WebGL, Maps, Cesium, fetch). Packages emit JSON messages ({type, ...});",
+    "the static engine alone translates them into browser API calls. See",
+    "dev/README.md for the audit grep and the dev-harness exception."
+  ],
+  "assets": [
+    { "id": "fire",  "manifest": "assets/fire/fire.json" },
+    { "id": "drone", "manifest": "assets/drone/drone.json" },
+    { "id": "tank",  "manifest": "assets/tank/tank.json" }
+  ],
+  "worker": null
+}
