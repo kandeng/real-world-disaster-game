@@ -27,6 +27,7 @@ function staticWorkspaceDev(pluginName, urlPrefix, root) {
     // Package dev tools (e.g. controller_viewer.html) must render in-place,
     // not download: octet-stream would make the browser save the page.
     '.html': 'text/html; charset=utf-8',
+    '.md': 'text/markdown; charset=utf-8',
     '.mp4': 'video/mp4',
     '.webm': 'video/webm',
     '.mp3': 'audio/mpeg',

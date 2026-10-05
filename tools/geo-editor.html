@@ -1,201 +1,603 @@
 <!DOCTYPE html>
-<!-- geo-editor.html — DEV-ONLY geo-boundary polygon sketchpad.
+<!-- geo-editor.html — DEV-ONLY scene-authoring tool for game packages.
      Served at http://localhost:5173/tools/geo-editor.html by the Vite dev
      middleware for the repo-root tools/ workspace. It is OUTSIDE client/src:
      no SPA route, no bundle chunk, and production (Caddy serves client/dist
      only) never exposes it. The play site cannot be disturbed by this page.
 
-     Purpose: draw / edit lat-lon polygons (disaster perimeters, water masks,
-     drop zones) against satellite imagery and export them in the exact
-     [[lat, lon], ...] format used by client/src/config/palisadesFire.js and
-     games/*/fire_sim.js perimeters.
+     What it authors (the fire scenario of a package, today demo-wild-fire):
+       • boundary mode ....... draw/edit the disaster perimeter polygon
+       • water mode .......... draw/edit no-fuel masks (ocean bays, firebreaks)
+       • ignition mode ....... click ignition spots (radius + activation time)
+       • wind keyframes ...... (t, toward-deg, m/s) timeline edited in the panel
+       • preview ............. runs the PACKAGE fire_sim.js on exactly this
+                               data, top-down, so the scenario is test-played
+                               before it ships
+       • export .............. emits assets/fire/controller_fire.js verbatim in
+                               the contract shape (or raw polygon JSON)
 
      Controls:
-       left-click map ....... append vertex
+       left-click map ....... append vertex / place ignition (per mode)
        drag a vertex ........ move it
        right-click vertex ... delete it
-       ctrl/cmd+Z ........... undo last vertex
-     Presets load the live engine config polygons for editing (dev-only
-     module import; this page does not exist in production). -->
+       ctrl/cmd+Z ........... undo last addition
+     Presets load the live engine/package modules for editing (dev-only
+     imports; this page does not exist in production). -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Geo Boundary Editor (dev tool)</title>
+<title>Scene Author — geo boundary / fire scenario (dev tool)</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
-  html, body { margin: 0; height: 100%; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; }
-  #map { position: absolute; inset: 0 320px 0 0; background: #0b0e11; }
-  #panel { position: absolute; top: 0; right: 0; bottom: 0; width: 320px; box-sizing: border-box;
-           padding: 10px; overflow-y: auto; background: #14181d; color: #dfe6ec;
-           border-left: 1px solid #2c3a46; display: flex; flex-direction: column; gap: 8px; }
-  h1 { font-size: 14px; margin: 0; }
-  .hint { color: #8fa3b0; font-size: 12px; }
-  .row { display: flex; gap: 6px; flex-wrap: wrap; }
-  button { padding: 6px 9px; background: #1b2530; color: #dfe6ec; border: 1px solid #35485a;
+  html, body { margin: 0; height: 100%; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+  #map { position: absolute; inset: 0 340px 0 0; background: #0b0e11; }
+  #panel { position: absolute; top: 0; right: 0; bottom: 0; width: 340px; box-sizing: border-box;
+           padding: 8px; overflow-y: auto; background: #14181d; color: #dfe6ec;
+           border-left: 1px solid #2c3a46; display: flex; flex-direction: column; gap: 6px; }
+  h1 { font-size: 13px; margin: 0; }
+  h2 { font-size: 11px; margin: 4px 0 0; color: #8fa3b0; text-transform: uppercase; letter-spacing: .06em; }
+  .hint { color: #8fa3b0; font-size: 11px; }
+  .row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  button { padding: 4px 7px; background: #1b2530; color: #dfe6ec; border: 1px solid #35485a;
            font: inherit; cursor: pointer; }
   button:hover { background: #24323f; }
-  #stats { padding: 8px 10px; background: rgba(8, 12, 16, 0.72); border: 1px solid #2c3a46; white-space: pre; }
-  textarea { flex: 1; min-height: 140px; resize: none; background: #0d1116; color: #cfe3cf;
-             border: 1px solid #2c3a46; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
-             padding: 6px; box-sizing: border-box; }
+  button.on { background: #2c4a63; border-color: #4b7ba6; }
+  select, input { background: #0d1116; color: #dfe6ec; border: 1px solid #2c3a46; font: inherit;
+                  padding: 2px 4px; width: 64px; }
+  select { width: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 1px 2px; }
+  td input { width: 56px; }
+  #stats { padding: 6px 8px; background: rgba(8, 12, 16, 0.72); border: 1px solid #2c3a46; white-space: pre; }
+  textarea { min-height: 120px; resize: vertical; background: #0d1116; color: #cfe3cf;
+             border: 1px solid #2c3a46; font: 10.5px/1.35 ui-monospace, Menlo, Consolas, monospace;
+             padding: 5px; box-sizing: border-box; width: 100%; }
   .vertex-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff3b30;
                 border: 2px solid #fff; box-sizing: border-box; }
+  .water-dot { width: 10px; height: 10px; border-radius: 50%; background: #2f8fd6;
+               border: 2px solid #fff; box-sizing: border-box; }
+  .ign-dot { width: 12px; height: 12px; border-radius: 50%; background: #ff9500;
+             border: 2px solid #402000; box-sizing: border-box; }
+  #preview { position: absolute; left: 10px; bottom: 10px; z-index: 800;
+             background: rgba(10, 14, 18, 0.88); border: 1px solid #2c3a46; padding: 6px; }
+  #pvCanvas { display: block; background: #0b0e11; image-rendering: pixelated; width: 320px; height: 240px; }
+  #pvHud { white-space: pre; color: #cfe3cf; font-size: 11px; margin-top: 4px; }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div id="panel">
-  <h1>Geo Boundary Editor</h1>
-  <div class="hint">left-click: add vertex · drag: move · right-click vertex: delete · ctrl+Z: undo</div>
+<div id="preview">
+  <canvas id="pvCanvas" width="320" height="240"></canvas>
   <div class="row">
-    <button id="presetPerimeter">load: fire perimeter</button>
-    <button id="presetBay">load: bay mask</button>
+    <button id="pvRun">run</button>
+    <button id="pvRestart">restart</button>
+    <select id="pvSpeed">
+      <option value="1">1×</option>
+      <option value="4" selected>4×</option>
+      <option value="16">16×</option>
+      <option value="64">64×</option>
+    </select>
+    <span class="hint">preview = package fire_sim.js on this data</span>
+  </div>
+  <div id="pvHud">preview idle</div>
+</div>
+<div id="panel">
+  <h1>Scene Author (dev)</h1>
+  <div class="hint">left-click: add · drag: move · right-click: delete · ctrl+Z: undo</div>
+
+  <h2>edit mode</h2>
+  <div class="row">
+    <button id="modeBoundary" class="on">boundary</button>
+    <button id="modeWater">water mask</button>
+    <button id="modeIgnition">ignition</button>
+  </div>
+  <div class="row" id="waterRow" style="display:none">
+    <span class="hint">ring</span><select id="waterSel"></select>
+    <button id="waterAdd">+ ring</button>
+    <button id="waterDel">− ring</button>
+  </div>
+  <div class="row" id="ignDefaults" style="display:none">
+    <span class="hint">radius m</span><input id="ignRadius" type="number" value="150" step="10" />
+    <span class="hint">at s</span><input id="ignAt" type="number" value="0" step="30" />
   </div>
   <div class="row">
     <button id="undo">undo</button>
-    <button id="clear">clear all</button>
+    <button id="clearRing">clear ring</button>
+    <button id="clearAll">clear all</button>
   </div>
-  <div id="stats">verts 0\narea 0.0 ha\nperim 0.00 km</div>
-  <textarea id="json" spellcheck="false" placeholder="[[lat, lon], ...]"></textarea>
+  <div id="stats"></div>
+
+  <h2>ignitions</h2>
+  <table id="ignTable"></table>
+
+  <h2>wind keyframes (t s, toward°, m/s)</h2>
+  <table id="windTable"></table>
+  <div class="row"><button id="windAdd">+ keyframe</button></div>
+
+  <h2>scenario</h2>
   <div class="row">
-    <button id="loadJson">load from box</button>
+    <span class="hint">cell m</span><input id="cellSize" type="number" value="60" step="10" />
+    <span class="hint">seed</span><input id="seed" type="number" value="7" step="1" />
+    <span class="hint">loss ≥</span><input id="lossFrac" type="number" value="1" step="0.05" min="0.1" max="1" />
+  </div>
+
+  <h2>export</h2>
+  <div class="row">
+    <select id="boxMode">
+      <option value="poly">polygon JSON</option>
+      <option value="controller">controller_fire.js</option>
+    </select>
+    <button id="loadBox">load from box</button>
     <button id="copy">copy</button>
-    <button id="download">download .json</button>
+    <button id="download">download</button>
+  </div>
+  <textarea id="json" spellcheck="false"></textarea>
+
+  <h2>presets</h2>
+  <div class="row">
+    <button id="presetPerimeter">fire perimeter</button>
+    <button id="presetBay">bay mask</button>
+    <button id="presetScenario">current scenario</button>
   </div>
   <div class="hint" id="msg"></div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module">
-const map = L.map('map', { center: [34.045, -118.53], zoom: 13, zoomControl: true });
+const SIM_URL = '/games/demo-wild-fire/assets/fire/fire_sim.js';
+
+const map = L.map('map', { center: [34.045, -118.53], zoom: 13 });
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 19, attribution: 'Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics',
 }).addTo(map);
-// Labels/roads over the imagery for geographic context while tracing.
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 19, attribution: 'Labels © Esri',
 }).addTo(map);
 
-const verts = [];   // { lat, lng, marker }
-const polygon = L.polygon([], { color: '#ff3b30', weight: 2, fillOpacity: 0.25 }).addTo(map);
-const jsonBox = document.getElementById('json');
-const stats = document.getElementById('stats');
-const msg = document.getElementById('msg');
+// ---- document model: exactly the controller_fire.js scenario shape --------
+const doc = {
+  perimeter: [],            // [{lat, lng, marker}]
+  water: [[]],              // rings of {lat, lng, marker}
+  ignitions: [],            // {lat, lng, radiusM, atSimS, marker, circle}
+  wind: [],                 // {tS, toDeg, speedMps}
+  cellSizeM: 60,
+  seed: 7,
+  lossFrac: 1,
+};
+let mode = 'boundary';
+let activeWater = 0;
+let undoStack = [];
 
+const layers = { perimeter: null, water: [], ignCircles: [] };
+layers.perimeter = L.polygon([], { color: '#ff3b30', weight: 2, fillOpacity: 0.18 }).addTo(map);
+
+const $ = (id) => document.getElementById(id);
+const jsonBox = $('json'), stats = $('stats'), msg = $('msg');
 const M_PER_DEG_LAT = 111320;
 const rad = (d) => (d * Math.PI) / 180;
+const f5 = (n) => +n.toFixed(5);
 
-function flash(text) {
-  msg.textContent = text;
-  clearTimeout(flash.t);
-  flash.t = setTimeout(() => { msg.textContent = ''; }, 2500);
-}
+function flash(text) { msg.textContent = text; clearTimeout(flash.t); flash.t = setTimeout(() => { msg.textContent = ''; }, 2600); }
 
-function metrics() {
+// ---- geometry helpers ------------------------------------------------------
+function ringMetrics(verts) {
   const n = verts.length;
   if (n < 3) return { ha: 0, km: 0 };
   const lat0 = verts.reduce((s, v) => s + v.lat, 0) / n;
   const mPerDegLon = M_PER_DEG_LAT * Math.cos(rad(lat0));
   const xy = verts.map((v) => [(v.lng - verts[0].lng) * mPerDegLon, (v.lat - lat0) * M_PER_DEG_LAT]);
-  let a = 0;
+  let a = 0, per = 0;
   for (let i = 0; i < n; i++) {
     const [x1, y1] = xy[i], [x2, y2] = xy[(i + 1) % n];
     a += x1 * y2 - x2 * y1;
-  }
-  let per = 0;
-  for (let i = 0; i < n; i++) {
-    const p = verts[i], q = verts[(i + 1) % n];
-    const dx = (q.lng - p.lng) * mPerDegLon, dy = (q.lat - p.lat) * M_PER_DEG_LAT;
-    per += Math.hypot(dx, dy);
+    per += Math.hypot(x2 - x1, y2 - y1);
   }
   return { ha: Math.abs(a) / 2 / 10000, km: per / 1000 };
 }
 
-function refresh() {
-  polygon.setLatLngs(verts.map((v) => [v.lat, v.lng]));
-  const m = metrics();
-  stats.textContent = 'verts ' + verts.length + '\narea  ' + m.ha.toFixed(1) + ' ha\nperim ' + m.km.toFixed(2) + ' km';
-  jsonBox.value = JSON.stringify(verts.map((v) => [+v.lat.toFixed(5), +v.lng.toFixed(5)]));
-}
-
-function addVert(lat, lng) {
+// ---- element factories -----------------------------------------------------
+function makeVertexMarker(lat, lng, kind) {
   const marker = L.marker([lat, lng], {
     draggable: true,
-    icon: L.divIcon({ className: '', html: '<div class="vertex-dot"></div>', iconSize: [10, 10], iconAnchor: [5, 5] }),
+    icon: L.divIcon({ className: '', html: `<div class="${kind === 'water' ? 'water-dot' : 'vertex-dot'}"></div>`, iconSize: [10, 10], iconAnchor: [5, 5] }),
   }).addTo(map);
-  const vert = { lat, lng, marker };
-  marker.on('dragend', () => {
-    const p = marker.getLatLng();
-    vert.lat = p.lat; vert.lng = p.lng;
-    refresh();
-  });
-  marker.on('contextmenu', () => removeVert(vert));
-  verts.push(vert);
-  refresh();
+  return marker;
 }
 
-function removeVert(vert) {
-  const i = verts.indexOf(vert);
+function addVert(ring, lat, lng, kind) {
+  const vert = { lat, lng, marker: makeVertexMarker(lat, lng, kind) };
+  vert.marker.on('dragend', () => { const p = vert.marker.getLatLng(); vert.lat = p.lat; vert.lng = p.lng; refresh(); });
+  vert.marker.on('contextmenu', () => { const i = ring.indexOf(vert); if (i >= 0) { ring.splice(i, 1); vert.marker.remove(); refresh(); } });
+  ring.push(vert);
+  return vert;
+}
+
+function addIgnition(lat, lng, radiusM, atSimS) {
+  const ign = {
+    lat, lng, radiusM, atSimS,
+    marker: L.marker([lat, lng], {
+      draggable: true,
+      icon: L.divIcon({ className: '', html: '<div class="ign-dot"></div>', iconSize: [12, 12], iconAnchor: [6, 6] }),
+    }).addTo(map),
+    circle: L.circle([lat, lng], { radius: radiusM, color: '#ff9500', weight: 1, dashArray: '4 3', fillOpacity: 0.08 }).addTo(map),
+  };
+  ign.marker.on('dragend', () => { const p = ign.marker.getLatLng(); ign.lat = p.lat; ign.lng = p.lng; ign.circle.setLatLng(p); refresh(); });
+  ign.marker.on('contextmenu', () => removeIgnition(ign));
+  doc.ignitions.push(ign);
+  return ign;
+}
+
+function removeIgnition(ign) {
+  const i = doc.ignitions.indexOf(ign);
   if (i < 0) return;
-  vert.marker.remove();
-  verts.splice(i, 1);
+  ign.marker.remove(); ign.circle.remove();
+  doc.ignitions.splice(i, 1);
   refresh();
 }
 
-function loadPairs(pairs, label) {
-  if (!Array.isArray(pairs) || pairs.some((p) => !Array.isArray(p) || p.length < 2 || !isFinite(p[0]) || !isFinite(p[1]))) {
-    flash('bad polygon JSON: expected [[lat, lon], ...]');
-    return;
-  }
-  verts.splice(0).forEach((v) => v.marker.remove());
-  for (const [lat, lng] of pairs) addVert(lat, lng);
-  map.fitBounds(polygon.getBounds().pad(0.2));
-  flash('loaded ' + (label || 'polygon') + ': ' + pairs.length + ' verts');
+// ---- modes ------------------------------------------------------------------
+function setMode(next) {
+  mode = next;
+  $('modeBoundary').classList.toggle('on', mode === 'boundary');
+  $('modeWater').classList.toggle('on', mode === 'water');
+  $('modeIgnition').classList.toggle('on', mode === 'ignition');
+  $('waterRow').style.display = mode === 'water' ? '' : 'none';
+  $('ignDefaults').style.display = mode === 'ignition' ? '' : 'none';
+}
+$('modeBoundary').addEventListener('click', () => setMode('boundary'));
+$('modeWater').addEventListener('click', () => setMode('water'));
+$('modeIgnition').addEventListener('click', () => setMode('ignition'));
+
+$('waterAdd').addEventListener('click', () => { doc.water.push([]); activeWater = doc.water.length - 1; syncWaterSel(); refresh(); });
+$('waterDel').addEventListener('click', () => {
+  if (doc.water.length <= 1) return flash('keep at least one water ring slot');
+  doc.water[activeWater].forEach((v) => v.marker.remove());
+  doc.water.splice(activeWater, 1);
+  activeWater = Math.min(activeWater, doc.water.length - 1);
+  syncWaterSel(); refresh();
+});
+$('waterSel').addEventListener('change', () => { activeWater = +$('waterSel').value; });
+function syncWaterSel() {
+  $('waterSel').innerHTML = doc.water.map((_, i) => `<option value="${i}"${i === activeWater ? ' selected' : ''}>water ${i + 1} (${doc.water[i].length}v)</option>`).join('');
 }
 
-map.on('click', (e) => addVert(e.latlng.lat, e.latlng.lng));
+map.on('click', (e) => {
+  const { lat, lng } = e.latlng;
+  if (mode === 'boundary') { undoStack.push({ kind: 'vert', ring: doc.perimeter, vert: addVert(doc.perimeter, lat, lng, 'boundary') }); }
+  else if (mode === 'water') { const ring = doc.water[activeWater]; undoStack.push({ kind: 'vert', ring, vert: addVert(ring, lat, lng, 'water') }); }
+  else { undoStack.push({ kind: 'ign', ign: addIgnition(lat, lng, +$('ignRadius').value || 150, +$('ignAt').value || 0) }); }
+  refresh();
+});
+
 document.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-    e.preventDefault();
-    if (verts.length) removeVert(verts[verts.length - 1]);
-  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
 });
-document.getElementById('undo').addEventListener('click', () => { if (verts.length) removeVert(verts[verts.length - 1]); });
-document.getElementById('clear').addEventListener('click', () => { verts.splice(0).forEach((v) => v.marker.remove()); refresh(); });
-document.getElementById('loadJson').addEventListener('click', () => {
-  try { loadPairs(JSON.parse(jsonBox.value), 'box'); } catch { flash('JSON parse error'); }
+$('undo').addEventListener('click', undo);
+function undo() {
+  const a = undoStack.pop();
+  if (!a) return flash('nothing to undo');
+  if (a.kind === 'vert') { const i = a.ring.indexOf(a.vert); if (i >= 0) a.ring.splice(i, 1); a.vert.marker.remove(); }
+  else removeIgnition(a.ign);
+  refresh();
+}
+$('clearRing').addEventListener('click', () => {
+  const ring = mode === 'water' ? doc.water[activeWater] : doc.perimeter;
+  ring.splice(0).forEach((v) => v.marker.remove());
+  refresh();
 });
-document.getElementById('copy').addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(jsonBox.value); flash('copied ' + verts.length + ' verts'); }
+$('clearAll').addEventListener('click', () => {
+  doc.perimeter.splice(0).forEach((v) => v.marker.remove());
+  doc.water.forEach((r) => r.splice(0).forEach((v) => v.marker.remove()));
+  doc.water = [[]]; activeWater = 0;
+  doc.ignitions.slice().forEach(removeIgnition);
+  undoStack = [];
+  syncWaterSel(); refresh();
+});
+
+// ---- panel tables -----------------------------------------------------------
+function renderIgnTable() {
+  $('ignTable').innerHTML = doc.ignitions.map((g, i) =>
+    `<tr><td class="hint">${i + 1}</td>` +
+    `<td><input type="number" step="30" value="${g.atSimS}" data-i="${i}" data-k="atSimS" /></td>` +
+    `<td><input type="number" step="10" value="${g.radiusM}" data-i="${i}" data-k="radiusM" /></td>` +
+    `<td><button data-del="${i}">×</button></td></tr>`).join('') ||
+    '<tr><td class="hint">none — click the map in ignition mode</td></tr>';
+}
+function renderWindTable() {
+  $('windTable').innerHTML = doc.wind.map((k, i) =>
+    `<tr><td><input type="number" step="60" value="${k.tS}" data-i="${i}" data-k="tS" /></td>` +
+    `<td><input type="number" step="5" value="${k.toDeg}" data-i="${i}" data-k="toDeg" /></td>` +
+    `<td><input type="number" step="1" value="${k.speedMps}" data-i="${i}" data-k="speedMps" /></td>` +
+    `<td><button data-del="${i}">×</button></td></tr>`).join('') ||
+    '<tr><td class="hint">none — constant fallback wind below</td></tr>';
+}
+$('ignTable').addEventListener('input', (e) => {
+  const t = e.target; if (!t.dataset.i) return;
+  doc.ignitions[+t.dataset.i][t.dataset.k] = +t.value || 0;
+  if (t.dataset.k === 'radiusM') doc.ignitions[+t.dataset.i].circle.setRadius(doc.ignitions[+t.dataset.i].radiusM);
+  refreshBox();
+});
+$('ignTable').addEventListener('click', (e) => {
+  if (e.target.dataset.del !== undefined) { removeIgnition(doc.ignitions[+e.target.dataset.del]); renderIgnTable(); }
+});
+$('windTable').addEventListener('input', (e) => {
+  const t = e.target; if (!t.dataset.i) return;
+  doc.wind[+t.dataset.i][t.dataset.k] = +t.value || 0;
+  refreshBox();
+});
+$('windTable').addEventListener('click', (e) => {
+  if (e.target.dataset.del !== undefined) { doc.wind.splice(+e.target.dataset.del, 1); renderWindTable(); refreshBox(); }
+});
+$('windAdd').addEventListener('click', () => {
+  const last = doc.wind[doc.wind.length - 1];
+  doc.wind.push({ tS: last ? last.tS + 600 : 0, toDeg: last ? last.toDeg : 225, speedMps: last ? last.speedMps : 12 });
+  doc.wind.sort((a, b) => a.tS - b.tS);
+  renderWindTable(); refreshBox();
+});
+['cellSize', 'seed', 'lossFrac'].forEach((id) => $(id).addEventListener('input', () => {
+  doc.cellSizeM = +$('cellSize').value || 60;
+  doc.seed = +$('seed').value || 7;
+  doc.lossFrac = Math.min(1, Math.max(0.1, +$('lossFrac').value || 1));
+  refreshBox();
+}));
+
+// ---- export -----------------------------------------------------------------
+function polyLines(pts, ind) {
+  return pts.map((p) => `${ind}[${f5(p.lat)}, ${f5(p.lng)}],`).join('\n');
+}
+function scenarioObject() {
+  return {
+    perimeter: doc.perimeter.map((v) => [f5(v.lat), f5(v.lng)]),
+    noFuelPolygons: doc.water.filter((r) => r.length >= 3).map((r) => r.map((v) => [f5(v.lat), f5(v.lng)])),
+    ignitions: doc.ignitions.map((g) => ({ lon: f5(g.lng), lat: f5(g.lat), radiusM: g.radiusM, atSimS: g.atSimS }))
+      .sort((a, b) => a.atSimS - b.atSimS),
+    wind: {
+      toDeg: doc.wind[0] ? doc.wind[0].toDeg : 225,
+      speedMps: doc.wind[0] ? doc.wind[0].speedMps : 12,
+      keyframes: doc.wind.slice().sort((a, b) => a.tS - b.tS).map((k) => ({ tS: k.tS, toDeg: k.toDeg, speedMps: k.speedMps })),
+    },
+    loss: { occupyFrac: doc.lossFrac },
+    cellSizeM: doc.cellSizeM,
+    seed: doc.seed,
+  };
+}
+function controllerText() {
+  const s = scenarioObject();
+  const ign = s.ignitions.length
+    ? s.ignitions.map((g) => `      { lon: ${g.lon}, lat: ${g.lat}, radiusM: ${g.radiusM}, atSimS: ${g.atSimS} },`).join('\n')
+    : '';
+  const kf = s.wind.keyframes.length
+    ? s.wind.keyframes.map((k) => `        { tS: ${k.tS}, toDeg: ${k.toDeg}, speedMps: ${k.speedMps} },`).join('\n')
+    : '';
+  const water = s.noFuelPolygons.length
+    ? s.noFuelPolygons.map((p) => `      [\n${polyLines(p.map(([la, ln]) => ({ lat: la, lng: ln })), '        ')}\n      ],`).join('\n')
+    : '';
+  return `// controller_fire.js — GENERATED by tools/geo-editor.html on ${new Date().toISOString()}.
+// Scene-asset scenario data: pure data + factory, no imports, no DOM.
+// The perimeter is HIDDEN GAME STATE: only the sim and the loss check ever
+// see it; no renderer receives it; players see fire, never the zone.
+// Consumed by fire_sim.js: createFireSim(createFireScenario()).
+
+export const FIRE_SCENARIO_API = 1;
+
+export function createFireScenario() {
+  return {
+    // Disaster-zone boundary, [lat, lon] pairs. Hidden from players.
+    perimeter: [
+${polyLines(doc.perimeter, '      ')}
+    ],
+    // Water / firebreak masks: never burn, the front halts at them.
+    noFuelPolygons: [
+${water}
+    ],
+    // Ignition spots clicked by the developer; atSimS = scenario beat time.
+    ignitions: [
+${ign}
+    ],
+    wind: {
+      // Fallback before/without keyframes.
+      toDeg: ${s.wind.toDeg},
+      speedMps: ${s.wind.speedMps},
+      // Piecewise-linear timeline: (sim seconds, compass toward, m/s).
+      keyframes: [
+${kf}
+      ],
+    },
+    // Game over: fire occupied the whole polygon (water-saved fuel excluded).
+    loss: { occupyFrac: ${s.loss.occupyFrac} },
+    cellSizeM: ${s.cellSizeM},
+    seed: ${s.seed},
+  };
+}
+
+export function describe() {
+  return {
+    api: FIRE_SCENARIO_API,
+    kind: 'wild-fire scenario (generated scene-asset data)',
+    consumes: 'fire_sim.js createFireSim(createFireScenario())',
+    hidden: ['perimeter', 'noFuelPolygons', 'loss'],
+    beats: ['ignitions at atSimS', 'wind keyframe shifts'],
+    commands: ['createFireScenario', 'describe'],
+  };
+}
+
+export default createFireScenario;
+`;
+}
+function refreshBox() {
+  jsonBox.value = $('boxMode').value === 'controller' ? controllerText() : JSON.stringify(scenarioObject().perimeter);
+}
+$('boxMode').addEventListener('change', refreshBox);
+$('loadBox').addEventListener('click', () => {
+  if ($('boxMode').value === 'controller') return flash('controller mode is export-only; load via presets');
+  try {
+    const pairs = JSON.parse(jsonBox.value);
+    if (!Array.isArray(pairs) || pairs.some((p) => !Array.isArray(p) || p.length < 2 || !isFinite(p[0]) || !isFinite(p[1]))) return flash('bad polygon JSON');
+    doc.perimeter.splice(0).forEach((v) => v.marker.remove());
+    pairs.forEach(([lat, lng]) => addVert(doc.perimeter, lat, lng, 'boundary'));
+    fitAll(); refresh();
+    flash('loaded ' + pairs.length + ' verts');
+  } catch { flash('JSON parse error'); }
+});
+$('copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(jsonBox.value); flash('copied'); }
   catch { jsonBox.select(); document.execCommand('copy'); flash('copied (fallback)'); }
 });
-document.getElementById('download').addEventListener('click', () => {
-  const blob = new Blob([jsonBox.value + '\n'], { type: 'application/json' });
+$('download').addEventListener('click', () => {
+  const name = $('boxMode').value === 'controller' ? 'controller_fire.js' : 'boundary.json';
+  const blob = new Blob([jsonBox.value + '\n'], { type: name.endsWith('.js') ? 'text/javascript' : 'application/json' });
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'boundary.json';
-  a.click();
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
   URL.revokeObjectURL(a.href);
-  flash('downloaded boundary.json');
+  flash('downloaded ' + name);
 });
 
-// Presets: the LIVE engine config module (dev-only import; Vite transforms
-// /src/* on the fly). Editing here never writes back — export is copy/paste.
-let cfg = null;
-async function presets() {
-  if (cfg) return cfg;
-  cfg = await import('/src/config/palisadesFire.js');
-  return cfg;
+// ---- presets (dev-only module imports) --------------------------------------
+function loadRings(perimeter, water) {
+  doc.perimeter.splice(0).forEach((v) => v.marker.remove());
+  doc.water.forEach((r) => r.splice(0).forEach((v) => v.marker.remove()));
+  doc.water = water && water.length ? water.map(() => []) : [[]];
+  activeWater = 0;
+  perimeter.forEach(([lat, lng]) => addVert(doc.perimeter, lat, lng, 'boundary'));
+  (water || []).forEach((ring, i) => ring.forEach(([lat, lng]) => addVert(doc.water[i], lat, lng, 'water')));
+  syncWaterSel(); fitAll(); refresh();
 }
-document.getElementById('presetPerimeter').addEventListener('click', async () => {
-  try { loadPairs((await presets()).PALISADES_FIRE.perimeter, 'fire perimeter'); }
-  catch (e) { flash('preset import failed: ' + e.message); }
+let cfgMod = null, scenMod = null;
+$('presetPerimeter').addEventListener('click', async () => {
+  try {
+    cfgMod = cfgMod || await import('/src/config/palisadesFire.js');
+    loadRings(cfgMod.PALISADES_FIRE.perimeter, [cfgMod.SANTA_MONICA_BAY]);
+    flash('loaded engine perimeter + bay');
+  } catch (e) { flash('preset import failed: ' + e.message); }
 });
-document.getElementById('presetBay').addEventListener('click', async () => {
-  try { loadPairs((await presets()).SANTA_MONICA_BAY, 'bay mask'); }
-  catch (e) { flash('preset import failed: ' + e.message); }
+$('presetBay').addEventListener('click', async () => {
+  try {
+    cfgMod = cfgMod || await import('/src/config/palisadesFire.js');
+    loadRings(doc.perimeter.map((v) => [v.lat, v.lng]), [cfgMod.SANTA_MONICA_BAY]);
+    flash('bay mask replaced');
+  } catch (e) { flash('preset import failed: ' + e.message); }
+});
+$('presetScenario').addEventListener('click', async () => {
+  try {
+    scenMod = scenMod || await import('/games/demo-wild-fire/assets/fire/controller_fire.js');
+    const s = scenMod.createFireScenario();
+    loadRings(s.perimeter, s.noFuelPolygons);
+    doc.ignitions.slice().forEach(removeIgnition);
+    (s.ignitions || []).forEach((g) => addIgnition(g.lat, g.lon, g.radiusM, g.atSimS));
+    doc.wind = (s.wind.keyframes || []).map((k) => ({ tS: k.tS, toDeg: k.toDeg, speedMps: k.speedMps }));
+    doc.cellSizeM = s.cellSizeM; doc.seed = s.seed; doc.lossFrac = s.loss.occupyFrac;
+    $('cellSize').value = s.cellSizeM; $('seed').value = s.seed; $('lossFrac').value = s.loss.occupyFrac;
+    renderIgnTable(); renderWindTable();
+    flash('loaded shipped scenario');
+  } catch (e) { flash('scenario import failed: ' + e.message); }
 });
 
+// ---- refresh ----------------------------------------------------------------
+function fitAll() {
+  const all = [...doc.perimeter, ...doc.water.flat()];
+  if (all.length) map.fitBounds(L.latLngBounds(all.map((v) => [v.lat, v.lng])).pad(0.15));
+}
+function refresh() {
+  layers.perimeter.setLatLngs(doc.perimeter.map((v) => [v.lat, v.lng]));
+  layers.water.forEach((p) => p.remove());
+  layers.water = doc.water.map((ring) =>
+    L.polygon(ring.map((v) => [v.lat, v.lng]), { color: '#2f8fd6', weight: 2, fillOpacity: 0.22 }).addTo(map));
+  const m = ringMetrics(doc.perimeter);
+  stats.textContent = 'boundary verts ' + doc.perimeter.length +
+    '\narea ' + m.ha.toFixed(1) + ' ha   perim ' + m.km.toFixed(2) + ' km' +
+    '\nwater rings ' + doc.water.filter((r) => r.length >= 3).length +
+    '   ignitions ' + doc.ignitions.length;
+  syncWaterSel();
+  renderIgnTable();
+  refreshBox();
+}
+
+// ---- preview: run the PACKAGE sim on exactly this data -----------------------
+const pv = { sim: null, mod: null, raf: 0, running: false, speed: 4, acc: 0, last: 0 };
+const pvCanvas = $('pvCanvas'), pvCtx = pvCanvas.getContext('2d');
+const STATE_COLOR = { 0: [26, 36, 22], 1: [255, 122, 26], 2: [20, 16, 12], 3: [38, 54, 74], 4: [11, 14, 17] };
+
+async function pvEnsureMod() {
+  pv.mod = pv.mod || await import(/* @vite-ignore */ SIM_URL);
+  return pv.mod;
+}
+function pvRestart() {
+  pv.running = false; $('pvRun').textContent = 'run';
+  cancelAnimationFrame(pv.raf);
+  pvEnsureMod().then((mod) => {
+    if (doc.perimeter.length < 3) { $('pvHud').textContent = 'preview: draw a boundary first'; pvCtx.clearRect(0, 0, pvCanvas.width, pvCanvas.height); return; }
+    pv.sim = mod.createFireSim({
+      perimeter: doc.perimeter.map((v) => [v.lat, v.lng]),
+      noFuelPolygons: doc.water.filter((r) => r.length >= 3).map((r) => r.map((v) => [v.lat, v.lng])),
+      ignitions: doc.ignitions.map((g) => ({ lon: g.lng, lat: g.lat, radiusM: g.radiusM, atSimS: g.atSimS })),
+      wind: { toDeg: doc.wind[0] ? doc.wind[0].toDeg : 225, speedMps: doc.wind[0] ? doc.wind[0].speedMps : 12,
+              keyframes: doc.wind.slice().sort((a, b) => a.tS - b.tS) },
+      loss: { occupyFrac: doc.lossFrac },
+      cellSizeM: doc.cellSizeM,
+      seed: doc.seed,
+    });
+    pv.acc = 0; pv.last = 0;
+    pvPaint();
+    $('pvHud').textContent = pvHudText();
+    pvRun(true);
+  }).catch((e) => { $('pvHud').textContent = 'preview error: ' + e.message; });
+}
+function pvHudText() {
+  if (!pv.sim) return 'preview idle';
+  const s = pv.sim.getState();
+  return `t ${s.time.toFixed(0)}s  burning ${s.counts.burning}  ash ${s.counts.ash}` +
+    `\noccupy ${(s.occupyFrac * 100).toFixed(1)}%  wind ${s.wind.toDeg.toFixed(0)}°/${s.wind.speedMps.toFixed(1)}mps` +
+    (s.lost ? '\nGAME OVER — polygon occupied' : s.phase === 'extinguished' ? '\nfire out — players held the line' : '');
+}
+function pvPaint() {
+  const g = pv.sim.gridInfo();
+  const off = pv.off && pv.off.width === g.cols && pv.off.height === g.rows
+    ? pv.off
+    : (pv.off = document.createElement('canvas'));
+  if (off.width !== g.cols) { off.width = g.cols; off.height = g.rows; }
+  const img = off.getContext('2d').createImageData(g.cols, g.rows);
+  for (let r = 0; r < g.rows; r++) {
+    for (let c = 0; c < g.cols; c++) {
+      const s = g.stateAt(c, r);
+      let [R, G, B] = STATE_COLOR[s];
+      if (s === 1) { const n = ((c * 31 + r * 17 + ((pv.sim.getState().time * 8) | 0)) % 7); R -= n * 6; G += n * 3; }
+      const o = (r * g.cols + c) * 4;
+      img.data[o] = R; img.data[o + 1] = G; img.data[o + 2] = B; img.data[o + 3] = 255;
+    }
+  }
+  off.getContext('2d').putImageData(img, 0, 0);
+  pvCtx.imageSmoothingEnabled = false;
+  pvCtx.clearRect(0, 0, pvCanvas.width, pvCanvas.height);
+  pvCtx.drawImage(off, 0, 0, pvCanvas.width, pvCanvas.height);
+}
+function pvRun(on) {
+  pv.running = on;
+  $('pvRun').textContent = on ? 'pause' : 'run';
+  if (on) { pv.last = performance.now(); pv.raf = requestAnimationFrame(pvFrame); }
+}
+function pvFrame(now) {
+  if (!pv.running || !pv.sim) return;
+  const dtReal = Math.min(0.1, (now - pv.last) / 1000);
+  pv.last = now;
+  pv.acc += dtReal * pv.speed;
+  const STEP = 0.5;
+  let n = 0;
+  while (pv.acc >= STEP && n < 400) { pv.sim.tick(STEP); pv.acc -= STEP; n++; }
+  pvPaint();
+  $('pvHud').textContent = pvHudText();
+  if (pv.sim.getState().lost || pv.sim.getState().phase === 'extinguished') { pvRun(false); return; }
+  pv.raf = requestAnimationFrame(pvFrame);
+}
+$('pvRun').addEventListener('click', () => { if (!pv.sim) return pvRestart(); pvRun(!pv.running); });
+$('pvRestart').addEventListener('click', pvRestart);
+$('pvSpeed').addEventListener('change', () => { pv.speed = +$('pvSpeed').value; });
+
+// ---- boot -------------------------------------------------------------------
+setMode('boundary');
+syncWaterSel();
 refresh();
+pvCtx.fillStyle = '#0b0e11';
+pvCtx.fillRect(0, 0, pvCanvas.width, pvCanvas.height);
+$('pvHud').textContent = 'preview idle — draw, then restart';
 </script>
 </body>
 </html>
