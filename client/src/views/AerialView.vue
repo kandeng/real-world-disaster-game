@@ -28,7 +28,7 @@ import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } fro
 import ConnectionError from '@shared/ConnectionError.vue';
 import SplashOverlay from '@shared/SplashOverlay.vue';
 import { PALISADES_FIRE, PLAN_VIEW_ALT } from '@/config/palisadesFire.js';
-import { useFireDemo } from '@/composables/useFireDemo.js';
+import { useFireAgent } from '@/composables/useFireAgent.js';
 import { getGameIntro } from '@/config/gameIntro.js';
 
 const { t, locale } = useI18n();
@@ -170,10 +170,13 @@ const penViews = computed(() => isPlanView.value || isSteerView.value);
 // cycles to 'satellite' on the second Plan click.
 const planLayer = ref('terrain');
 const mapTypeId = computed(() => (isPlanView.value ? planLayer.value : 'roadmap'));
-// The LA early-2025 wildfire disaster zone, drawn as data-driven polygons
-// on the Plan view's 2D map.
+// The LA early-2025 wildfire disaster zone polygon. It is HIDDEN GAME STATE:
+// players never see the boundary (the fire agent worker owns the perimeter
+// for the sim + loss check only). The red debug outline renders solely with
+// the developer flag ?fireZone=1 (alongside ?fireDemo=1).
+const showFireZone = new URLSearchParams(window.location.search).has('fireZone');
 const planPolygons = computed(() =>
-  isPlanView.value
+  isPlanView.value && showFireZone
     ? [
         {
           id: 'palisades-fire',
@@ -322,9 +325,10 @@ watch(() => route.query, applyPlayQuery);
 
 // ── Search panel state (address finding — same workflow as Route Planning) ──
 const mapViewRef = ref(null);
-// Fire effect demo driver (?fireDemo=1): ticks the package fire_sim and feeds
-// the engine effect layer through protocol commands only.
-const fireDemo = useFireDemo();
+// Fire agent client (?fireDemo=1): owns the per-session worker that runs the
+// package sim + scenario; relays protocol messages into the engine effect and
+// attaches the 2D (Google map) and 3D (Cesium) fire overlays.
+const fireAgent = useFireAgent();
 const showSearchPanel = computed(() => viewCtx.subView === 'search');
 const searchQuery = toRef(viewCtx, 'searchQuery');
 const searchResults = ref([]);
@@ -442,9 +446,13 @@ function onMapReady() {
   }
   if (routeActive.value) redrawRouteMarkers();
   if (showLivePos.value) mapViewRef.value?.setLivePosition(drone.lat, drone.lon);
-  // No-op unless ?fireDemo=1; re-attaches the overlay when the map instance
-  // changed (Plan <-> Steer round trips recreate the Google map).
-  fireDemo.start(() => mapViewRef.value?.getGoogleMap?.() ?? null);
+  // No-op unless ?fireDemo=1; re-attaches the overlays when the map instance
+  // changed (Plan <-> Steer round trips recreate the Google map). The Cesium
+  // viewer is a page-lifetime singleton, handed over for the 3D fire overlay.
+  fireAgent.start(
+    () => mapViewRef.value?.getGoogleMap?.() ?? null,
+    () => window.cesiumViewer || null
+  );
 }
 
 // Read-only route illustration (Content -> Steer handoff): while the Route
@@ -1350,7 +1358,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopPlay();
   stopPlayLoading();
-  fireDemo.stop();
+  fireAgent.stop();
   resetRecorder();
   // A freeze session must never outlive the view: it stops the camera push
   // and holds a full-viewport overlay.
