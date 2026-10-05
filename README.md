@@ -318,6 +318,7 @@ Production deployment (Alibaba ECS, Caddy, Tailscale) is documented in
 | **E2** | Generic core worker on Cordis; fire re-expressed as a driver plugin |
 | **E3** | Slow-clock agent worker + the server decide engine (heuristic / llm) |
 | **E4** | DSH counselor bridge: a session-keyed harness with lifecycle + idle GC |
+| **E5** | Wildfire port complete: the demo runs fully on E0–E4; transitional E0 audit scaffolding removed |
 
 ---
 
