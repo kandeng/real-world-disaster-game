@@ -13,12 +13,11 @@ export const coreFamily = defineFamily({
   events: {
     'core.ready': {
       package: 'string!',    // packageBase the worker booted from
-      assets: 'array!',      // asset ids whose drivers mounted successfully
-      skipped: 'array?',     // [{ id, reason }] — content-only assets / missing drivers (degrade, never break)
+      agents: 'bool?',       // E6.8: true when the package declared an agents manifest (package.json) so the generic loader ran
     },
     'game.over': {
-      outcome: 'string!',    // driver-defined result; fire uses 'lost' | 'held'
-      state: 'object?',      // final state snapshot, if the driver has one
+      outcome: 'string!',    // package-defined result (e.g. an environment's win/lose latch)
+      state: 'object?',      // final state snapshot, if the package has one
     },
     'error': {
       message: 'string!',

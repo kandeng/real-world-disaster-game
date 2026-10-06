@@ -5,7 +5,7 @@
      no SPA route, no bundle chunk, and production (Caddy serves client/dist
      only) never exposes it. The play site cannot be disturbed by this page.
 
-     What it authors (the fire scenario of a package, today demo-wild-fire):
+     What it authors (the fire scenario of a package, today demo-wildfire):
        • boundary mode ....... draw/edit the disaster perimeter polygon
        • water mode .......... draw/edit no-fuel masks (ocean bays, firebreaks)
        • ignition mode ....... click ignition spots (radius + activation time)
@@ -143,7 +143,7 @@
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module">
-const SIM_URL = '/games/demo-wild-fire/assets/fire/fire_sim.js';
+const SIM_URL = '/games/demo-wildfire/assets/fire/fire_sim.js';
 
 const map = L.map('map', { center: [34.045, -118.53], zoom: 13 });
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
@@ -478,7 +478,7 @@ $('presetBay').addEventListener('click', async () => {
 });
 $('presetScenario').addEventListener('click', async () => {
   try {
-    scenMod = scenMod || await import('/games/demo-wild-fire/assets/fire/controller_fire.js');
+    scenMod = scenMod || await import('/games/demo-wildfire/assets/fire/controller_fire.js');
     const s = scenMod.createFireScenario();
     loadRings(s.perimeter, s.noFuelPolygons);
     doc.ignitions.slice().forEach(removeIgnition);

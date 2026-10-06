@@ -12,7 +12,7 @@ Endpoints (mounted under ``/api``)::
     POST /api/game/agent/decide   -> { observation } -> { intent, policy, rationale }
 
 No auth in dev: the caller supplies an opaque ``session`` id used only for
-logging and (server-side) DSH session keying. Production can layer the same
+logging and (server-side) session keying. Production can layer the same
 optional-JWT identity the chat API uses; the intent contract is unchanged.
 """
 
@@ -21,16 +21,15 @@ import logging
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from . import game_agent_engine
 from .game_agent_engine import (
-    ALLOWED_ACTIONS,
-    DEFAULT_DROP_RADIUS_M,
     ENGINE_MODE,
     MODEL,
     close_session,
-    dsh_available,
+    decide,
+    list_archetypes,
     list_sessions,
     open_session,
+    register_archetype,
 )
 
 log = logging.getLogger(__name__)
@@ -40,16 +39,31 @@ router = APIRouter(prefix="/game", tags=["game-agent"])
 
 class DecideBody(BaseModel):
     session: str = Field(default="", max_length=120)
-    asset: str = Field(default="fire", max_length=40)
+    asset: str = Field(default="", max_length=40)
     observation: dict = Field(default_factory=dict)
-    # Optional per-call policy override (heuristic | llm | dsh | auto); the dev
-    # UI uses it to A/B policies without a server restart.
+    # Optional per-call policy override (llm | vlm | auto); the dev UI uses it
+    # to A/B policies without a server restart.
     mode: str | None = Field(default=None, max_length=16)
+    # ── generic slow-agent fields: the package declares the archetype policy ──
+    archetype: str = Field(default="", max_length=64)   # selects the package policy spec
+    agent_id: str = Field(default="", max_length=120, alias="agentId")
+    image: str | None = Field(default=None)             # data URL enabling the VLM route
+    actions: list | None = Field(default=None)          # inline tool spec [{name, description, parameters}]
+    persona: str = Field(default="", max_length=4000)
+
+    model_config = {"populate_by_name": True}
+
+
+class ArchetypeBody(BaseModel):
+    archetype: str = Field(max_length=64)
+    actions: list = Field(default_factory=list)
+    persona: str = Field(default="", max_length=4000)
+    mode: str = Field(default="", max_length=16)
 
 
 class SessionBody(BaseModel):
     session: str = Field(default="", max_length=120)
-    asset: str = Field(default="fire", max_length=40)
+    asset: str = Field(default="", max_length=40)
 
 
 @router.get("/agent/config")
@@ -58,13 +72,8 @@ async def agent_config() -> dict:
     return {
         "mode": ENGINE_MODE,
         "model": MODEL,
-        "actions": sorted(ALLOWED_ACTIONS),
-        "dropRadiusM": DEFAULT_DROP_RADIUS_M,
-        # E4: whether the persistent DSH counselor can run here (SDK installed
-        # + key present). False on a plain localhost box -> auto degrades to
-        # the one-shot llm or the heuristic; true on ECS01.
-        "dshAvailable": dsh_available(),
-        "modes": ["heuristic", "llm", "dsh", "auto"],
+        "modes": ["llm", "vlm", "auto"],
+        "archetypes": list_archetypes(),
     }
 
 
@@ -78,9 +87,6 @@ async def agent_session_open(body: SessionBody) -> dict:
         "session": rec["session"],
         "asset": rec["asset"],
         "mode": ENGINE_MODE,
-        "dshAvailable": dsh_available(),
-        "actions": sorted(ALLOWED_ACTIONS),
-        "dropRadiusM": DEFAULT_DROP_RADIUS_M,
     }
 
 
@@ -102,14 +108,47 @@ async def agent_sessions() -> dict:
 
 @router.post("/agent/decide")
 async def agent_decide(body: DecideBody) -> dict:
-    """One observation in, one intent out. Never raises (engine guarantees)."""
-    result = await game_agent_engine.decide_intent(
-        body.observation, body.mode, body.session
+    """One observation in, one intent out. Never raises (engine guarantees).
+
+    Routes to the GENERIC multi-agent decide: the package names an archetype
+    (and may carry an inline tool spec), and the engine only ever emits actions
+    from that archetype's whitelist.
+    """
+    spec = {"archetype": body.archetype, "actions": body.actions or [],
+            "persona": body.persona, "mode": body.mode or ""} if body.actions else None
+    result = await decide(
+        body.observation,
+        archetype=body.archetype,
+        agent_id=body.agent_id,
+        mode=body.mode,
+        session=body.session,
+        image=body.image,
+        spec=spec,
     )
     intent = result.get("intent")
     log.info(
-        "game_agent decide session=%s asset=%s policy=%s intent=%s",
-        body.session or "-", body.asset, result.get("policy"),
-        intent.get("type") if intent else None,
+        "game_agent decide session=%s asset=%s archetype=%s agent=%s policy=%s intent=%s",
+        body.session or "-", body.asset, body.archetype or "-", body.agent_id or "-",
+        result.get("policy"), intent.get("type") if intent else None,
     )
     return {"session": body.session, "asset": body.asset, **result}
+
+
+@router.post("/agent/archetype")
+async def agent_archetype_register(body: ArchetypeBody) -> dict:
+    """Register a package-declared archetype policy (whitelist + tools + persona).
+
+    This is how the per-archetype ALLOWED_ACTIONS is "sourced from the package":
+    the client uploads the archetype's tool schemas and the engine only ever
+    emits actions from that set. Idempotent per archetype name.
+    """
+    rec = register_archetype(body.model_dump())
+    log.info("game_agent archetype register %s actions=%s", body.archetype, rec.get("actions"))
+    return rec
+
+
+@router.get("/agent/archetypes")
+async def agent_archetypes() -> dict:
+    """List the currently registered package archetype policies."""
+    archetypes = list_archetypes()
+    return {"count": len(archetypes), "archetypes": archetypes}

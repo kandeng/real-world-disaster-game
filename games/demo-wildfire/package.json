@@ -1,0 +1,43 @@
+{
+  "apiVersion": 1,
+  "comment": [
+    "The package MANIFEST: the entry points the core worker imports to boot the",
+    "agent paradigm. This is the single package index the worker reads (the",
+    "legacy scene.json asset/driver index was retired in E6.9). The worker",
+    "fetches THIS file first: if it carries an",
+    "'agents' block, the generic loader (engine/agents/loadPackage.js) imports",
+    "the declared modules and wires them into the AgentRuntime. The engine names",
+    "no domain — it mounts whatever this file declares.",
+    "",
+    "All paths are RELATIVE to the package baseUrl (catalog.json), so the package",
+    "can be republished from a CDN with a one-field catalog change. The worker",
+    "resolves each path against that base; nothing here is an absolute URL.",
+    "",
+    "agents.environment        the world module: exports createEnvironment(opts)",
+    "                          -> { bounds, cellAt, tick, snapshot, capabilities }.",
+    "agents.environmentOptions  passed verbatim to createEnvironment. 'seed' fixes",
+    "                          the PRNG so the same package replays the same",
+    "                          emergence (seeded determinism, no replay system).",
+    "agents.capabilities        the domain sensor/actuator registry: exports",
+    "                          PACKAGE_CAPABILITIES (an array of capability defs).",
+    "agents.roster              the initial cast: exports createRoster(env, opts)",
+    "                          -> [agentSpec, ...].",
+    "render                     the L2 bindings module (archetype -> engine",
+    "                          primitive, referenced BY NAME) the host relay reads",
+    "                          to paint agents.state. Pure content, no browser APIs.",
+    "",
+    "THE ONE RULE: every module named here is dependency-free ESM that runs",
+    "identically in the core Web Worker and in plain Node. None may touch",
+    "window/document/canvas/WebGL/Cesium/Maps/fetch. See dev/README.md."
+  ],
+  "id": "demo-wildfire",
+  "version": "0.1.0",
+  "type": "module",
+  "agents": {
+    "environment": "environment/environment.js",
+    "environmentOptions": { "seed": 7 },
+    "capabilities": "capabilities/index.js",
+    "roster": "agents/roster.js"
+  },
+  "render": "render/bindings.js"
+}

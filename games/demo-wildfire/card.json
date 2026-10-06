@@ -1,0 +1,49 @@
+{
+  "apiVersion": 1,
+  "comment": [
+    "The Plaza card for this package: everything needed to draw one card,",
+    "and nothing needed to run the game.",
+    "",
+    "Fields:",
+    "  id              must equal the catalog entry's id.",
+    "  title           a plain string, or a locale map {en, zh, ...}. A",
+    "                    locale that is missing falls back to 'en', then to",
+    "                    whatever the map holds first, so an untranslated",
+    "                    package still renders instead of showing a blank.",
+    "  description     same shape as title; an ARRAY of paragraphs. The",
+    "                    Plaza joins them with a blank line and renders them",
+    "                    with white-space: pre-wrap, so the package controls",
+    "                    its own line breaks.",
+    "  trailer         video file, RELATIVE to the package baseUrl. Omit or",
+    "                    null for a package with no trailer.",
+    "  poster          still image shown before the trailer plays, relative",
+    "                    the same way. Optional.",
+    "  action          the ONE engine capability this card may invoke. The",
+    "                    engine maps a kind to a route; a package cannot",
+    "                    name a route or a component directly. Unknown",
+    "                    kinds render no button rather than guessing.",
+    "                    'play' = enter the game.",
+    "",
+    "Media is addressed relative to baseUrl on purpose: republishing this",
+    "package from its own repository on a CDN is a catalog change, not an",
+    "edit here."
+  ],
+  "id": "demo-wildfire",
+  "packageVersion": "0.1.0",
+  "title": {
+    "en": "Palisades Fire in Los Angeles, 2025"
+  },
+  "description": {
+    "en": [
+      "Santa Ana winds fuel dangerous wildfires in Los Angeles by blowing hot, dry desert air toward the coast and rapidly drying out vegetation.",
+      "The Palisades Fire was a highly destructive wildfire that began in the Santa Monica Mountains of Los Angeles County on January 7, 2025, and grew to destroy large areas of Pacific Palisades, Topanga, and Malibu before it was fully contained on January 31.",
+      "One of a series of wildfires in Southern California driven by extremely powerful Santa Ana winds, it spread to 37 sq mi (95 km2), killed 12 people, and destroyed 6,837 structures, making it the tenth-deadliest and third-most destructive California wildfire on record and the second most destructive to occur in the history of the city of Los Angeles.",
+      "The fire burned simultaneously with the similarly destructive Eaton Fire at the foothills of the nearby San Gabriel Mountains."
+    ]
+  },
+  "trailer": "media/trailer.mp4",
+  "poster": null,
+  "action": {
+    "kind": "play"
+  }
+}

@@ -7,12 +7,13 @@
 //
 // Envelope v1 (wire format — identical to the protocol already in production):
 //   { type: '<wireType>', ...payload }          flat JSON, structured-cloneable
-//   wireType taxonomy: '<domain>.<name>' for events ('fire.delta'),
-//   bare '<name>' for commands ('dropWater') — v1 compatibility debt; v2 will
-//   namespace commands too ('fire.dropWater').
+//   wireType taxonomy: '<domain>.<name>' for events ('agents.state') and, in
+//   the v2 direction the families already follow, for commands too
+//   ('agents.order'); a few bare '<name>' core commands remain v1 debt.
 //
-// Bus names (Cordis databus): events map '.' -> '/' ('fire.delta' ->
-// 'fire/delta'); commands are prefixed 'cmd/' ('dropWater' -> 'cmd/dropWater').
+// Bus names (Cordis databus): events map '.' -> '/' ('agents.state' ->
+// 'agents/state'); commands are prefixed 'cmd/' ('agents.order' ->
+// 'cmd/agents.order').
 //
 // Validation policy (v1 = warn mode):
 //   'ok'      — known type, required fields present and well-typed;

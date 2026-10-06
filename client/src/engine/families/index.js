@@ -4,5 +4,5 @@
 // against the same normative definitions.
 
 export { coreFamily } from './core.js';
-export { fireFamily } from './fire.js';
 export { agentFamily } from './agent.js';
+export { agentsFamily } from './agents.js';

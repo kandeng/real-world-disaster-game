@@ -28,7 +28,7 @@ import { useConnectionStatus, checkGoogleConnection, checkCesiumConnection } fro
 import ConnectionError from '@shared/ConnectionError.vue';
 import SplashOverlay from '@shared/SplashOverlay.vue';
 import { PALISADES_FIRE, PLAN_VIEW_ALT } from '@/config/palisadesFire.js';
-import { useFireAgent } from '@/composables/useFireAgent.js';
+import { useAgentScene } from '@/composables/useAgentScene.js';
 import { getGameIntro } from '@/config/gameIntro.js';
 
 const { t, locale } = useI18n();
@@ -171,9 +171,9 @@ const penViews = computed(() => isPlanView.value || isSteerView.value);
 const planLayer = ref('terrain');
 const mapTypeId = computed(() => (isPlanView.value ? planLayer.value : 'roadmap'));
 // The LA early-2025 wildfire disaster zone polygon. It is HIDDEN GAME STATE:
-// players never see the boundary (the fire agent worker owns the perimeter
-// for the sim + loss check only). The red debug outline renders solely with
-// the developer flag ?fireZone=1 (alongside ?fireDemo=1).
+// players never see the boundary (the demo-wildfire package environment owns
+// the perimeter for the sim + loss check only). The red debug outline renders
+// solely with the developer flag ?fireZone=1 (alongside ?agentDemo=1).
 const showFireZone = new URLSearchParams(window.location.search).has('fireZone');
 const planPolygons = computed(() =>
   isPlanView.value && showFireZone
@@ -325,10 +325,10 @@ watch(() => route.query, applyPlayQuery);
 
 // ── Search panel state (address finding — same workflow as Route Planning) ──
 const mapViewRef = ref(null);
-// Fire agent client (?fireDemo=1): owns the per-session worker that runs the
-// package sim + scenario; relays protocol messages into the engine effect and
-// attaches the 2D (Google map) and 3D (Cesium) fire overlays.
-const fireAgent = useFireAgent();
+// E6.9: the GENERIC agent-paradigm host relay (?agentDemo=1). Package-agnostic:
+// it spawns the core worker, relays agents.state/event/world into the L2 scene
+// model and attaches the four render primitives (2D map + 3D Cesium viewer).
+const agentScene = useAgentScene();
 const showSearchPanel = computed(() => viewCtx.subView === 'search');
 const searchQuery = toRef(viewCtx, 'searchQuery');
 const searchResults = ref([]);
@@ -446,10 +446,10 @@ function onMapReady() {
   }
   if (routeActive.value) redrawRouteMarkers();
   if (showLivePos.value) mapViewRef.value?.setLivePosition(drone.lat, drone.lon);
-  // No-op unless ?fireDemo=1; re-attaches the overlays when the map instance
-  // changed (Plan <-> Steer round trips recreate the Google map). The Cesium
-  // viewer is a page-lifetime singleton, handed over for the 3D fire overlay.
-  fireAgent.start(
+  // No-op unless ?agentDemo=1; the generic agent overlay set re-attaches when the
+  // map instance changes (Plan <-> Steer round trips recreate the Google map). The
+  // Cesium viewer is a page-lifetime singleton, handed over for the 3D overlays.
+  agentScene.start(
     () => mapViewRef.value?.getGoogleMap?.() ?? null,
     () => window.cesiumViewer || null
   );
@@ -1358,7 +1358,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopPlay();
   stopPlayLoading();
-  fireAgent.stop();
+  agentScene.stop();
   resetRecorder();
   // A freeze session must never outlive the view: it stops the camera push
   // and holds a full-viewport overlay.

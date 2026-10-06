@@ -107,23 +107,26 @@ function packageBase(baseUrl) {
 // files later) against it. Module-level like the caches above: the play view
 // mounts only after the route change, so the click must outlive the Plaza.
 //
-// Default is the wild-fire package: the engine's only scene is still the
-// hard-coded Palisades one, and a direct /play hit (reload, bookmark) never
-// passes a card click.
-const DEFAULT_PACKAGE_BASE = packageBase('/games/demo-wild-fire/');
-let activeBase = DEFAULT_PACKAGE_BASE;
+// The client names NO package. A direct /play hit (reload, bookmark) never
+// passes a card click, so the default resolves lazily from the catalog's first
+// entry — the catalog is the single source of truth for which packages exist
+// and their order. Renaming or reordering a package is therefore a catalog
+// edit, never a code change here.
+let activeBase = null;
 
 /** Record which package the play button was clicked for (catalog baseUrl). */
 export function setActiveGamePackage(baseUrl) {
   activeBase =
-    typeof baseUrl === 'string' && baseUrl
-      ? packageBase(baseUrl)
-      : DEFAULT_PACKAGE_BASE;
+    typeof baseUrl === 'string' && baseUrl ? packageBase(baseUrl) : null;
 }
 
-/** Absolute, trailing-slashed root of the package engine assets load from. */
+/** Absolute, trailing-slashed root of the package engine assets load from:
+ *  the explicit Plaza click, else the catalog's first game, else null. */
 export function activeGamePackageBase() {
-  return activeBase;
+  if (activeBase) return activeBase;
+  const cards = cachedGameCards();
+  const first = Array.isArray(cards) && cards[0] && cards[0].baseUrl;
+  return first || null;
 }
 
 async function fetchJson(url) {

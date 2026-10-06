@@ -10,9 +10,9 @@ and prod; only the host changes.
 
 Run from the ``server/`` directory::
 
-    python3 scripts/agent_dev_server.py            # heuristic policy (offline)
-    GAME_AGENT_MODE=auto python3 scripts/agent_dev_server.py   # try LLM first
-    GAME_AGENT_MODE=dsh  python3 scripts/agent_dev_server.py   # persistent counselor
+    python3 scripts/agent_dev_server.py            # auto ladder (vlm -> llm -> hold)
+    GAME_AGENT_MODE=llm  python3 scripts/agent_dev_server.py   # text-only policy
+    GAME_AGENT_MODE=vlm  python3 scripts/agent_dev_server.py   # vision-language policy
 
 The mode override is read here (not from config.json) so a dev can flip
 policies without editing the gitignored config; it is passed per-call via the
@@ -38,7 +38,7 @@ from app.game_agent_api import router as game_agent_router  # noqa: E402
 # reads it. game_agent_engine resolves ENGINE_MODE at import; re-point it here
 # so GAME_AGENT_MODE wins without touching config.json.
 _mode = (os.environ.get("GAME_AGENT_MODE") or "").strip().lower()
-if _mode in ("heuristic", "llm", "dsh", "auto"):
+if _mode in ("llm", "vlm", "auto"):
     from app import game_agent_engine
 
     game_agent_engine.ENGINE_MODE = _mode

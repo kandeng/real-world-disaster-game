@@ -19,8 +19,8 @@
     "    tag and no CDN propagation to wait for.",
     "",
     "Every baseUrl must contain a card.json — the only file the Plaza needs to",
-    "draw a card. Package media (trailer, poster, meshes) and the later",
-    "scene.json / story.json / audio.json / index.js live beside it and are",
+    "draw a card. Package media (trailer, poster, meshes) and the agent",
+    "package.json / story.json / audio.json / index.js live beside it and are",
     "addressed RELATIVE to baseUrl, so moving a package to another host is a",
     "one-field change here.",
     "",
@@ -49,8 +49,8 @@
   ],
   "games": [
     {
-      "id": "demo-wild-fire",
-      "baseUrl": "/games/demo-wild-fire/",
+      "id": "demo-wildfire",
+      "baseUrl": "/games/demo-wildfire/",
       "packageVersion": "0.1.0",
       "order": 10
     },
