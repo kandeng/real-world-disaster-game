@@ -29,30 +29,50 @@ const props = defineProps({
 
 const emit = defineEmits(['dismissed']);
 
-const vidEl = ref(null);
-const index = ref(0);
+// Double-buffered playlist: two <video> slots. One is the presenter ('front');
+// the other preloads the NEXT clip ('preload', hidden). At a cut the presenter
+// freezes on its last frame ('bridge', still visible beneath) while the
+// preloaded slot is promoted to 'front' as soon as it reports playing — so the
+// outgoing frame bridges the gap and the screen never goes black. Only if the
+// promotion is slower than GRACE_MS do we overlay a scrim spinner.
+const slotEls = ref([null, null]);
+const frontSlot = ref(0);
+const slotClip = ref([0, 1]);
+const slotRole = ref(['front', 'preload']); // 'front' | 'bridge' | 'preload'
+const pendingFront = ref(-1);
 const muted = ref(false);
 const fading = ref(false);
 const progress = ref(0); // 0..1 across the whole playlist
+const GRACE_MS = 600;
 
 let dismissed = false;
 const clipsDone = ref(false);
 const sceneReady = ref(typeof window !== 'undefined' && window.__cesiumReady === true);
-// True once the current intro clip has buffered enough to play (its @canplay
-// fired). Until then — and again after the clips end while the 3D scene is
-// still streaming — the overlay shows a black "please wait" spinner instead of
-// a blank panel with no feedback.
+// True once the presenting slot has actually started playing (@playing). Drives
+// the initial opaque "please wait" veil (nothing to bridge against yet).
 const clipPlayable = ref(false);
+// Inter-clip: the frozen bridge frame has been held longer than GRACE_MS
+// because the next clip still isn't playing → show a scrim spinner over it.
+const bridgeWaiting = ref(false);
 let musicEl = null;
 let fallbackTimer = null;
 let finalizeTimer = null;
 let finalized = false;
 let gestureUnlock = null;
+let graceTimer = null;
 
 const hasClips = computed(() => Array.isArray(props.clips) && props.clips.length > 0);
-const current = computed(() => (hasClips.value ? props.clips[index.value] : ''));
 const videoMuted = computed(() => (props.music ? true : muted.value));
 const progressPct = computed(() => `${Math.round(progress.value * 100)}%`);
+
+function clipSrc(i) {
+  if (!hasClips.value) return undefined;
+  const idx = slotClip.value[i];
+  return idx >= 0 && idx < props.clips.length ? props.clips[idx] : undefined;
+}
+function setSlotRef(i) {
+  return (e) => { slotEls.value[i] = e; };
+}
 
 // Black-screen + spinner "please wait" state. Shows whenever the overlay has
 // nothing to present yet:
@@ -63,12 +83,15 @@ const progressPct = computed(() => `${Math.round(progress.value * 100)}%`);
 // It clears the instant a clip becomes playable (the video takes over) and again
 // drives the wait after the playlist ends if the globe is not ready. Skip and the
 // fallback timer always win, so this can never trap the user.
-const showWait = computed(() => {
-  if (fading.value) return false;
-  if (!hasClips.value) return !sceneReady.value;
-  if (!clipPlayable.value) return true;
-  return clipsDone.value && props.minSceneReady && !sceneReady.value;
+const waitMode = computed(() => {
+  if (fading.value) return null;
+  if (!hasClips.value) return sceneReady.value ? null : 'opaque';
+  if (!clipPlayable.value) return 'opaque'; // initial cold load, no frame to bridge
+  if (bridgeWaiting.value) return 'scrim';  // slow inter-clip handoff over frozen frame
+  if (clipsDone.value && props.minSceneReady && !sceneReady.value) return 'opaque';
+  return null;
 });
+const showWait = computed(() => waitMode.value !== null);
 
 function loadInitialVolume() {
   try {
@@ -83,8 +106,12 @@ function loadInitialVolume() {
   return 0.9;
 }
 
-function playVideo() {
-  const v = vidEl.value;
+function el(i) {
+  return slotEls.value[i];
+}
+
+function playSlot(i) {
+  const v = el(i);
   if (!v) return;
   v.muted = videoMuted.value;
   const p = v.play();
@@ -101,25 +128,65 @@ function playVideo() {
   }
 }
 
-function onCanPlay() {
-  clipPlayable.value = true;
-  playVideo();
+function startGrace() {
+  clearGrace();
+  graceTimer = setTimeout(() => { bridgeWaiting.value = true; }, GRACE_MS);
+}
+function clearGrace() {
+  if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
 }
 
-function onEnded() {
-  if (index.value < props.clips.length - 1) {
-    index.value += 1; // the :src binding swaps; @canplay plays the next clip
-  } else {
-    clipsDone.value = true;
-    tryDismiss();
+function onCanPlay(i) {
+  // Buffered enough to start. Only the presenter or the slot being promoted
+  // should actually play; a pure preloader must stay paused.
+  if (i === frontSlot.value || i === pendingFront.value) playSlot(i);
+}
+
+function onPlaying(i) {
+  if (i === pendingFront.value) {
+    // Handoff complete: the preloaded slot becomes the presenter and the
+    // frozen bridge beneath it is recycled to preload the clip after next.
+    clearGrace();
+    bridgeWaiting.value = false;
+    const old = frontSlot.value;
+    frontSlot.value = i;
+    pendingFront.value = -1;
+    slotRole.value[i] = 'front';
+    recycle(old);
+  } else if (i === frontSlot.value) {
+    clipPlayable.value = true; // initial reveal
   }
 }
 
-function onTimeUpdate() {
-  const v = vidEl.value;
+function recycle(slot) {
+  const nextNext = slotClip.value[frontSlot.value] + 1;
+  slotRole.value[slot] = 'preload';
+  if (nextNext < props.clips.length) slotClip.value[slot] = nextNext;
+  // else nothing left to preload; the slot stays hidden with its old src.
+}
+
+function onEnded(i) {
+  if (i !== frontSlot.value) return;
+  const nextIdx = slotClip.value[i] + 1;
+  if (nextIdx > props.clips.length - 1) {
+    clipsDone.value = true;
+    tryDismiss();
+    return;
+  }
+  // Freeze this slot's last frame as the visible bridge; the other slot (which
+  // has been preloading nextIdx) is promoted as soon as it reports playing.
+  slotRole.value[i] = 'bridge';
+  pendingFront.value = 1 - i;
+  playSlot(1 - i);
+  startGrace();
+}
+
+function onTimeUpdate(i) {
+  if (i !== frontSlot.value) return;
+  const v = el(i);
   if (!v || !v.duration || !hasClips.value) return;
   const within = Math.min(1, Math.max(0, v.currentTime / v.duration));
-  progress.value = (index.value + within) / props.clips.length;
+  progress.value = (slotClip.value[i] + within) / props.clips.length;
 }
 
 function applyMute() {
@@ -128,8 +195,7 @@ function applyMute() {
     if (muted.value) musicEl.pause();
     else musicEl.play().catch(() => {});
   }
-  const v = vidEl.value;
-  if (v) v.muted = videoMuted.value;
+  slotEls.value.forEach((v) => { if (v) v.muted = videoMuted.value; });
 }
 
 function startMusic() {
@@ -196,8 +262,7 @@ function finalize() {
     clearTimeout(finalizeTimer);
     finalizeTimer = null;
   }
-  const v = vidEl.value;
-  if (v) v.pause();
+  slotEls.value.forEach((v) => { if (v) v.pause(); });
   emit('dismissed');
 }
 
@@ -246,26 +311,30 @@ onBeforeUnmount(() => {
     musicEl.load();
     musicEl = null;
   }
-  const v = vidEl.value;
-  if (v) v.pause();
+  clearGrace();
+  slotEls.value.forEach((v) => { if (v) v.pause(); });
 });
 </script>
 
 <template>
   <div class="splash" :class="{ 'splash--fading': fading }" @transitionend="onTransitionEnd">
-    <video
-      v-if="hasClips"
-      ref="vidEl"
-      class="splash__video"
-      :src="current"
-      :muted="videoMuted"
-      playsinline
-      autoplay
-      preload="auto"
-      @canplay="onCanPlay"
-      @ended="onEnded"
-      @timeupdate="onTimeUpdate"
-    ></video>
+    <template v-if="hasClips">
+      <video
+        v-for="i in [0, 1]"
+        :key="i"
+        :ref="setSlotRef(i)"
+        class="splash__video"
+        :class="'splash__video--' + slotRole[i]"
+        :src="clipSrc(i)"
+        :muted="videoMuted"
+        playsinline
+        preload="auto"
+        @canplay="onCanPlay(i)"
+        @playing="onPlaying(i)"
+        @ended="onEnded(i)"
+        @timeupdate="onTimeUpdate(i)"
+      ></video>
+    </template>
     <div v-else class="splash__empty">{{ t('splashoverlay.loading') }}</div>
 
     <!-- Black "please wait" veil + the app-wide spinning wheel, shown while the
@@ -275,6 +344,7 @@ onBeforeUnmount(() => {
     <div
       v-if="showWait"
       class="splash__wait"
+      :class="{ 'splash__wait--scrim': waitMode === 'scrim' }"
       role="status"
       aria-busy="true"
       :aria-label="t('splashoverlay.loading')"
@@ -351,6 +421,12 @@ onBeforeUnmount(() => {
   display: block;
 }
 
+/* Double-buffer roles: the presenter sits above the frozen bridge frame; the
+   preloader is hidden until it is promoted. */
+.splash__video--front { z-index: 2; opacity: 1; }
+.splash__video--bridge { z-index: 1; opacity: 1; }
+.splash__video--preload { z-index: 1; opacity: 0; }
+
 .splash__empty {
   position: absolute;
   inset: 0;
@@ -367,11 +443,17 @@ onBeforeUnmount(() => {
 .splash__wait {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 4;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #000;
+}
+
+/* Inter-clip: keep the frozen bridge frame visible beneath a translucent scrim
+   so the wait reads as "still loading", not as a dead black screen. */
+.splash__wait--scrim {
+  background: rgba(0, 0, 0, 0.45);
 }
 
 .splash__progress {
@@ -380,6 +462,7 @@ onBeforeUnmount(() => {
   right: 0;
   bottom: 0;
   height: 3px;
+  z-index: 3;
   background: rgba(255, 255, 255, 0.18);
 }
 
@@ -395,6 +478,7 @@ onBeforeUnmount(() => {
   left: 0;
   right: 0;
   bottom: 48px;
+  z-index: 3;
   margin: 0;
   padding: 0 24px;
   text-align: center;
@@ -410,7 +494,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 16px;
   right: 16px;
-  z-index: 3;
+  z-index: 5;
   padding: 7px 16px;
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 999px;
@@ -431,7 +515,7 @@ onBeforeUnmount(() => {
   position: absolute;
   bottom: 20px;
   right: 20px;
-  z-index: 3;
+  z-index: 5;
   width: 40px;
   height: 40px;
   display: flex;
