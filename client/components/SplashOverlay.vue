@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
+import LoadingSpinner from '@shared/LoadingSpinner.vue';
 
 // In-app game intro / briefing overlay. It is rendered inside AerialView, so
 // its absolutely-positioned box resolves against `.shell-main` and is confined
@@ -35,8 +36,13 @@ const fading = ref(false);
 const progress = ref(0); // 0..1 across the whole playlist
 
 let dismissed = false;
-let clipsDone = false;
-let sceneReady = typeof window !== 'undefined' && window.__cesiumReady === true;
+const clipsDone = ref(false);
+const sceneReady = ref(typeof window !== 'undefined' && window.__cesiumReady === true);
+// True once the current intro clip has buffered enough to play (its @canplay
+// fired). Until then — and again after the clips end while the 3D scene is
+// still streaming — the overlay shows a black "please wait" spinner instead of
+// a blank panel with no feedback.
+const clipPlayable = ref(false);
 let musicEl = null;
 let fallbackTimer = null;
 let finalizeTimer = null;
@@ -47,6 +53,22 @@ const hasClips = computed(() => Array.isArray(props.clips) && props.clips.length
 const current = computed(() => (hasClips.value ? props.clips[index.value] : ''));
 const videoMuted = computed(() => (props.music ? true : muted.value));
 const progressPct = computed(() => `${Math.round(progress.value * 100)}%`);
+
+// Black-screen + spinner "please wait" state. Shows whenever the overlay has
+// nothing to present yet:
+//   • clips exist but the first one has not reached @canplay (still downloading), OR
+//   • there are no clips and the 3D scene is not ready, OR
+//   • the clips have finished but minSceneReady is gating dismissal on a scene
+//     that is still streaming.
+// It clears the instant a clip becomes playable (the video takes over) and again
+// drives the wait after the playlist ends if the globe is not ready. Skip and the
+// fallback timer always win, so this can never trap the user.
+const showWait = computed(() => {
+  if (fading.value) return false;
+  if (!hasClips.value) return !sceneReady.value;
+  if (!clipPlayable.value) return true;
+  return clipsDone.value && props.minSceneReady && !sceneReady.value;
+});
 
 function loadInitialVolume() {
   try {
@@ -80,6 +102,7 @@ function playVideo() {
 }
 
 function onCanPlay() {
+  clipPlayable.value = true;
   playVideo();
 }
 
@@ -87,7 +110,7 @@ function onEnded() {
   if (index.value < props.clips.length - 1) {
     index.value += 1; // the :src binding swaps; @canplay plays the next clip
   } else {
-    clipsDone = true;
+    clipsDone.value = true;
     tryDismiss();
   }
 }
@@ -139,13 +162,13 @@ function toggleMute() {
 }
 
 function onCesiumReady() {
-  sceneReady = true;
+  sceneReady.value = true;
   tryDismiss();
 }
 
 function tryDismiss() {
-  if (dismissed || !clipsDone) return;
-  if (props.minSceneReady && !sceneReady) return; // wait for the scene (or skip / fallback)
+  if (dismissed || !clipsDone.value) return;
+  if (props.minSceneReady && !sceneReady.value) return; // wait for the scene (or skip / fallback)
   dismiss();
 }
 
@@ -203,7 +226,7 @@ onMounted(() => {
   }, props.fallbackMs);
   // Nothing to show (no clips): treat as done so the scene-ready gate applies.
   if (!hasClips.value) {
-    clipsDone = true;
+    clipsDone.value = true;
     tryDismiss();
   }
 });
@@ -244,6 +267,20 @@ onBeforeUnmount(() => {
       @timeupdate="onTimeUpdate"
     ></video>
     <div v-else class="splash__empty">{{ t('splashoverlay.loading') }}</div>
+
+    <!-- Black "please wait" veil + the app-wide spinning wheel, shown while the
+         intro clips are still downloading and/or the 3D scene has not streamed
+         in (see showWait). Sits above the video / slogan / progress but below
+         Skip and Mute, so those controls stay reachable while waiting. -->
+    <div
+      v-if="showWait"
+      class="splash__wait"
+      role="status"
+      aria-busy="true"
+      :aria-label="t('splashoverlay.loading')"
+    >
+      <LoadingSpinner />
+    </div>
 
     <div class="splash__progress">
       <div class="splash__progress-bar" :style="{ width: progressPct }"></div>
@@ -324,6 +361,19 @@ onBeforeUnmount(() => {
   font-size: 0.95rem;
 }
 
+/* Opaque black veil that hides a not-yet-playable clip (or a frozen last frame)
+   and centres the shared spinner. Above the video / slogan / progress (all
+   z-auto); below Skip / Mute (z-index 3) so the escape hatch stays clickable. */
+.splash__wait {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
 .splash__progress {
   position: absolute;
   left: 0;
@@ -360,6 +410,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 16px;
   right: 16px;
+  z-index: 3;
   padding: 7px 16px;
   border: 1px solid rgba(255, 255, 255, 0.5);
   border-radius: 999px;
@@ -380,6 +431,7 @@ onBeforeUnmount(() => {
   position: absolute;
   bottom: 20px;
   right: 20px;
+  z-index: 3;
   width: 40px;
   height: 40px;
   display: flex;
