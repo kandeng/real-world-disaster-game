@@ -55,8 +55,8 @@
       "order": 10
     },
     {
-      "id": "demo-mud-slide",
-      "baseUrl": "/games/demo-mud-slide/",
+      "id": "demo-mudslide",
+      "baseUrl": "/games/demo-mudslide/",
       "packageVersion": "0.1.0",
       "order": 20
     }

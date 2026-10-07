@@ -102,7 +102,7 @@ client/assets/media/theme_de_fin.mp3
 
 # Vehicle / machine meshes — a ~200 MB local reference library. Nothing in the
 # client imports from here: the fleet's two machine meshes MOVED OUT to
-# games/demo-wildfire/ and games/demo-mud-slide/ (a game package carries every
+# games/demo-wildfire/ and games/demo-mudslide/ (a game package carries every
 # asset it needs; useFleet.js fetches them by URL at runtime), and the server's
 # .glb code reads server/workspace/meshes/, a different directory. The three
 # already committed here (drone_dji_inspire3, drone_with_camera, lion_lowe)

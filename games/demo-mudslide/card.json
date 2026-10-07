@@ -1,7 +1,7 @@
 {
   "apiVersion": 1,
   "comment": "Field schema is documented in ../demo-wildfire/card.json.",
-  "id": "demo-mud-slide",
+  "id": "demo-mudslide",
   "packageVersion": "0.1.0",
   "title": {
     "en": "Mudslide caused by typhoon in Japan, September 2026"
@@ -17,6 +17,6 @@
   "trailer": "trailer.mp4",
   "poster": null,
   "action": {
-    "kind": "play"
+    "kind": "coming-soon"
   }
 }

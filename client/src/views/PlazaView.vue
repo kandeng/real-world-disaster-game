@@ -31,11 +31,26 @@ const games = ref([]);
 const loading = ref(false);
 const loadError = ref(false);
 
+// The engine owns the action-kind → button mapping: a package names a KIND,
+// never a route or a component. 'play' enters the game; 'coming-soon' marks a
+// package that is not complete yet and renders a disabled placeholder; an
+// unknown kind maps to no button at all (degrade, never guess).
+function ctaFor(card) {
+  switch (card?.action) {
+    case "play":
+      return { label: t("plazaview.play_game"), disabled: false, play: true };
+    case "coming-soon":
+      return { label: t("plazaview.coming_soon"), disabled: true, play: false };
+    default:
+      return null;
+  }
+}
+
 // Render-ready cards. title and description are resolved for the CURRENT
 // locale — a package ships every locale it is translated into, so switching
 // language re-resolves from data already in memory instead of refetching, and
-// depending on locale.value here is what makes that reactive. `kind` picks the
-// button.
+// depending on locale.value here is what makes that reactive. `cta` is the
+// resolved call-to-action button (or null when the kind is unknown).
 const cards = computed(() =>
   games.value.map((g) => ({
     kind: "game",
@@ -46,6 +61,7 @@ const cards = computed(() =>
     baseUrl: g.baseUrl,
     title: cardTitle(g, locale.value),
     description: cardDescription(g, locale.value),
+    cta: ctaFor(g),
   })),
 );
 
@@ -118,15 +134,16 @@ function onPlayGame(card) {
         <div v-if="v.description" class="pcard__desc">{{ v.description }}</div>
 
         <!-- A game card requests a capability by KIND; the engine owns the
-             kind -> destination mapping, so a package can never name a route
-             or a component. An unknown kind renders no button at all rather
-             than falling back to a guess. -->
+             kind -> button mapping (ctaFor), so a package can never name a
+             route or a component. 'play' is clickable; 'coming-soon' is a
+             disabled placeholder; an unknown kind renders no button at all. -->
         <button
-          v-if="v.kind === 'game' && v.action === 'play'"
+          v-if="v.cta"
           class="pcard__cta"
-          @click="onPlayGame(v)"
+          :disabled="v.cta.disabled"
+          @click="v.cta.play && onPlayGame(v)"
         >
-          {{ t("plazaview.play_game") }}
+          {{ v.cta.label }}
         </button>
       </article>
     </div>
@@ -243,5 +260,13 @@ function onPlayGame(card) {
 
 .pcard__cta:hover {
   background: #0066d6;
+}
+
+/* A 'coming-soon' card: the same pill, greyed and inert — visible so a
+   visitor knows the game exists, but not clickable until it ships. */
+.pcard__cta:disabled,
+.pcard__cta:disabled:hover {
+  background: #c7c7cc;
+  cursor: not-allowed;
 }
 </style>
