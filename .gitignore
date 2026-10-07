@@ -115,9 +115,10 @@ client/assets/mesh/
 # icons/*.png, so EVERY file left in this folder is pulled into the bundle
 # whether or not anything renders it (portrait_photo.png alone ships 2.6 MB).
 # The icons that stay tracked are the ones behind an IconMap key some component
-# actually resolves, plus commander.svg / customer_service.svg / drone_front.svg
-# / tank.svg, which useTeamRoster.js imports directly as teammate avatars, and
-# drone.svg, the map marker in MapView.vue.
+# actually resolves, plus drone.svg, the map marker in MapView.vue. Teammate
+# avatars are no longer client icons: each game package ships its own under
+# agents/<name>/avatar.svg (surfaced via render/bindings.js), so the old
+# commander / customer_service / drone_front / tank glyphs were removed.
 client/icons/account.svg
 client/icons/add.svg
 client/icons/archive.svg

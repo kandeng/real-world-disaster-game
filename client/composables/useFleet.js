@@ -4,7 +4,9 @@
 // near the LA (Palisades) fire zone, at DIFFERENT positions, and — for this
 // test phase — both are driven automatically along hardcoded routes at
 // hardcoded speeds. The Steer view shows a third-person chase camera (15 m
-// above / 30 m behind the active asset) with the asset's GLB mesh in frame.
+// above / 30 m behind the active asset). The fleet no longer renders the
+// machines' GLB meshes itself: under ?agentDemo the generic agent overlay
+// (modelOverlay) draws every package asset at its live pose instead.
 // Future phases replace this driver with (1) pre-planned route playback and
 // (2) manual Steer/Gimbal-disk control of the active asset; the active-asset
 // plumbing below is built to survive that swap.
@@ -19,10 +21,7 @@
 import { computed, toRef } from 'vue';
 import { useSessionState } from './useSessionState.js';
 import { sampleGroundHeight } from './useGroundSample.js';
-import { activeGamePackageBase } from './useGames.js';
 import { PALISADES_FIRE } from '@/config/palisadesFire.js';
-
-/* global Cesium */
 
 const { session } = useSessionState();
 
@@ -87,8 +86,8 @@ const TANK_AGL = 50; // m above the locked surface reference
 //   • Gimbal disk: spins / tilts the CAMERA only (yaw / pitch / roll offsets
 //     around the machine), so the machine visibly changes its angle on
 //     screen while the view tilts.
-// Each machine's GLB mesh is rendered at its live pose, so the commander sees
-// the vehicle itself in the Google 3D scene instead of a bare first-person view.
+// The machine's GLB mesh is drawn by the agent overlay (modelOverlay) under
+// ?agentDemo — this module only computes the chase-camera pose that frames it.
 const CHASE_UP_M = 15; // m above the asset
 const CHASE_BACK_M = 30; // m behind the asset (opposite its heading)
 // Default gimbal angle of the chase camera: 15° DOWNWARD along the machine's
@@ -381,7 +380,7 @@ function stepFleet(dt, { viewer = null, droneSurfaceAlt = 0, droneSurfaceOk = fa
   session.tankGimbal.roll = 0;
 }
 
-// ── Steer chase camera + asset meshes ───────────────────────────────────────
+// ── Steer chase camera ──────────────────────────────────────────────────────
 /** Camera pose of the third-person chase view of `asset`: 15 m above it and
  *  30 m behind it (opposite its travel direction). NORTH-UP-THE-NOSE: the
  *  camera heading = machine heading + the Gimbal-disk yaw (a camera-only
@@ -404,61 +403,6 @@ function chaseCameraPose(asset) {
   };
 }
 
-// Machine meshes ship INSIDE the game packages (games/<id>/*.glb), not in the
-// engine bundle: a package carries every asset its scene needs, so publishing
-// it from its own repository is a catalog edit. Which package is active was
-// recorded by the Plaza's play click (useGames.setActiveGamePackage);
-// resolved lazily at entity creation because that click happens long after
-// this module is imported.
-const MODEL_FILE = { drone: 'drone_dji_air3.glb', tank: 'tank_usa_type10.glb' };
-// glTF nose-axis trim (deg added to the pose heading): set per model if its
-// authored forward axis disagrees with Cesium's heading convention.
-const MODEL_YAW_TRIM_DEG = { drone: 0, tank: 0 };
-let modelsViewer = null;
-let modelEntities = null;
-
-/** Render each machine's GLB at its live pose (created once per viewer). */
-function syncFleetModels(viewer) {
-  if (!viewer) return;
-  if (modelsViewer !== viewer) {
-    // New viewer (Cesium re-bootstrap): the old entities died with the old
-    // viewer, so rebuild the map against this one.
-    modelsViewer = viewer;
-    modelEntities = new Map();
-    for (const a of FLEET) {
-      const file = MODEL_FILE[a.id];
-      if (!file) continue;
-      const uri = `${activeGamePackageBase()}${file}`;
-      modelEntities.set(
-        a.id,
-        viewer.entities.add({
-          id: `fleet-${a.id}`,
-          position: Cesium.Cartesian3.fromDegrees(a.pose.lon, a.pose.lat, a.pose.alt),
-          // TRUE SCALE only: a minimumPixelSize here made Cesium blow a
-          // far-away machine up to a kilometres-long black slab lying over
-          // the sea (the "black stripes" artefact), so distance now simply
-          // shrinks the mesh instead.
-          model: { uri, scale: 1 },
-        })
-      );
-    }
-  }
-  for (const a of FLEET) {
-    const entity = modelEntities.get(a.id);
-    if (!entity) continue;
-    const pos = Cesium.Cartesian3.fromDegrees(a.pose.lon, a.pose.lat, a.pose.alt);
-    entity.position = pos;
-    // The mesh carries the machine's OWN heading: Steer-disk turns rotate
-    // camera and mesh together (mesh static on screen), while Gimbal-disk
-    // yaw rotates only the camera — so the mesh visibly changes its angle.
-    const heading = a.pose.heading + (MODEL_YAW_TRIM_DEG[a.id] || 0);
-    entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(
-      pos,
-      new Cesium.HeadingPitchRoll((heading * Math.PI) / 180, 0, 0)
-    );
-  }
-}
-
 export function useFleet() {
   return {
     FLEET,
@@ -468,7 +412,6 @@ export function useFleet() {
     setActiveAsset,
     stepFleet,
     chaseCameraPose,
-    syncFleetModels,
     // Last accepted ground height under the tank (m above the ellipsoid,
     // null before the first sample): lets the play view detect a camera
     // buried below the tank's own surface, not just the drone's.
