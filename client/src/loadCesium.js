@@ -74,6 +74,7 @@ export function loadCesium() {
       if (!window.Cesium) {
         throw new Error('Cesium.js loaded but window.Cesium is still undefined.');
       }
+      window.__cesiumLoadError = '';
       console.log('[cesium] self-hosted CesiumJS ready from ' + CESIUM_BASE);
       return window.Cesium;
     })
@@ -81,6 +82,11 @@ export function loadCesium() {
       // Do not cache a failure: clear the promise so the next /play navigation
       // retries (e.g. a transient network blip) instead of staying broken.
       cesiumPromise = null;
+      // Record the failure so the connection-status check can tell a genuine
+      // load error apart from "still initializing" and only then surface a
+      // banner (an absent window.Cesium during a normal slow start is not an
+      // error and must not flash "Cannot connect to Cesium.").
+      window.__cesiumLoadError = (err && err.message) || 'Failed to load CesiumJS';
       console.error('[cesium] failed to load self-hosted CesiumJS:', err);
       throw err;
     });

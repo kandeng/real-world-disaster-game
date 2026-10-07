@@ -196,8 +196,21 @@ viewer.scene.renderError.addEventListener((scene, error) => {
 });
 
 /**
- * Resolve once the tileset reports tilesLoaded (all tiles needed for the
- * current view are loaded and drawn), or after a safety timeout.
+ * Resolve as soon as the initial view shows a COMPLETE COARSE scene, then let
+ * finer detail keep streaming behind the revealed view — do NOT block on full
+ * screen-space detail.
+ *
+ * Google Photorealistic 3D Tiles refine a single view into hundreds of MB of
+ * .glb payloads (a measured initial view was 861 tiles / ~260 MB of textures).
+ * Waiting for `tilesLoaded` (every tile at full detail) therefore burns the
+ * whole cap on any modest link, freezing the splash on a scene that is already
+ * perfectly watchable at coarse LOD. Cesium streams in waves and raises
+ * `tileLoadProgressEvent` with the pending-request count, which drains to 0 at
+ * the end of each wave; the FIRST 0 (after requests began) is the coarse LOD
+ * fully covering the view — our reveal point. A content-ready plateau poll is
+ * the fallback if that event is unavailable, and the cap is the last resort
+ * (it now reveals the partial scene rather than implying a hard failure).
+ *
  * Without a tileset (fallback path), proceed after a short fixed delay.
  */
 function waitForTilesRendered(tileset, timeoutMs = 45000) {
@@ -206,22 +219,80 @@ function waitForTilesRendered(tileset, timeoutMs = 45000) {
             setTimeout(resolve, 3000);
             return;
         }
-        const start = performance.now();
-        function check() {
-            if (tileset.tilesLoaded) {
-                console.log('[Cesium] Initial view fully rendered (tilesLoaded).');
-                resolve();
-                return;
-            }
-            if (performance.now() - start > timeoutMs) {
-                console.warn(`[Cesium] Tile render wait timeout (${timeoutMs / 1000}s), proceeding.`);
-                resolve();
-                return;
-            }
-            requestAnimationFrame(check);
+        // Warm re-entry (SPA navigation back to an already-built viewer): the
+        // view is already detailed, so resolve immediately.
+        if (tileset.tilesLoaded) {
+            console.log('[Cesium] Initial view already rendered (tilesLoaded).');
+            resolve();
+            return;
         }
-        // Give the traversal a moment to start loading before the first check.
-        setTimeout(() => requestAnimationFrame(check), 1000);
+
+        let settled = false;
+        let detachProgress = null;
+        const finish = (message, isWarning) => {
+            if (settled) return;
+            settled = true;
+            if (detachProgress) {
+                try { detachProgress(); } catch (e) { /* listener already gone */ }
+                detachProgress = null;
+            }
+            if (isWarning) console.warn(message);
+            else console.log(message);
+            resolve();
+        };
+
+        // Primary signal: the first time the pending-request queue drains to 0
+        // after having been non-zero, the coarsest complete wave has landed.
+        let sawPending = false;
+        try {
+            detachProgress = tileset.tileLoadProgressEvent.addEventListener((pending) => {
+                if (pending > 0) {
+                    sawPending = true;
+                    return;
+                }
+                if (tileset.tilesLoaded) {
+                    finish('[Cesium] Initial view fully rendered (tilesLoaded).');
+                } else if (sawPending) {
+                    // Give the wave one beat to paint before revealing.
+                    setTimeout(() => finish('[Cesium] First tile wave rendered — revealing scene (detail keeps streaming).'), 300);
+                }
+            });
+        } catch (e) {
+            // tileLoadProgressEvent absent in this Cesium build — the poll below covers it.
+            detachProgress = null;
+        }
+
+        // Fallback poll + hard cap. If the progress event never fires, reveal
+        // once the content-ready tile count plateaus (a wave landed and the
+        // next has not started); otherwise proceed at the cap with whatever is
+        // up. `ready > 0` guards against revealing an still-empty globe.
+        const start = performance.now();
+        let lastReady = -1;
+        let stableSince = 0;
+        (function poll() {
+            if (settled) return;
+            if (tileset.tilesLoaded) {
+                finish('[Cesium] Initial view fully rendered (tilesLoaded).');
+                return;
+            }
+            const ready = tileset.numberOfTilesWithContentReady || 0;
+            const now = performance.now();
+            if (ready > 0 && ready === lastReady) {
+                if (!stableSince) stableSince = now;
+                else if (now - stableSince >= 1500) {
+                    finish('[Cesium] Coarse tiles rendered — revealing scene (detail keeps streaming).');
+                    return;
+                }
+            } else {
+                stableSince = 0;
+                lastReady = ready;
+            }
+            if (now - start > timeoutMs) {
+                finish(`[Cesium] Tile render wait timeout (${timeoutMs / 1000}s), revealing partial scene; detail keeps streaming.`, true);
+                return;
+            }
+            requestAnimationFrame(poll);
+        })();
     });
 }
 
@@ -315,14 +386,13 @@ async function loadArena() {
         }
     }
 
-    // ── Wait until the tiles for the initial view are actually rendered ──
-    // tileLoadProgressEvent is unavailable in newer Cesium releases, and even
-    // when present an empty download queue is misleading: the tileset refines
-    // in waves, so the queue can momentarily hit 0 between waves while finer
-    // tiles are still streaming. Cesium3DTileset.tilesLoaded is the reliable
-    // signal — it becomes true only when every tile needed for the current
-    // view is loaded AND drawn. The splash keeps playing until then (with a
-    // safety cap) so the user never lands on an empty sky.
+    // ── Reveal once the initial view shows a complete coarse scene ──
+    // We deliberately do NOT wait for full screen-space detail: Google
+    // Photorealistic tiles refine one view into hundreds of MB, so blocking on
+    // tilesLoaded freezes the splash for the whole cap on a slow link while a
+    // watchable coarse scene is already up. waitForTilesRendered resolves on
+    // the first complete tile wave (see its doc); finer detail then streams in
+    // live behind the revealed scene — the normal 3D-Tiles experience.
     await waitForTilesRendered(googleTileset);
 
     // Signal the intro splash / AerialView that the 3D scene is ready with

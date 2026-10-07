@@ -7,6 +7,19 @@ const cesiumError = ref('');
 
 let googleCheckPromise = null;
 
+// Flip cesiumReady the instant the 3D scene reports ready (cesium-main.js
+// dispatches 'cesiumReady' once the first tile wave renders) instead of waiting
+// for the next 10s poll, and honor a scene that was already ready before this
+// module evaluated (warm SPA re-entry back to /play).
+if (typeof window !== 'undefined') {
+  const markCesiumReady = () => {
+    cesiumReady.value = true;
+    cesiumError.value = '';
+  };
+  window.addEventListener('cesiumReady', markCesiumReady);
+  if (window.__cesiumReady === true) markCesiumReady();
+}
+
 /**
  * Check whether the Google Maps JavaScript API can be loaded.
  * Caches the promise so multiple callers share one check.
@@ -46,8 +59,12 @@ export async function checkCesiumConnection() {
     cesiumError.value = '';
     return true;
   }
+  // Not up yet. Cesium is lazy-loaded on /play, so an absent viewer is normally
+  // just "still initializing" — surface an error ONLY if the loader recorded a
+  // genuine failure. Leaving cesiumError empty while pending stops the banner
+  // flashing "Cannot connect to Cesium." during a normal (slow) start.
   cesiumReady.value = false;
-  cesiumError.value = 'Cannot connect to Cesium.';
+  cesiumError.value = window.__cesiumLoadError || '';
   return false;
 }
 

@@ -124,15 +124,19 @@ const collisionSurfaceNormal = ref(null);
 const MIN_SAFETY_BUFFER = 2.0; // meters
 
 const { googleReady, cesiumReady, googleError, cesiumError } = useConnectionStatus();
+// Show the banner ONLY on a recorded failure, never merely because a check is
+// still pending. googleReady/cesiumReady both start false and take a moment to
+// come up (the 2D Maps API can need ~15s; Cesium is lazy-loaded on /play and
+// the 3D tiles then stream in), so gating on "!ready" flashed a false "Cannot
+// connect" during every normal slow start. googleError/cesiumError are set only
+// when a load actually failed.
 const connectionMessage = computed(() => {
-  if (!cesiumReady.value && !googleReady.value) {
-    return cesiumError.value || googleError.value || 'Cannot connect to Cesium and Google.';
-  }
-  if (!cesiumReady.value) return cesiumError.value || 'Cannot connect to Cesium.';
-  if (!googleReady.value) return googleError.value || 'Cannot connect to Google.';
+  if (cesiumError.value && googleError.value) return 'Cannot connect to Cesium and Google.';
+  if (cesiumError.value) return cesiumError.value;
+  if (googleError.value) return googleError.value;
   return '';
 });
-const showConnectionError = computed(() => !cesiumReady.value || !googleReady.value);
+const showConnectionError = computed(() => !!cesiumError.value || !!googleError.value);
 let connectionCheckInterval = null;
 
 const cesiumContainer = ref(null);
