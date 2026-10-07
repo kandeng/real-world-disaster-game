@@ -1,4 +1,4 @@
-// fire_sim.js — game-package component: wild-fire cellular automaton.
+// games/demo-wildfire/environment/fire_sim.js — wild-fire cellular automaton.
 //
 // Scope split (same contract family as controller_drone.js):
 //   • This module OWNS the fire state: a lat/lon grid of cells clipped to a

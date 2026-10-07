@@ -345,13 +345,13 @@ watch(
   /* contain, never cover: contain is the fit that guarantees the WHOLE viewBox
      is visible, so nothing is ever cropped by the circular rim.
 
-     padding 3px is load-bearing, not decoration. All four roster glyphs are
-     square-viewBox and centred, so the ink circumradius is what decides the
-     floor: at this 28px box the clip radius is 13px (S/2 - 1px border) and the
-     content box is 20px, which renders ink radii of commander 11.3px,
-     drone_front 10.7px, tank 9.9px, customer_service 8.2px. Tightest is
-     commander.svg, whose floor is padding 1.52px — do not drop below 2px.
-     Re-measure with a rasterizing ink scan if any icon is swapped. */
+     padding 3px is load-bearing, not decoration. Roster avatars are square-
+     viewBox and centred, so the ink circum-radius decides the floor: at this
+     28px box the clip radius is 13px (S/2 - 1px border) and the content box is
+     20px. Avatars are package-declared now (games/<pkg>/agents/<name>/
+     avatar.svg), so the cast varies — keep padding at 2px+ so a full-bleed
+     square glyph is never cropped by the rim. Re-measure with a rasterizing
+     ink scan if a package ships a tighter avatar. */
   object-fit: contain;
   padding: 3px;
   box-sizing: border-box;
@@ -567,14 +567,13 @@ watch(
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  /* contain + padding, matching .msg__avatar. Every roster viewBox is square
-     and centred on its own ink now — tank.svg was re-centred for this, since
-     its stock iconfont box left the tank 18.4% of the frame height too low.
+  /* contain + padding, matching .msg__avatar. Package avatars are square-
+     viewBox and centred on their own ink.
 
      padding 4px floor: clip radius is 16px (34/2 - 1px border), content box
-     24px, rendered ink radii commander 13.6px / drone_front 12.9px /
-     tank 11.9px / customer_service 9.9px. commander.svg sets the floor at
-     padding 1.87px — do not drop below 2px. */
+     24px. Avatars are package-declared (games/<pkg>/agents/<name>/avatar.svg),
+     so keep padding at 2px+ to guarantee a full-bleed square glyph is never
+     cropped by the rim; re-measure if a package ships a tighter avatar. */
   object-fit: contain;
   padding: 4px;
   box-sizing: border-box;

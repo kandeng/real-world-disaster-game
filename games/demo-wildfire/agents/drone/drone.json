@@ -4,12 +4,13 @@
     "Drone asset manifest. mesh.* carries the rig conventions proven by",
     "headless GLB forensics and the dev viewer, as DATA: hosts must not",
     "re-derive them. noseAxis = the glTF axis the mesh faces at heading 0;",
-    "yawTrimDeg = extra rotation.y (deg) a host applies so heading 0 = north."
+    "yawTrimDeg = extra rotation.y (deg) a host applies so heading 0 = north.",
+    "mesh.url / controller.url are RELATIVE to the package baseUrl (package.json)."
   ],
   "id": "drone",
   "kind": "vehicle",
   "mesh": {
-    "url": "drone_dji_air3.glb",
+    "url": "meshes/drone_dji_air3.glb",
     "units": "mm",
     "hostScale": 0.1,
     "bakedScale": 0.01,
@@ -19,7 +20,7 @@
     "groundLiftM": 0
   },
   "controller": {
-    "url": "controller_drone.js",
+    "url": "agents/drone/controller_drone.js",
     "api": 1,
     "factory": "createDroneController"
   }

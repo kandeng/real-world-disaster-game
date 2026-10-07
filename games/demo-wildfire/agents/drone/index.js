@@ -1,4 +1,4 @@
-// games/demo-wildfire/agents/archetypes/drone.js — the drone ARCHETYPE.
+// games/demo-wildfire/agents/drone/index.js — the drone ARCHETYPE.
 //
 // An archetype is an agent TEMPLATE: which capabilities it owns (sensors +
 // actuators), its starting state, and its reasoning. The engine mounts it
@@ -7,7 +7,7 @@
 // parameter is the flagship's proof that a package-declared capability (a new
 // suppression mode) needs no engine change.
 
-import { droneFsm } from '../reasoning/drone_fsm.js';
+import { droneFsm } from './reasoning.js';
 
 /**
  * makeDrone(options) -> an agent spec for the AgentRuntime.

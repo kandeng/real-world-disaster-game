@@ -63,13 +63,14 @@ games/demo-wildfire/
 ├── card.json            # Plaza storefront ONLY (title, copy, trailer, action)
 ├── package.json         # the agent manifest the core worker boots from
 ├── media/               # trailer / poster
-├── agents/              # archetypes/ (commander, staff, drone) + reasoning/ + roster.js
-├── capabilities/        # dropWater.js, sprayDryIce.js, scanFire.js, index.js
-├── environment/         # environment.js — adapts the world sim to the generic contract
-├── render/              # bindings.js — archetype → overlay, cell value → colour
-├── assets/              # pure-JS content modules the above import:
-│   ├── fire/            #   fire_sim.js (CA sim) + controller_fire.js (scenario)
-│   └── drone/           #   drone_dji_air3.glb + controller_drone.js + drone.json
+├── agents/              # WHO acts — one folder per character + index.js + roster.js
+│   ├── drone/           #   index.js + reasoning.js + render.js + avatar.svg + controller_drone.js + drone.json
+│   ├── commander/       #   index.js + render.js + avatar.svg
+│   └── staff/           #   index.js + render.js + avatar.svg
+├── environment/         # the ENABLER — environment.js + fire_sim.js + scenario.js + render.js
+│   └── verbs/           #   dropWater.js, sprayDryIce.js, scanFire.js, index.js
+├── render/              # bindings.js — aggregator: agents/*/render.js + environment/render.js
+├── meshes/              # the .glb library (drone_dji_air3.glb)
 └── dev/                 # this directory: viewers + this README
 ```
 
@@ -83,12 +84,13 @@ reasoning plugin — so the package is now organized around **who acts**, not
 **what is drawn**. E6.8 rebuilt this flagship into the agent shape and E6.9
 deleted the legacy `scene.json` + fire-driver path.
 
-> **Shipped vs proposed:** the agent directories below (`agents/`,
-> `capabilities/`, `environment/`, `render/`) are live. The pure-JS fire sim +
-> scenario stayed under `assets/fire/` (imported by `environment/environment.js`)
-> and the drone mesh stayed under `assets/drone/` rather than moving to a
-> `meshes/` dir; no separate `triggers/` module was needed yet. `assets/` is now
-> plain content, not a driver/manifest path.
+> **Shipped:** the package is now organized around **who acts** — one folder per
+> character under `agents/` (spec + reasoning + render binding + avatar), with the
+> world's verbs under `environment/verbs/` (the environment is the enabler) and the
+> mesh library under `meshes/`. The flat `capabilities/` pool and the `assets/`
+> content dir are gone: `createEnvironment()` returns the verbs as `capabilities`
+> and the engine auto-registers them, so `package.json` no longer needs a
+> `capabilities` entry. No separate `triggers/` module was needed yet.
 
 ### The split the reorg must respect
 
@@ -99,79 +101,80 @@ the only code that touches a browser or the Cordis runtime.
 | Concern | Engine (mechanism, never edited per game) | Package (content, all of it here) |
 |---|---|---|
 | Agents | `AgentRuntime`, capability registry, `WorldModel` | `agents/` archetypes + roster |
-| Reasoning | generic interpreters: `stateMachine`, `rlPolicy`, `remote`, `human` | `agents/reasoning/` SM tables + RL weights; the archetype picks a kind |
-| Capabilities | builtins (`moveTo`, `nearbyAgents`, `emitMessage`, `drawOrder`, `screenshotConsult`, …) | `capabilities/` domain sensors/actuators (`dropWater`, `sprayDryIce`, `scanFire`) |
+| Reasoning | generic interpreters: `stateMachine`, `rlPolicy`, `remote`, `human` | `agents/<role>/reasoning.js` SM tables + RL weights; the archetype picks a kind |
+| Capabilities | builtins (`moveTo`, `nearbyAgents`, `emitMessage`, `drawOrder`, `screenshotConsult`, …) | `environment/verbs/` domain sensors/actuators (`dropWater`, `sprayDryIce`, `scanFire`), surfaced via the environment |
 | Environment | `attachEnvironment` / `tickEnvironment` contract | `environment/` the fire CA sim + scenario + the env adapter |
 | Narrative | none authored — events emerge from agent interaction | `triggers/` predefined conditions that inject events |
-| Rendering | L2 primitives (`markerOverlay`, `modelOverlay`, `polylineOverlay`, `cellGridOverlay`) | `render/bindings.js` archetype → primitive + mesh, referenced **by name** |
+| Rendering | L2 primitives (`markerOverlay`, `modelOverlay`, `polylineOverlay`, `cellGridOverlay`) | `agents/*/render.js` + `environment/render.js`, aggregated by `render/bindings.js`; primitive referenced **by name** |
 
-### Target tree
+### Shipped tree
 
 ```
 games/demo-wildfire/
 ├── card.json               # (unchanged) Plaza storefront ONLY
-├── package.json            # NEW package manifest: id, version, and the entry
-│                           #   points below (what the worker imports to boot)
+├── package.json            # package manifest: id, version, and the entry points
+│                           #   below (what the worker imports to boot)
 ├── media/                  # (unchanged) trailer / poster
 │
-├── agents/                 # NEW — WHO acts (the agent paradigm)
-│   ├── archetypes/         #   one file per archetype = an agent TEMPLATE
-│   │   ├── commander.js    #     reasoning:'human';  owns drawOrder+screenshotConsult
-│   │   ├── staff.js        #     reasoning:'remote'; owns consult/analysis caps (VLM)
-│   │   ├── drone.js        #     reasoning:'stateMachine'|'rlPolicy'; owns moveTo+dropWater/sprayDryIce
-│   │   └── index.js        #     archetype registry: name -> spec
-│   ├── roster.js           #   the initial spawn: which archetypes, counts, poses
-│   └── reasoning/          #   package-owned reasoning CONTENT (not interpreters)
-│       ├── drone_fsm.js    #     the drone state-machine transition table
-│       └── drone_policy.js #     (optional) RL features/actions/weights
+├── agents/                 # WHO acts — one folder per character (full cohesion)
+│   ├── drone/              #   the drone archetype owns everything about itself:
+│   │   ├── index.js        #     spec: reasoning:'stateMachine'; owns moveTo+dropWater/sprayDryIce
+│   │   ├── reasoning.js    #     the drone state-machine transition table (package CONTENT)
+│   │   ├── render.js       #     waterDrone + dryIceDrone bindings (meshUrl + avatarUrl)
+│   │   ├── avatar.svg      #     package-declared avatar (2D plan badge + chatbot icon)
+│   │   ├── controller_drone.js # kinematics facade (pose integration)
+│   │   └── drone.json      #     rig facts as data (units, noseAxis, yawTrimDeg)
+│   ├── commander/          #   index.js (reasoning:'human') + render.js + avatar.svg
+│   ├── staff/              #   index.js (reasoning:'remote'/VLM) + render.js + avatar.svg
+│   ├── index.js            #   archetype registry: name -> spec factory
+│   └── roster.js           #   the initial spawn: which archetypes, counts, poses
 │
-├── capabilities/           # NEW — package sensors + actuators (pure JS)
-│   ├── dropWater.js        #   actuator: apply a water drop to the environment
-│   ├── sprayDryIce.js      #   actuator: dry-ice suppression (new flagship ability)
-│   ├── scanFire.js         #   sensor: read the fire grid around the agent
-│   └── index.js            #   capability registry: name -> definition
+├── environment/            # the ENABLER — the world agents perceive + act on
+│   ├── environment.js      #   the generic env adapter: {bounds, cellAt, tick, capabilities}
+│   ├── fire_sim.js         #   the CA fire-spread sim (pure JS)
+│   ├── scenario.js         #   perimeter/ignitions/wind keyframes (the scenario)
+│   ├── render.js           #   fire-grid value -> colour ramp (cellGridOverlay)
+│   └── verbs/              #   the domain sensors + actuators (pure JS)
+│       ├── dropWater.js    #     actuator: apply a water drop to the environment
+│       ├── sprayDryIce.js  #     actuator: dry-ice suppression (new flagship ability)
+│       ├── scanFire.js     #     sensor: read the fire grid around the agent
+│       └── index.js        #     PACKAGE_CAPABILITIES: the verb registry
 │
-├── environment/            # NEW — the world agents perceive + act on
-│   ├── fire_sim.js         #   (moved from assets/fire) the CA fire-spread sim
-│   ├── scenario.js         #   (moved from controller_fire.js) perimeter/ignitions/wind
-│   └── environment.js      #   the generic env adapter: {bounds, cellAt, tick, capabilities}
+├── render/                 # L2 bindings aggregator (archetype -> engine primitive, by name)
+│   └── bindings.js         #   composes agents/*/render.js + environment/render.js; createRenderBindings()
 │
-├── triggers/               # NEW — predefined conditions, NO authored storyline
-│   └── triggers.js         #   wind shift / spot fire / objective change -> events
-│
-├── render/                 # NEW — L2 bindings (archetype -> engine primitive, by name)
-│   └── bindings.js         #   e.g. drone -> modelOverlay(drone.glb); fire -> cellGridOverlay(colorOf)
-│
-├── meshes/                 # NEW — the .glb library (moved out of assets/<id>/)
+├── meshes/                 # the .glb library
 │   └── drone_dji_air3.glb
 │
-├── assets/                 # SHIPPED: pure-JS content stays here (fire sim + drone mesh)
 └── dev/                    # (unchanged) developer harnesses + this README
 ```
 
-(The proposed `environment/fire_sim.js`, `meshes/` and `triggers/` moves above were
-not taken — see the **Shipped vs proposed** note. The tree is the design intent;
-`assets/` remains the home of the pure-JS sim + mesh content.)
+(No `triggers/` module was needed yet — events emerge from agent interaction; if a
+package later wants authored conditions, `triggers/` is the intended home.)
 
 ### Migration mapping (legacy → shipped)
 
-| Legacy | Shipped (E6.9) | Note |
+| Legacy | Shipped | Note |
 |---|---|---|
-| `assets/fire/fire_sim.js` | `assets/fire/fire_sim.js` (kept) | the CA sim stays pure-JS content; `environment/environment.js` imports it |
-| `assets/fire/controller_fire.js` | `assets/fire/controller_fire.js` (kept) | perimeter/ignitions/wind keyframes (the scenario) |
+| `assets/fire/fire_sim.js` | `environment/fire_sim.js` | the CA sim stays pure-JS content; `environment/environment.js` imports it |
+| `assets/fire/controller_fire.js` | `environment/scenario.js` | perimeter/ignitions/wind keyframes (the scenario) |
 | `assets/fire/fire.json` | **deleted** | the manifest/driver path is gone; `environment.js` + `package.json` replace it |
-| `assets/drone/controller_drone.js` | `agents/archetypes/drone.js` + `capabilities/*` | pose integration → the `moveTo` builtin; domain acts → capabilities |
-| `assets/drone/drone.json` + `.glb` | `assets/drone/` (kept) + `render/bindings.js` | rig facts stay data; `bindings.js` references the mesh by URL |
+| `capabilities/*.js` | `environment/verbs/*.js` | the environment is the enabler: it returns the verbs as `capabilities` |
+| `assets/drone/controller_drone.js` | `agents/drone/controller_drone.js` | the drone archetype owns its kinematics facade |
+| `assets/drone/drone.json` | `agents/drone/drone.json` | rig facts stay data, now drone-owned |
+| `assets/drone/drone_dji_air3.glb` | `meshes/drone_dji_air3.glb` | the mesh library; `agents/drone/render.js` references it by URL |
+| `agents/archetypes/<role>.js` | `agents/<role>/index.js` | one folder per character (spec + reasoning + render + avatar) |
+| `agents/reasoning/drone_fsm.js` | `agents/drone/reasoning.js` | reasoning CONTENT lives with the archetype that uses it |
 | `assets/tank/*` | **deleted** | the flagship drops the tank (E6.8); more drones instead |
 | `scene.json` (asset list) | `package.json` (entry points) | the worker boots from `package.json`, not a driver list |
 
 ### The one rule still holds
 
-Every new directory is **pure content**: `agents/`, `capabilities/`,
-`environment/`, `triggers/`, `render/bindings.js` are dependency-free ESM that
-run identically in the core Web Worker and in plain Node. None of them may touch
-`window`/`document`/canvas/WebGL/Cesium/Maps/`fetch` — `render/bindings.js`
-references engine primitives **by name** (`engine:modelOverlay`) and the engine
+Every directory is **pure content**: `agents/`, `environment/` (incl. `verbs/`),
+and `render/bindings.js` are dependency-free ESM that run identically in the core
+Web Worker and in plain Node. None of them may touch
+`window`/`document`/canvas/WebGL/Cesium/Maps/`fetch` — the `render.js` modules
+reference engine primitives **by name** (`engine:modelOverlay`) and the engine
 resolves the name to browser code. The audit grep below still applies to the whole
 package, and the headless tests import these modules directly.
 
@@ -238,9 +241,13 @@ Map the archetype name to an engine primitive **by name** plus its style, and ma
 an opaque cell value to a colour. Pure data + pure functions:
 
 ```js
-RENDER_BINDINGS.scout = {
-  primitive: 'engine:modelOverlay', kind: 'model',
-  meshUrl: 'assets/drone/drone_dji_air3.glb', modelScale: 0.1, color: '#38bdf8',
+// agents/<role>/render.js — aggregated into RENDER_BINDINGS by render/bindings.js
+export const SCOUT_BINDINGS = {
+  scout: {
+    primitive: 'engine:modelOverlay', kind: 'model',
+    meshUrl: 'meshes/drone_dji_air3.glb', modelScale: 0.1, color: '#38bdf8',
+    avatarUrl: 'agents/scout/avatar.svg', displayName: 'Scout', avatarKind: 'machine',
+  },
 };
 ```
 
@@ -257,11 +264,13 @@ loader what to import:
 "agents": {
   "environment": "environment/environment.js",
   "environmentOptions": { "seed": 7 },
-  "capabilities": "capabilities/index.js",
   "roster": "agents/roster.js"
 },
 "render": "render/bindings.js"
 ```
+
+(The environment carries the domain verbs — `createEnvironment()` returns them as
+`capabilities` — so there is no separate `agents.capabilities` entry point.)
 
 A fixed `seed` makes the same package replay the same emergence. No `agents`
 block ⇒ the runtime stays inert (degrade, never break).
@@ -297,20 +306,21 @@ which boot the REAL `client/src/workers/gameCore.worker.js` against this package
 
 ## Package content modules (meshes + the fire sim)
 
-`assets/` is no longer a manifest/driver path — it is plain **content** the agent
-directories import. There is no `scene.json`, no per-asset manifest and no
-engine-side driver anymore (E6.9 removed them).
+There is no `scene.json`, no per-asset manifest and no engine-side driver anymore
+(E6.9 removed them); the pure-JS content now lives under `environment/` and
+`meshes/`, and each character owns its body under `agents/<role>/`.
 
-- **The fire sim** (`assets/fire/fire_sim.js`) + **scenario**
-  (`assets/fire/controller_fire.js`: perimeter, `noFuelPolygons`, scheduled
+- **The fire sim** (`environment/fire_sim.js`) + **scenario**
+  (`environment/scenario.js`: perimeter, `noFuelPolygons`, scheduled
   `ignitions`, wind `keyframes`, `loss.occupyFrac`) are dependency-free ESM.
   `environment/environment.js` imports them and adapts them to the engine's
   generic environment contract; the engine never names fire.
-- **The drone mesh** (`assets/drone/drone_dji_air3.glb`) is referenced **by URL**
-  from `render/bindings.js` (archetype → `modelOverlay`). Rig conventions
-  (`units`, `noseAxis`, `yawTrimDeg`, `groundLiftM`) live as data in
-  `assets/drone/drone.json` so a host never re-derives them.
-- Rendering is ENGINE-owned: `render/bindings.js` references the generic L2
+- **The drone mesh** (`meshes/drone_dji_air3.glb`) is referenced **by URL**
+  from `agents/drone/render.js` (archetype → `modelOverlay`), aggregated by
+  `render/bindings.js`. Rig conventions (`units`, `noseAxis`, `yawTrimDeg`,
+  `groundLiftM`) live as data in `agents/drone/drone.json` so a host never
+  re-derives them.
+- Rendering is ENGINE-owned: the `render.js` modules reference the generic L2
   primitives by name (`engine:modelOverlay`, `engine:cellGridOverlay`); a package
   never ships rendering code.
 

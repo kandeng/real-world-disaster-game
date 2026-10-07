@@ -3,8 +3,8 @@
  * of THIS game package (drone_dji_air3.glb).
  *
  * A package component: the engine loads it by URL as a plain ES module,
- * e.g. `const mod = await import(base + 'controller_drone.js')` where `base`
- * is the active package baseUrl ('/games/demo-wildfire/'). It has NO
+ * e.g. `const mod = await import(base + 'agents/drone/controller_drone.js')`
+ * where `base` is the active package baseUrl ('/games/demo-wildfire/'). It has NO
  * dependencies (no Vue, no Cesium, no three.js) so it runs identically in the
  * browser and in Node for headless tests.
  *

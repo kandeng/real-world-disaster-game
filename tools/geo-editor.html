@@ -13,7 +13,7 @@
        • preview ............. runs the PACKAGE fire_sim.js on exactly this
                                data, top-down, so the scenario is test-played
                                before it ships
-       • export .............. emits assets/fire/controller_fire.js verbatim in
+       • export .............. emits environment/scenario.js verbatim in
                                the contract shape (or raw polygon JSON)
 
      Controls:
@@ -143,7 +143,7 @@
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script type="module">
-const SIM_URL = '/games/demo-wildfire/assets/fire/fire_sim.js';
+const SIM_URL = '/games/demo-wildfire/environment/fire_sim.js';
 
 const map = L.map('map', { center: [34.045, -118.53], zoom: 13 });
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
@@ -478,7 +478,7 @@ $('presetBay').addEventListener('click', async () => {
 });
 $('presetScenario').addEventListener('click', async () => {
   try {
-    scenMod = scenMod || await import('/games/demo-wildfire/assets/fire/controller_fire.js');
+    scenMod = scenMod || await import('/games/demo-wildfire/environment/scenario.js');
     const s = scenMod.createFireScenario();
     loadRings(s.perimeter, s.noFuelPolygons);
     doc.ignitions.slice().forEach(removeIgnition);

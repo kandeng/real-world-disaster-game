@@ -4,13 +4,12 @@ import { useI18n } from 'vue-i18n';
 import { acquireMap, releaseMap } from './mapSingleton.js';
 import { splinePath } from './spline.js';
 import droneIconUrl from '../../icons/drone.svg';
-// Team-marker avatars are the SAME svg files the chat Team popover shows
-// (useTeamRoster): the drone's front elevation and the tank glyph, inlined
-// into a composed badge SVG (white disc + ring + avatar) so the markers stay
-// readable on BOTH the terrain and the satellite base layers. A data-URL SVG
-// cannot reference external files, hence the ?raw source imports.
-import droneGlyphRaw from '../../icons/drone_front.svg?raw';
-import tankGlyphRaw from '../../icons/tank.svg?raw';
+// Team-marker badges are composed from each teammate's PACKAGE-DECLARED avatar
+// (the same avatarUrl the chat roster shows), fetched at runtime and inlined
+// into a badge SVG (white disc + ring + avatar) so the markers stay readable on
+// BOTH the terrain and the satellite base layers. A data-URL SVG cannot
+// reference an external file, hence the runtime fetch + inline (see
+// fetchAvatarText / teamBadgeIcon below) — no glyph is hardcoded here anymore.
 
 const { t, locale } = useI18n();
 
@@ -848,35 +847,65 @@ function clearLivePosition() {
   }
 }
 
-// ── Team markers (drone + tank glyphs, Plan view) ──────────────────────
-// One marker per fleet machine asset, fed live positions by the parent
-// every frame. Google markers are sized in SCREEN pixels, so the glyphs
-// keep a fixed size at every zoom level. A click selects that asset as
-// the fleet's ACTIVE one (emitted as teamClick) — the parent decides what
-// else happens (it does NOT switch views). The active asset's badge gets
-// a blue ring + tint.
-const TEAM_GLYPHS = { drone: droneGlyphRaw, tank: tankGlyphRaw };
-const teamMarkers = new Map(); // id -> { marker, active }
+// ── Team markers (package-declared avatars, Plan view) ─────────────────
+// One marker per package-cast teammate, fed live positions by the parent
+// every frame. Google markers are sized in SCREEN pixels, so the badges
+// keep a fixed size at every zoom level. A click selects that teammate as
+// the ACTIVE one (emitted as teamClick) — the parent decides what else
+// happens (it does NOT switch views). The active badge gets a blue ring +
+// tint. The badge glyph is each teammate's package-declared avatarUrl (the
+// same art the chat roster shows) — NOTHING is hardcoded here, so swapping
+// the game package swaps the badges with zero change to this file.
+const teamMarkers = new Map(); // id -> { marker, active, avatar, avatarText }
 
-// Strip the XML prolog / DOCTYPE / comments and re-size the root <svg> so
-// the glyph nests as a 22px child of the 34px badge at (6,6).
+// Package avatars are external URLs, and a data-URL SVG badge cannot reference
+// an external file — so each avatar SVG is fetched once, cached, and inlined
+// into the badge. The cache is keyed by URL: every teammate of one archetype
+// shares an avatar, and an active-flag flip reuses the same text.
+const avatarTextCache = new Map();  // url -> string|null (resolved)
+const avatarInFlight = new Map();   // url -> Promise<string|null>
+function fetchAvatarText(url) {
+  if (!url) return Promise.resolve(null);
+  if (avatarTextCache.has(url)) return Promise.resolve(avatarTextCache.get(url));
+  if (avatarInFlight.has(url)) return avatarInFlight.get(url);
+  const p = fetch(url)
+    .then((r) => (r.ok ? r.text() : null))
+    .catch(() => null)
+    .then((txt) => {
+      avatarTextCache.set(url, txt || null);
+      avatarInFlight.delete(url);
+      return txt || null;
+    });
+  avatarInFlight.set(url, p);
+  return p;
+}
+
+// Strip the XML prolog / DOCTYPE / comments and normalise the ROOT <svg> box so
+// the avatar nests as a 22px child of the 34px badge at (6,6). Package avatars
+// differ: some declare width/height (drone), others carry only a viewBox
+// (commander, staff) — so drop any width/height on the OPENING tag (never the
+// children) and pin a fixed 22px box, which the viewBox then scales into.
 function inlineGlyph(raw) {
   const m = String(raw || '').match(/<svg[\s\S]*<\/svg>/);
   if (!m) return '';
-  return m[0]
-    .replace(/\swidth="[^"]*"/, ' width="22"')
-    .replace(/\sheight="[^"]*"/, ' height="22"')
-    .replace('<svg', '<svg x="6" y="6"');
+  const full = m[0];
+  const gt = full.indexOf('>');
+  const open = full.slice(0, gt + 1).replace(/\s(?:width|height)="[^"]*"/g, '');
+  return open.replace('<svg', '<svg x="6" y="6" width="22" height="22"') + full.slice(gt + 1);
 }
 
-function teamBadgeIcon(id, active) {
+// Compose the badge: a white (or blue-tinted when ACTIVE) disc with a ring,
+// carrying the inlined package avatar. With no avatar text yet (still loading,
+// or a teammate that declares none) it degrades to the plain disc — the marker
+// appears immediately and the glyph pops in when the fetch resolves.
+function teamBadgeIcon(avatarText, active) {
   const D = 34;
   const c = D / 2;
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${D}" height="${D}">` +
     `<circle cx="${c}" cy="${c}" r="${c - 2}" fill="${active ? '#dbeafe' : '#ffffff'}" ` +
     `stroke="${active ? '#2563eb' : '#6b7280'}" stroke-width="2.5"/>` +
-    inlineGlyph(TEAM_GLYPHS[id]) +
+    inlineGlyph(avatarText) +
     `</svg>`;
   return {
     url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
@@ -885,9 +914,9 @@ function teamBadgeIcon(id, active) {
   };
 }
 
-// Idempotent per-frame update: existing markers only move; icons are
-// rebuilt solely when the ACTIVE flag flips; ids no longer present are
-// removed (the parent feeds [] when leaving the Plan view).
+// Idempotent per-frame update: existing markers only move; icons are rebuilt
+// when the ACTIVE flag flips or the avatar text first resolves; ids no longer
+// present are removed (the parent feeds [] when leaving the Plan view).
 function setTeamMarkers(entries) {
   if (!mapsApi || !map.value) return;
   const seen = new Set();
@@ -896,25 +925,42 @@ function setTeamMarkers(entries) {
     seen.add(e.id);
     const position = new mapsApi.LatLng(e.lat, e.lon);
     const active = !!e.active;
+    const avatar = e.avatar || null;
+    // Synchronous cache hit (null until the fetch resolves) keeps this per-frame
+    // call allocation-free in the common steady state.
+    const avatarText = avatar && avatarTextCache.has(avatar) ? avatarTextCache.get(avatar) : null;
     const rec = teamMarkers.get(e.id);
     if (rec) {
       rec.marker.setPosition(position);
-      if (active !== rec.active) {
-        rec.marker.setIcon(teamBadgeIcon(e.id, active));
+      if (active !== rec.active || avatar !== rec.avatar || avatarText !== rec.avatarText) {
+        rec.marker.setIcon(teamBadgeIcon(avatarText, active));
         rec.active = active;
+        rec.avatar = avatar;
+        rec.avatarText = avatarText;
       }
     } else {
       const marker = new mapsApi.Marker({
         position,
         map: map.value,
-        icon: teamBadgeIcon(e.id, active),
+        icon: teamBadgeIcon(avatarText, active),
         clickable: true,
         cursor: 'pointer',
         title: e.name || e.id,
         zIndex: 1500000,
       });
       marker.addListener('click', () => emit('teamClick', e.id));
-      teamMarkers.set(e.id, { marker, active });
+      const record = { marker, active, avatar, avatarText };
+      teamMarkers.set(e.id, record);
+      // Fetch the avatar once; repaint this badge when it lands (guard: the
+      // marker may have been removed by the time the promise resolves).
+      if (avatar && !avatarTextCache.has(avatar)) {
+        fetchAvatarText(avatar).then((txt) => {
+          if (teamMarkers.get(e.id) === record && txt) {
+            record.avatarText = txt;
+            record.marker.setIcon(teamBadgeIcon(txt, record.active));
+          }
+        });
+      }
     }
   }
   for (const [id, rec] of teamMarkers) {

@@ -10,7 +10,7 @@
 // and ONE dry-ice drone (the package-declared capability that proves separation).
 // No tank.
 
-import { ARCHETYPES } from './archetypes/index.js';
+import { ARCHETYPES } from './index.js';
 
 const FALLBACK_BOUNDS = { lonMin: -118.55, latMin: 34.02, lonMax: -118.5, latMax: 34.085 };
 

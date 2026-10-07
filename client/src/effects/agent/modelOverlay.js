@@ -1,11 +1,11 @@
 // effects/agent/modelOverlay.js — E6.3 generic L2 primitive: mesh models.
 //
 // Draws the scene model's `models` (agents whose PACKAGE style declares a GLB
-// meshUrl) as oriented Cesium model entities in 3D, and as a rotated icon (or a
-// labelled dot when no icon URL is given) on the 2D canvas. The engine never
-// names a domain: the mesh URL, icon, scale and colour are all package-declared.
-// Entities are keyed by agent id and reused across frames (position/orientation
-// updated in place) so hundreds of models stay cheap.
+// meshUrl) as oriented Cesium model entities in 3D, and as a rotated avatar
+// (style.avatarUrl; falls back to style.icon, then a labelled dot) on the 2D
+// canvas. The engine never names a domain: the mesh URL, avatar/icon, scale and
+// colour are all package-declared. Entities are keyed by agent id and reused
+// across frames (position/orientation updated in place) so hundreds stay cheap.
 
 function headingToCesium(Cesium, lon, lat, alt, headingDeg) {
   const hpr = new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(headingDeg || 0), 0, 0);
@@ -64,13 +64,13 @@ export function attachModelOverlay3d(viewer, model) {
   };
 }
 
-/** 2D: canvas OverlayView painting a rotated icon (or dot) per model. */
+/** 2D: canvas OverlayView painting a rotated avatar (or dot) per model. */
 export function attachModelOverlay2d(mapsApi, map, model) {
   let canvas = null;
   let ctx = null;
   let raf = 0;
   let removed = false;
-  const imgs = new Map();       // icon URL -> { img, ready }
+  const imgs = new Map();       // avatar/icon URL -> { img, ready }
 
   function icon(url) {
     let e = imgs.get(url);
@@ -111,18 +111,23 @@ export function attachModelOverlay2d(mapsApi, map, model) {
     for (const m of model.models) {
       const p = proj.fromLatLngToDivPixel(new mapsApi.LatLng(m.lat, m.lon));
       if (!p) continue;
-      const url = m.style.icon;
+      const url = m.style.avatarUrl || m.style.icon;
       const e = url ? icon(url) : null;
+      const s = m.style.scale || 1;
       if (e && e.ready) {
-        const s = (m.style.scale || 1);
-        const w = e.img.width * s, h = e.img.height * s;
+        // Cover-fit the avatar into a bounded, heading-rotated badge so any
+        // source SVG natural size works (avatarUrl standardised over `icon`).
+        const half = Math.max(9, (m.style.radiusPx || 12)) * s;
+        const iw = e.img.width || half * 2, ih = e.img.height || half * 2;
+        const fit = Math.max((half * 2) / iw, (half * 2) / ih);
+        const w = iw * fit, h = ih * fit;
         ctx.save();
         ctx.translate(p.x, p.y);
         ctx.rotate(((m.headingDeg || 0) * Math.PI) / 180);
         ctx.drawImage(e.img, -w / 2, -h / 2, w, h);
         ctx.restore();
       } else {
-        const r = Math.max(3, (m.style.radiusPx || 9) * (m.style.scale || 1));
+        const r = Math.max(3, (m.style.radiusPx || 9) * s);
         ctx.beginPath();
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
         ctx.fillStyle = m.style.color || '#22c55e';

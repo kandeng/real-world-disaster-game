@@ -3,6 +3,7 @@ import { onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuth } from '@shared-composables/useAuth.js';
+import { useAgentCast } from '@shared-composables/useAgentCast.js';
 import ConfigurableIcon from '@shared/ConfigurableIcon.vue';
 import AssistantPanel from '@shared/AssistantPanel.vue';
 
@@ -10,6 +11,8 @@ const { t, locale } = useI18n();
 const router = useRouter();
 const route = useRoute();
 const { user, isAuthenticated, fetchMe } = useAuth();
+// The package-driven cast store backing the assistant's team roster + avatars.
+const { loadCast } = useAgentCast();
 
 /* ─── Left-panel navigation ─── */
 function go(path) {
@@ -29,6 +32,10 @@ function isActive(path) {
 onMounted(() => {
   // The top-bar user button shows the uploaded avatar when signed in.
   if (isAuthenticated.value && !user.value) fetchMe().catch(() => {});
+  // Boot-load the active game package's cast so the assistant roster + 2D plan
+  // badges are package-driven from the start — independent of the agent worker
+  // (which only runs under ?agentDemo). Idempotent and never throws.
+  loadCast();
 });
 
 /* ─── Panel open/close state ─── */

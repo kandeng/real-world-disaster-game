@@ -7,9 +7,5 @@
   "team": "Team",
   "team_title": "Teammates",
   "resize_input": "Drag to resize the input box",
-  "mate_commander": "Commander",
-  "mate_staff": "Staff",
-  "mate_drone": "drone",
-  "mate_tank": "tank",
-  "empty_hint": "Message the team. Mention a teammate with {'@'}drone or {'@'}tank and they will answer; mention nobody and Staff answers."
+  "empty_hint": "Message the team. Mention a teammate with {'@'} followed by its name and they will answer; mention nobody and your staff officer answers."
 }

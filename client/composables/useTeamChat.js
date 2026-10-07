@@ -3,6 +3,13 @@
 // every teammate they @mention answers, and Staff answers when the message
 // @mentions nobody at all.
 //
+// The cast is PACKAGE-DRIVEN: who exists, their handles, display names, avatars
+// and roles all come from the shared cast store (useAgentCast.js), which the
+// active game package populates. Nothing here hardcodes a teammate — swap the
+// package and the chat roster follows. The commander is whichever entry the
+// package marks kind 'human'; the default responder is whichever it marks
+// 'staff' (see commanderId / staffId in the store).
+//
 // PHASE A IS AN ECHO, NOT AN AGENT. Each addressed teammate replies with the
 // commander's text verbatim. That is a deliberate smoke test: it proves the
 // composer, the mention parser, the per-sender transcript rendering and the
@@ -18,8 +25,7 @@
 // `send()` returns. Latency and streaming arrive with the real agent, where they
 // are a property of the network rather than something to simulate.
 import { ref } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { TEAM, COMMANDER_ID, STAFF_ID, mateById } from './useTeamRoster.js';
+import { useAgentCast } from './useAgentCast.js';
 import { matchMentions } from './mentions.js';
 
 // Module-level, not per-call: the conversation belongs to the session, not to
@@ -34,27 +40,27 @@ function nextId() {
 }
 
 export function useTeamChat() {
-  const { t } = useI18n();
+  const { roster, commanderId, staffId, entryById, avatarOf, displayNameOf } = useAgentCast();
 
-  /** Display name for a sender id, resolved live so it follows the locale. */
+  /** Display name for a sender id, straight from the package cast. */
   function displayName(id) {
-    const mate = mateById(id);
-    return mate ? t(mate.nameKey) : id;
+    return displayNameOf(id);
   }
 
-  function avatarOf(id) {
-    const mate = mateById(id);
-    return mate ? mate.avatar : null;
+  /** Avatar URL for a sender id, straight from the package cast (or null). */
+  function avatarFor(id) {
+    return avatarOf(id);
   }
 
-  // A teammate answers to its stable id AND to its localized display name, so
-  // `@drone` works in English and `@参谋` works in Chinese without the player
-  // having to know the underlying handle.
+  // A teammate answers to its stable id AND to its package display name, so
+  // `@drone-w1` and `@Water` both reach the same agent without the player
+  // having to know the underlying handle. Ids are the canonical handle (they
+  // are single-token); a multi-word display name is only mentionable by its
+  // first word — see mentions.js.
   function mentionCandidates() {
-    return TEAM.filter((mate) => mate.id !== COMMANDER_ID).map((mate) => ({
-      id: mate.id,
-      aliases: [mate.id, t(mate.nameKey)],
-    }));
+    return roster.value
+      .filter((mate) => mate.id !== commanderId.value)
+      .map((mate) => ({ id: mate.id, aliases: [mate.id, mate.name] }));
   }
 
   /**
@@ -62,7 +68,7 @@ export function useTeamChat() {
    * the human is the one typing, so a self-mention must not self-reply.
    */
   function mentionedMates(text) {
-    return matchMentions(text, mentionCandidates()).map((hit) => mateById(hit.id)).filter(Boolean);
+    return matchMentions(text, mentionCandidates()).map((hit) => entryById(hit.id)).filter(Boolean);
   }
 
   /**
@@ -81,25 +87,25 @@ export function useTeamChat() {
    * both leave the mention set empty, and Staff takes them rather than the
    * message going silently unanswered.
    *
-   * The `mateById()` guard means a roster that ever loses its staff entry
-   * degrades to "no reply" instead of throwing inside `send()`.
+   * The `entryById()` guard means a cast that ever loses its staff entry (or has
+   * not boot-loaded yet) degrades to "no reply" instead of throwing in `send()`.
    */
   function respondersFor(text) {
     const mates = mentionedMates(text);
     if (mates.length) return mates;
-    const staff = mateById(STAFF_ID);
+    const staff = entryById(staffId.value);
     return staff ? [staff] : [];
   }
 
   function append(from, text, extra = {}) {
-    const message = { id: nextId(), from, own: from === COMMANDER_ID, text, at: Date.now(), ...extra };
+    const message = { id: nextId(), from, own: from === commanderId.value, text, at: Date.now(), ...extra };
     messages.value = [...messages.value, message];
     return message;
   }
 
   /** One teammate's answer to `text`. Phase A: echo it back untouched. */
   function replyFrom(mate, text) {
-    return append(mate.id, text, { echoOf: COMMANDER_ID });
+    return append(mate.id, text, { echoOf: commanderId.value });
   }
 
   /**
@@ -111,7 +117,7 @@ export function useTeamChat() {
   function send(text) {
     const body = typeof text === 'string' ? text.trim() : '';
     if (!body) return null;
-    append(COMMANDER_ID, body);
+    append(commanderId.value, body);
     const responders = respondersFor(body);
     for (const mate of responders) replyFrom(mate, body);
     return { text: body, replies: responders.map((mate) => mate.id) };
@@ -128,12 +134,12 @@ export function useTeamChat() {
    */
   function sendImage(image) {
     if (typeof image !== 'string' || !image.startsWith('data:image/')) return null;
-    return append(COMMANDER_ID, '', { image });
+    return append(commanderId.value, '', { image });
   }
 
   function clear() {
     messages.value = [];
   }
 
-  return { messages, send, sendImage, clear, mentionedMates, respondersFor, displayName, avatarOf };
+  return { messages, send, sendImage, clear, mentionedMates, respondersFor, displayName, avatarOf: avatarFor };
 }

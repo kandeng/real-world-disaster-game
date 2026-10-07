@@ -17,6 +17,8 @@
 // The ONLY package-specific thing this file touches is the package's
 // render/bindings.js (pure content, no browser APIs), imported by URL at
 // runtime for the archetype->style table and the value->colour cell mapper.
+// Any RELATIVE asset URL a package declares (meshUrl / avatarUrl) is resolved
+// against the package base here, so the package itself names no host path.
 // Swapping the package (rename, remove the tank, add water/dry-ice drones)
 // changes ZERO line here — that is the separation litmus test.
 //
@@ -29,9 +31,54 @@
 import { createAgentSceneModel, attachAgentOverlays2d, attachAgentOverlays3d } from '@/effects/agent/index.js';
 import '@/engine/families/index.js';                    // registers the core + agent + agents families on the engine registry
 import { createGuardedPost, gateInbound } from '@/engine/protocol.js';
+import { useAgentCast } from '@shared-composables/useAgentCast.js';
 
 const DEFAULT_PACKAGE_BASE = '/games/demo-wildfire/';  // overridden by ?pkg=; the engine names no package
 const SPEED = 4;                                        // sim seconds per real second
+
+// A package declares asset URLs (meshUrl / avatarUrl) RELATIVE to itself (e.g.
+// 'meshes/drone_dji_air3.glb', 'agents/drone/avatar.svg'). The engine resolves
+// them against the package base so they fetch from /games/<pkg>/... — the
+// package still names no host path, and swapping the base needs zero change.
+function isRelativeUrl(u) {
+  if (typeof u !== 'string' || u.length === 0) return false;
+  if (u.startsWith('/')) return false;                  // root-absolute or protocol-relative (//)
+  const i = u.indexOf(':');
+  if (i > 0 && /^[a-z][a-z0-9+.-]*$/i.test(u.slice(0, i))) return false;  // has a scheme (http:, data:, blob:)
+  return true;
+}
+function resolveAssetUrl(base, u) {
+  if (!isRelativeUrl(u)) return u;
+  return base + (u.startsWith('./') ? u.slice(2) : u);
+}
+/** Shallow-copy each style/cast entry with its relative asset URLs base-resolved. */
+function resolveBindingUrls(base, b) {
+  if (!b || typeof b !== 'object') return b;
+  if (b.styles && typeof b.styles === 'object') {
+    const out = {};
+    for (const [k, s] of Object.entries(b.styles)) {
+      if (s && typeof s === 'object') {
+        const c = { ...s };
+        if (c.meshUrl) c.meshUrl = resolveAssetUrl(base, c.meshUrl);
+        if (c.avatarUrl) c.avatarUrl = resolveAssetUrl(base, c.avatarUrl);
+        out[k] = c;
+      } else out[k] = s;
+    }
+    b.styles = out;
+  }
+  if (b.cast && typeof b.cast === 'object') {
+    const out = {};
+    for (const [k, c] of Object.entries(b.cast)) {
+      if (c && typeof c === 'object') {
+        const cc = { ...c };
+        if (cc.avatarUrl) cc.avatarUrl = resolveAssetUrl(base, cc.avatarUrl);
+        out[k] = cc;
+      } else out[k] = c;
+    }
+    b.cast = out;
+  }
+  return b;
+}
 
 export function useAgentScene() {
   let started = false;
@@ -49,6 +96,12 @@ export function useAgentScene() {
   // colour. The engine never interprets a value.
   let grid = null;
   let values = null;
+
+  // The shared, package-driven cast store (the chatbot roster + 2D plan badges
+  // read it). This host feeds it the base-resolved cast and the live spawned
+  // agents, so the team the player sees always matches whatever the package
+  // spawns — nothing about the cast is hardcoded in the client.
+  const { setCast, setAgents, clearAgents } = useAgentCast();
 
   function enabled() {
     return new URLSearchParams(window.location.search).has('agentDemo');
@@ -68,9 +121,9 @@ export function useAgentScene() {
   async function loadBindings(base) {
     try {
       const mod = await import(/* @vite-ignore */ base + 'render/bindings.js');
-      if (mod && typeof mod.createRenderBindings === 'function') return mod.createRenderBindings();
+      if (mod && typeof mod.createRenderBindings === 'function') return resolveBindingUrls(base, mod.createRenderBindings());
       if (mod && mod.RENDER_BINDINGS) {
-        return { styles: mod.RENDER_BINDINGS, cellColorOf: mod.cellColorOf || null, fallback: mod.FALLBACK_STYLE || null };
+        return resolveBindingUrls(base, { styles: mod.RENDER_BINDINGS, cellColorOf: mod.cellColorOf || null, fallback: mod.FALLBACK_STYLE || null });
       }
     } catch (err) {
       console.warn('[agentScene] no render/bindings.js — using fallback styles', err?.message || err);
@@ -84,6 +137,9 @@ export function useAgentScene() {
 
     const base = packageBase();
     const bindings = await loadBindings(base);
+    // Feed the shared cast store (base-resolved) so the chatbot roster + plan
+    // badges are package-driven even before the first agents.state arrives.
+    if (bindings.cast) setCast(bindings.cast, base);
     model = createAgentSceneModel({
       styles: bindings.styles || {},
       cellColorOf: bindings.cellColorOf || null,
@@ -100,6 +156,18 @@ export function useAgentScene() {
         lastState = m;
         model.setState(m);
         model.pruneTransients(m.t);
+        // Mirror the live cast into the shared store (id + archetype + pose) so
+        // the chatbot roster and the 2D plan badges track the spawned agents.
+        setAgents((m.agents || [])
+          .filter((a) => a && a.alive !== false && a.pose)
+          .map((a) => ({
+            id: a.id,
+            archetype: a.archetype,
+            lon: a.pose.lon,
+            lat: a.pose.lat,
+            alt: a.pose.alt ?? 0,
+            headingDeg: a.pose.headingDeg ?? 0,
+          })));
       } else if (m.type === 'agents.event') {
         for (const ev of m.events || []) model.handleEvent(ev);
       } else if (m.type === 'agents.world') {
@@ -178,6 +246,7 @@ export function useAgentScene() {
     grid = null;
     values = null;
     lastState = null;
+    clearAgents();                       // keep the boot-loaded cast; drop live agents
     delete window.__agentDemo;
     started = false;
   }

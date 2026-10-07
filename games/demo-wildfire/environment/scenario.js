@@ -1,4 +1,4 @@
-// controller_fire.js — game-package component: the Palisades fire SCENARIO.
+// games/demo-wildfire/environment/scenario.js — the Palisades fire SCENARIO.
 //
 // This file is the output format of the scene-authoring tool
 // (tools/geo-editor.html, exporter lands next): the developer draws the

@@ -18,8 +18,11 @@
     "agents.environmentOptions  passed verbatim to createEnvironment. 'seed' fixes",
     "                          the PRNG so the same package replays the same",
     "                          emergence (seeded determinism, no replay system).",
-    "agents.capabilities        the domain sensor/actuator registry: exports",
-    "                          PACKAGE_CAPABILITIES (an array of capability defs).",
+    "agents.capabilities        OPTIONAL and unused here: this package's domain",
+    "                          verbs live under environment/verbs/ and",
+    "                          createEnvironment returns them as `capabilities`,",
+    "                          which the engine auto-registers. The environment is",
+    "                          the enabler, so there is no separate entry point.",
     "agents.roster              the initial cast: exports createRoster(env, opts)",
     "                          -> [agentSpec, ...].",
     "render                     the L2 bindings module (archetype -> engine",
@@ -36,7 +39,6 @@
   "agents": {
     "environment": "environment/environment.js",
     "environmentOptions": { "seed": 7 },
-    "capabilities": "capabilities/index.js",
     "roster": "agents/roster.js"
   },
   "render": "render/bindings.js"

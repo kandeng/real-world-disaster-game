@@ -1,4 +1,4 @@
-// games/demo-wildfire/agents/archetypes/staff.js — the STAFF archetype (optional).
+// games/demo-wildfire/agents/staff/index.js — the STAFF archetype (optional).
 //
 // A PACKAGE character, NOT an engine concept — and an OPTIONAL one: a game need
 // not have a staff at all. The engine only ships the generic `remote` reasoning

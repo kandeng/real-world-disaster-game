@@ -205,15 +205,17 @@ games/demo-wildfire/
 ├── package.json         # the agent-boot manifest the worker fetches FIRST
 ├── agents/
 │   ├── roster.js        #   which agents to spawn (ids + positions)
-│   └── archetypes/      #   agent templates (capabilities + reasoning kind)
-├── capabilities/        # named sensors + actuators (pure functions)
+│   ├── index.js         #   archetype registry (name -> spec factory)
+│   └── <role>/          #   one folder per character: index.js + reasoning.js
+│                        #     + render.js + avatar.svg (+ body/rig for machines)
 ├── environment/         # the shared world grid + rules (+ cellFrame relay)
-├── render/bindings.js   # archetype → primitive-by-name + value → colour (pure)
-└── triggers/            # optional emergent-narrative triggers
+│   └── verbs/           #   named sensors + actuators (pure functions)
+├── render/bindings.js   # aggregates agents/*/render.js + environment/render.js
+└── meshes/              # the .glb library referenced by the render bindings
 ```
 
 `package.json` declares the entry points (`agents.environment`,
-`agents.capabilities`, `agents.roster`, `render`); the generic loader
+`agents.roster`, `render`); the generic loader
 (`engine/agents/loadPackage.js`) imports them **inside the worker**, so package
 code still never touches a browser API. A package with no `package.json` (or no
 `agents` block) simply leaves the runtime inert — degrade, never break.

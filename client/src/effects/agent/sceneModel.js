@@ -16,7 +16,7 @@
 // Feed contract (all inputs are plain JSON from the protocol):
 //   setState(snapshot)            -> { t, agents:[{id, archetype, alive, pose, status}] }
 //   handleEvent(event)            -> { kind:'effect', effect, lon, lat, params, t } (transient)
-//   setStyles(styles)              -> { [archetype]: { kind?, meshUrl?, icon?, color?, scale?, modelScale? } }
+//   setStyles(styles)              -> { [archetype]: { kind?, meshUrl?, avatarUrl?, displayName?, avatarKind?, icon?, color?, scale?, modelScale? } }
 //   setPolylines(list)            -> [{ id, points:[{lon,lat}], color?, width?, dashed? }]
 //   setCellGrid(grid, values, colorOf) -> grid geometry + per-cell values + a value->rgba fn
 
@@ -33,6 +33,9 @@ export function subsampleLOD(list, max) {
 /**
  * Resolve the draw style for an archetype from the package-declared table.
  * Falls back to a neutral marker so an unknown/undeclared archetype still draws.
+ * The spread carries EVERY package-declared field through untouched — including
+ * `avatarUrl` / `displayName` / `avatarKind` — so the overlays can paint the
+ * package avatar without this module naming any domain.
  */
 export function resolveStyle(archetype, styles, fallback) {
   const base = fallback || DEFAULT_STYLE;

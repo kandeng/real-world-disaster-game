@@ -1,4 +1,4 @@
-// games/demo-wildfire/agents/reasoning/drone_fsm.js — PACKAGE reasoning CONTENT.
+// games/demo-wildfire/agents/drone/reasoning.js — PACKAGE reasoning CONTENT.
 //
 // A fire-fighting drone's brain, expressed as DATA the engine's generic
 // stateMachine interpreter runs. The engine owns the interpreter; this file owns

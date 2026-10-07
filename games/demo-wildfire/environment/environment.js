@@ -8,18 +8,19 @@
 // ticks it before the agents each step.
 //
 // Layout note: the fire cellular automaton + scenario live as pure-JS modules
-// under assets/fire/ (fire_sim.js, controller_fire.js). This adapter is the
-// ONLY runtime importer; the dev viewers (dev/fire_sim_viewer.html,
-// tools/geo-editor.html) import the same modules directly. E6.9 retired the
-// legacy scene.json + engine driver path, so the sim is now package content
-// with no engine-side driver — it renders through the generic cellGridOverlay.
+// beside this adapter under environment/ (fire_sim.js, scenario.js), and the
+// domain verbs under environment/verbs/. This adapter is the ONLY runtime
+// importer; the dev viewers (dev/fire_sim_viewer.html, tools/geo-editor.html)
+// import the same modules directly. E6.9 retired the legacy scene.json + engine
+// driver path, so the sim is now package content with no engine-side driver — it
+// renders through the generic cellGridOverlay.
 //
 // One rule: pure JS, no browser APIs. The sim renders nothing; the engine's L2
 // cellGridOverlay reads snapshot()/changes() through render/bindings.js.
 
-import { createFireSim } from '../assets/fire/fire_sim.js';
-import { createFireScenario } from '../assets/fire/controller_fire.js';
-import { PACKAGE_CAPABILITIES } from '../capabilities/index.js';
+import { createFireSim } from './fire_sim.js';
+import { createFireScenario } from './scenario.js';
+import { PACKAGE_CAPABILITIES } from './verbs/index.js';
 
 /**
  * createEnvironment(options) -> the generic environment object.

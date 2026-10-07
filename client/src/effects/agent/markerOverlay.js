@@ -1,18 +1,34 @@
 // effects/agent/markerOverlay.js — E6.3 generic L2 primitive: flat markers.
 //
-// Draws the scene model's `markers` (agents whose package style is a flat dot,
-// not a GLB) on both surfaces: a transparent Google-Maps canvas OverlayView
-// (Plan/2D) and a Cesium PointPrimitiveCollection (Steer/3D). Purely data-driven
-// — the colours/sizes come from package-declared styles; the engine names no
-// domain. LOD is already applied upstream in the scene model, so this just
-// paints what it is given. pointer-events:none keeps pens/clicks working.
+// Draws the scene model's `markers` (agents whose package style is a flat dot
+// or an avatar badge, not a GLB) on both surfaces: a transparent Google-Maps
+// canvas OverlayView (Plan/2D) and a Cesium PointPrimitiveCollection (Steer/3D).
+// Purely data-driven — when a package declares `avatarUrl` the 2D marker paints
+// that image as a circular badge; otherwise it falls back to a coloured dot. The
+// colours/sizes come from package-declared styles; the engine names no domain.
+// LOD is already applied upstream in the scene model, so this just paints what
+// it is given. pointer-events:none keeps pens/clicks working.
 
-/** 2D: canvas OverlayView painting one dot per marker. */
+/** 2D: canvas OverlayView painting an avatar badge (or dot) per marker. */
 export function attachMarkerOverlay2d(mapsApi, map, model) {
   let canvas = null;
   let ctx = null;
   let raf = 0;
   let removed = false;
+  const imgs = new Map();       // avatar URL -> { img, ready }
+
+  /** Lazily load + cache an avatar image (mirrors modelOverlay's icon()). */
+  function icon(url) {
+    let e = imgs.get(url);
+    if (!e) {
+      const img = new Image();
+      e = { img, ready: false };
+      img.onload = () => { e.ready = true; };
+      img.src = url;
+      imgs.set(url, e);
+    }
+    return e;
+  }
 
   class MarkerOverlay extends mapsApi.OverlayView {
     onAdd() {
@@ -45,7 +61,34 @@ export function attachMarkerOverlay2d(mapsApi, map, model) {
     for (const m of model.markers) {
       const p = proj.fromLatLngToDivPixel(new mapsApi.LatLng(m.lat, m.lon));
       if (!p) continue;
-      const r = Math.max(2, (m.style.radiusPx || 7) * (m.style.scale || 1));
+      const scale = m.style.scale || 1;
+      const url = m.style.avatarUrl;
+      const e = url ? icon(url) : null;
+      if (e && e.ready) {
+        // Package-declared avatar: a circular badge (white disc + cover-fit glyph
+        // + a colour ring that still identifies the archetype at a glance).
+        const r = Math.max(9, (m.style.radiusPx || 7) * scale * 1.5);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.clip();
+        const iw = e.img.width || r * 2, ih = e.img.height || r * 2;
+        const fit = Math.max((r * 2) / iw, (r * 2) / ih);
+        const w = iw * fit, h = ih * fit;
+        ctx.drawImage(e.img, p.x - w / 2, p.y - h / 2, w, h);
+        ctx.restore();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.lineWidth = m.style.borderWidth || 2;
+        ctx.strokeStyle = m.style.borderColor || m.style.color || '#3b82f6';
+        ctx.stroke();
+        continue;
+      }
+      // Fallback: a plain coloured dot (no avatar declared / not loaded yet).
+      const r = Math.max(2, (m.style.radiusPx || 7) * scale);
       ctx.beginPath();
       ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       ctx.fillStyle = m.style.color || '#3b82f6';
@@ -64,6 +107,7 @@ export function attachMarkerOverlay2d(mapsApi, map, model) {
       removed = true;
       cancelAnimationFrame(raf);
       overlay.setMap(null);
+      imgs.clear();
     },
   };
 }

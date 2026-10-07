@@ -13,7 +13,7 @@ import { useRoutes } from '@shared-composables/useRoutes.js';
 import { useVideos } from '@shared-composables/useVideos.js';
 import { useDrone } from '@shared-composables/useDrone.js';
 import { useFleet } from '@shared-composables/useFleet.js';
-import { mateById } from '@shared-composables/useTeamRoster.js';
+import { useAgentCast } from '@shared-composables/useAgentCast.js';
 import { useSessionState } from '@shared-composables/useSessionState.js';
 import { useAltitudeGate, PHASES } from '@shared-composables/useAltitudeGate.js';
 import { useFlightCommands } from '@shared-composables/useFlightCommands.js';
@@ -50,7 +50,7 @@ const { drone, gimbal } = useDrone();
 // Test phase: both assets are auto-driven along hardcoded routes near the
 // fire zone by stepFleet() below; the active-asset pick is wired to the chat
 // Team popover and the Plan view's map badges.
-const { FLEET, activeAsset, activeAssetId, activeIsDrone, setActiveAsset, stepFleet, getTankSurface, chaseCameraPose, syncFleetModels } = useFleet();
+const { activeAsset, activeAssetId, activeIsDrone, setActiveAsset, stepFleet, getTankSurface, chaseCameraPose } = useFleet();
 const { session } = useSessionState();
 // Altitude split: the 2D street-map zoom height (mapAlt) is a SEPARATE value
 // from the true drone/camera altitude (drone.alt). They are reconciled only
@@ -329,6 +329,9 @@ const mapViewRef = ref(null);
 // it spawns the core worker, relays agents.state/event/world into the L2 scene
 // model and attaches the four render primitives (2D map + 3D Cesium viewer).
 const agentScene = useAgentScene();
+// The package-driven cast roster (shared store): the 2D plan badges below are
+// fed from it, so the team on the map matches whatever the package spawns.
+const { roster: castRoster } = useAgentCast();
 const showSearchPanel = computed(() => viewCtx.subView === 'search');
 const searchQuery = toRef(viewCtx, 'searchQuery');
 const searchResults = ref([]);
@@ -994,13 +997,20 @@ function stepFleetSim() {
   });
 }
 
-// Plan view: feed the fleet's live positions into the 2D map's team badges
-// (fixed screen size at every zoom). A badge click makes that asset ACTIVE
-// but never switches the view; any other street sub-view clears the badges.
+// Plan view: feed the PACKAGE CAST's live positions into the 2D map's team
+// badges (fixed screen size at every zoom), each carrying its package-declared
+// avatar. A badge click makes that teammate ACTIVE but never switches the view;
+// any other street sub-view clears the badges.
+//
+// Under ?agentDemo the GENERIC markerOverlay (L2) already paints these same
+// package agents on this map and is the primary path, so this legacy badge feed
+// stands down there to avoid double-painting. The cast roster only carries poses
+// once live agents are flowing (see useAgentCast), so outside the agent demo it
+// is empty and no badges are drawn — the legacy fleet's 3D meshes stay untouched.
 let planTeamFed = false;
 function updatePlanTeamMarkers() {
   if (!mapViewRef.value) return;
-  if (!isPlanView.value) {
+  if (!isPlanView.value || agentScene.enabled()) {
     if (planTeamFed) {
       mapViewRef.value.setTeamMarkers([]);
       planTeamFed = false;
@@ -1009,13 +1019,16 @@ function updatePlanTeamMarkers() {
   }
   planTeamFed = true;
   mapViewRef.value.setTeamMarkers(
-    FLEET.map((a) => ({
-      id: a.id,
-      lat: a.pose.lat,
-      lon: a.pose.lon,
-      active: a.id === activeAssetId.value,
-      name: t(mateById(a.id)?.nameKey || a.id),
-    }))
+    castRoster.value
+      .filter((m) => m.lat != null && m.lon != null)
+      .map((m) => ({
+        id: m.id,
+        lat: m.lat,
+        lon: m.lon,
+        active: m.id === activeAssetId.value,
+        name: m.name,
+        avatar: m.avatar,
+      }))
   );
 }
 
@@ -1129,7 +1142,6 @@ function loop() {
     if (recorderState.value !== 'replaying') {
       updateDroneState();
       stepFleetSim();
-      syncFleetModels(window.cesiumViewer);
       syncCesiumCamera();
       updatePlanTeamMarkers();
     } else {

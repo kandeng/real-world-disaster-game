@@ -1,4 +1,4 @@
-// games/demo-wildfire/agents/archetypes/commander.js — the COMMANDER archetype.
+// games/demo-wildfire/agents/commander/index.js — the COMMANDER archetype.
 //
 // A PACKAGE character, NOT an engine concept. The engine only ships the generic
 // `human` reasoning plugin (an in-core proxy whose decide() returns the last
