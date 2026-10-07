@@ -22,21 +22,34 @@ const routes = [
     name: 'Play',
     // Lazy: keeps the heavy Cesium bundle out of the Plaza landing page.
     component: () => import('@/views/AerialView.vue'),
-    // Bootstrap the shared Cesium viewer on demand, in two steps: load the
-    // self-hosted CesiumJS library (src/loadCesium.js), THEN import the module
-    // that creates the viewer (src/cesium-main.js, which touches the Cesium
-    // global at module scope). On a hard load of /play the index.html gate has
-    // already kicked both off; on a client-side navigation from Plaza neither
-    // ran, so do them here before AerialView mounts. Both steps are idempotent —
-    // loadCesium shares one in-flight promise, and ESM caching runs the
-    // cesium-main.js body (and the single `new Cesium.Viewer`) at most once even
-    // if both paths are in flight — and the `window.cesiumViewer` guard skips a
-    // warm re-entry entirely.
-    beforeEnter: async () => {
+    // Bootstrap the shared Cesium viewer WITHOUT blocking the navigation. Fire
+    // the two lazy steps — load the self-hosted CesiumJS library
+    // (src/loadCesium.js), then import the module that creates the viewer
+    // (src/cesium-main.js, which touches the Cesium global at module scope) —
+    // and let them run in the BACKGROUND while /play renders and the intro splash
+    // covers the scene. The old guard AWAITED both, so the router held the
+    // transition on the ~5 MB download: clicking "Play the game" appeared to
+    // freeze on the Plaza and only jumped to /play AFTER Cesium arrived. That is
+    // backwards — the splash IS the loading UI, so the page must show first and
+    // download behind it, exactly what the hard-load gate in index.html already
+    // does in parallel with the Vue boot. On a client-side navigation from Plaza
+    // neither step has run yet, so kick them here (non-blocking).
+    //
+    // Mounting AerialView before the viewer exists is safe: the viewer is created
+    // on the GLOBAL #cesiumContainer (index.html), not inside the route
+    // component, and every consumer reads window.cesiumViewer lazily (getViewer())
+    // or guards it, while AerialView's rAF loop re-runs syncCesiumCamera() every
+    // frame — so the first frame after the viewer appears picks it up. Both steps
+    // are idempotent: loadCesium shares one in-flight promise and ESM caching runs
+    // the cesium-main.js body (and the single `new Cesium.Viewer`) at most once
+    // even if a rapid re-entry fires this again; the `window.cesiumViewer` guard
+    // skips a warm re-entry entirely.
+    beforeEnter: () => {
       if (!window.cesiumViewer) {
-        const { loadCesium } = await import('@/loadCesium.js');
-        await loadCesium();
-        await import('@/cesium-main.js');
+        import('@/loadCesium.js')
+          .then((m) => m.loadCesium())
+          .then(() => import('@/cesium-main.js'))
+          .catch((err) => console.error('[cesium] /play bootstrap failed:', err));
       }
     },
   },
