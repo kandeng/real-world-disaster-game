@@ -58,6 +58,16 @@ client/public/splash/*.mp4
 client/public/splash/*.mp3
 !client/public/splash/background_music_00.mp3
 
+# Self-hosted CesiumJS build (client/public/cesium/), vendored from the `cesium`
+# npm devDependency by client/scripts/copy-cesium.js on every predev/prebuild.
+# ~20 MB of generated, version-pinned output that is fully reproducible from
+# package.json, so it is never committed. Served from our own origin at /cesium/
+# (see client/src/loadCesium.js) instead of the cesium.com CDN — which makes it
+# cacheable on our edge, gzip/zstd-compressed by our Caddy, and removes a
+# blocking third-party download from every page. Vite copies it into dist/ at
+# build time exactly like the rest of public/.
+client/public/cesium/
+
 # NOTE: public/fpv/ was DELETED, not merely ignored. It held four intro clips
 # (6.6 MB) inherited from the drone-navigation-v2 shell, where
 # components/FpvSplash.vue hardcoded '/fpv/fpv_*.mp4'. That component does not

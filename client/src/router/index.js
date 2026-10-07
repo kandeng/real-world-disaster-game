@@ -22,15 +22,20 @@ const routes = [
     name: 'Play',
     // Lazy: keeps the heavy Cesium bundle out of the Plaza landing page.
     component: () => import('@/views/AerialView.vue'),
-    // Bootstrap the shared Cesium viewer on demand. On a hard load of /play,
-    // index.html already imports cesium-main.js at page load; on a client-side
-    // navigation from Plaza that import was skipped, so do it here before
-    // AerialView mounts. ESM module caching makes this idempotent — the module
-    // body (and the single `new Cesium.Viewer`) runs at most once even if both
-    // imports are in flight, and the `window.cesiumViewer` guard skips the
+    // Bootstrap the shared Cesium viewer on demand, in two steps: load the
+    // self-hosted CesiumJS library (src/loadCesium.js), THEN import the module
+    // that creates the viewer (src/cesium-main.js, which touches the Cesium
+    // global at module scope). On a hard load of /play the index.html gate has
+    // already kicked both off; on a client-side navigation from Plaza neither
+    // ran, so do them here before AerialView mounts. Both steps are idempotent —
+    // loadCesium shares one in-flight promise, and ESM caching runs the
+    // cesium-main.js body (and the single `new Cesium.Viewer`) at most once even
+    // if both paths are in flight — and the `window.cesiumViewer` guard skips a
     // warm re-entry entirely.
     beforeEnter: async () => {
       if (!window.cesiumViewer) {
+        const { loadCesium } = await import('@/loadCesium.js');
+        await loadCesium();
         await import('@/cesium-main.js');
       }
     },

@@ -4,8 +4,11 @@
     <meta charset="utf-8">
     <title>Real World Game</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <script src="https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Cesium.js"></script>
-    <link href="https://cesium.com/downloads/cesiumjs/releases/1.125/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <!-- CesiumJS is NO LONGER loaded here. It used to be a synchronous
+         cesium.com script tag (~5 MB) that blocked first paint on EVERY page —
+         including the Plaza, which never renders a globe. It is now self-hosted
+         under /cesium/ and injected lazily, only on /play, by src/loadCesium.js
+         (see the route gate at the end of body). -->
     <link rel="stylesheet" href="style.css">
     <!-- No <link rel="preload" as="video"> here: Chrome does not support the
          'video' fetch destination, so the hint is ignored (console warning)
@@ -18,17 +21,26 @@
     <!-- Vue 3 application overlay -->
     <div id="app"></div>
 
-    <!-- Cesium bootstrap loads ONLY on 3D routes (/play...). cesium-main.js
-         creates the globe canvas at module scope and streams Google tiles on
-         window load; on any other page (Plaza home, Account, auth callbacks)
-         that canvas flashes in front of the Vue app and downloads tiles the
-         page never shows. A client-side navigation to /play (SPA) imports it
-         on demand via the route's beforeEnter guard in src/router/index.js;
-         ESM caching keeps the single viewer a singleton across both paths. -->
+    <!-- Cesium bootstrap loads ONLY on 3D routes (/play...), in two lazy,
+         non-blocking steps: (1) src/loadCesium.js injects the self-hosted
+         /cesium/Cesium.js + widgets CSS and resolves once window.Cesium exists;
+         (2) src/cesium-main.js then creates the globe canvas at module scope and
+         streams Google tiles on window load. On any other page (Plaza home,
+         Account, auth callbacks) NEITHER runs, so it downloads zero Cesium bytes
+         and never flashes an empty globe canvas in front of the Vue app. A
+         client-side navigation to /play (SPA) performs the same two steps on
+         demand via the route's beforeEnter guard in src/router/index.js; ESM
+         caching keeps both the loader promise and the single viewer a singleton
+         across the hard-load and SPA paths. -->
     <script type="module">
       const path = window.location.pathname.replace(/\/+$/, '') || '/';
       if (path.startsWith('/play')) {
-        import('/src/cesium-main.js');
+        // Start the self-hosted Cesium download NOW — in parallel with the
+        // Vue/router boot in main.js below — then bootstrap the viewer once the
+        // library is ready. Non-blocking: nothing here delays first paint.
+        import('/src/loadCesium.js')
+          .then((m) => m.loadCesium())
+          .then(() => import('/src/cesium-main.js'));
       } else {
         console.log('[cesium] skipped on non-3D route: ' + path);
       }

@@ -123,6 +123,22 @@ drone-navigation.com {
 		file_server
 	}
 
+	# Self-hosted CesiumJS (client/public/cesium -> dist/cesium), served from our
+	# own origin instead of the cesium.com CDN so it is cacheable on our edge,
+	# gzip/zstd-compressed, and not a blocking third-party hop through the
+	# visitor's VPN. The files are NOT content-hashed (Cesium.js, Workers/*,
+	# Assets/* keep fixed names), so this is deliberately max-age WITHOUT
+	# `immutable`: a Cesium version bump (pinned in client/package.json) reuses
+	# the same URLs, and `immutable` would pin the stale build in returning
+	# browsers for a year. 7 days bounds that staleness; purge the CDN edge on a
+	# version bump to propagate a new Cesium immediately.
+	handle /cesium/* {
+		root * /var/www/drone-navigation/client/dist
+		header Cache-Control "public, max-age=604800"
+		encode gzip zstd
+		file_server
+	}
+
 	# Serve Static Web App
 	handle {
 		root * /var/www/drone-navigation/client/dist
@@ -172,6 +188,16 @@ www.drone-navigation.com, cdn.drone-navigation.com {
 		root * /var/www/drone-navigation
 		header Access-Control-Allow-Origin "*"
 		header Cache-Control "public, max-age=86400"
+		encode gzip zstd
+		file_server
+	}
+
+	# Self-hosted CesiumJS — identical to the apex block, kept so a direct hit on
+	# an edge domain serves the file (cacheably) instead of falling through to the
+	# SPA catch-all. See the apex block for the full rationale.
+	handle /cesium/* {
+		root * /var/www/drone-navigation/client/dist
+		header Cache-Control "public, max-age=604800"
 		encode gzip zstd
 		file_server
 	}
